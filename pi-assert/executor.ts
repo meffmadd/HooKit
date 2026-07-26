@@ -1,205 +1,187 @@
 import {
+  getHookAdapter,
+  type AssertFailure,
+  type CancelHookOutcome,
+  type HookAdapter,
+  type HookAdapterOutcome,
+} from "./adapters.js";
+import {
   matchFilter,
-  buildEnv,
-  buildAgentEndEnv,
-  buildResultEnv,
   evaluateShell,
   isPreset,
   type Assert,
-  type ShellAssert,
-  type ShellResult,
   type AgentEndEvent,
+  type AgentSettledEvent,
+  type ExtensionContext,
+  type SessionBeforeForkEvent,
+  type SessionBeforeSwitchEvent,
   type ToolCallEvent,
   type ToolResultEvent,
   type ToolResultPatch,
-  type ExtensionContext,
+  type TurnEndEvent,
 } from "./engine.js";
 
-// ---------------------------------------------------------------------------
-// runAsserts — the shared control-flow core for all three hook executors.
-//
-// Every hook (tool_call / tool_result / agent_end) runs the same loop:
-//   for each active assert matching the hook + filter:
-//     build env → run optional `when` precondition (skip on non-zero) →
-//     run `shell` → on failure, hand (assert, result) to `onFail`.
-//
-// The only things that differ between hooks are the candidate record, the
-// env builder, and the failure policy.  `onFail` encodes the policy:
-//   - return `{ value }` to stop and return that value (fail-fast, used by
-//     tool_call and tool_result);
-//   - return `"continue"` to keep scanning (agent_end collects every
-//     failure into a closure-supplied array).
-//
-// Keeping the loop in one place means `when` handling, filter matching,
-// and abort/timeout semantics only have to be fixed once.
-// ---------------------------------------------------------------------------
-type FailDecision<T> = "continue" | { value: T };
-
-export interface AssertFailure {
-  phase: "when" | "shell";
-  command: string;
-  result: ShellResult;
-}
+// Preserve the original executor-module type import path after moving the
+// structured failure record behind the adapter seam.
+export type { AssertFailure } from "./adapters.js";
 
 /**
- * A record of a single assert whose `shell` actually executed (filter
- * matched + `when` passed/absent). `when`-failed asserts are NOT recorded —
- * they never triggered the main shell.
- *
- * Used by `runAsserts`'s `onRun` side-channel to report runtime visibility
- * (which asserts ran and how long each took) without changing its return
- * type. `index.ts` collects these across hooks and reports once per prompt.
+ * A record of a single assert whose main `shell` executed. Filter mismatches
+ * and ordinary non-zero `when` skips do not produce records.
  */
 export interface RunRecord {
-  /** Assert name (for display). */
   name: string;
-  /** Hook the assert ran under: "tool_call" | "tool_result" | "agent_end". */
   hook: string;
-  /**
-   * Wall-clock duration of the main `shell` execution in milliseconds
-   * (excludes `when` time; when-skips record nothing).
-   */
+  /** Main-shell wall-clock time only; excludes `when`. */
   durationMs: number;
-  /** Whether the main `shell` passed (exit 0). */
   passed: boolean;
 }
 
-async function runAsserts<Evt, T>(
+/**
+ * Shared filter → `when` → shell core. Hook adapters provide only event
+ * projection and failure policy; no lifecycle hook owns a parallel loop.
+ */
+async function runAsserts<E>(
   asserts: Assert[],
-  event: Evt,
+  adapter: HookAdapter<E>,
+  event: E,
   ctx: ExtensionContext,
-  opts: {
-    hook: string;
-    candidate: Record<string, unknown>;
-    buildEnv: (event: Evt, ctx: ExtensionContext) => Record<string, string>;
-    onFail: (assert: ShellAssert, failure: AssertFailure) => FailDecision<T>;
-    /** Called once per assert whose main `shell` executed, with its run record. */
-    onRun?: (record: RunRecord) => void;
-  },
-): Promise<T | undefined> {
-  for (const assert of asserts) {
-    // Presets expand to shell asserts in `activeList()` and never reach here;
-    // the guard is unreachable at runtime but narrows `assert` to `ShellAssert`
-    // for the loop body (which reads `hook`/`filter`/`when`/`shell`).
-    if (isPreset(assert)) continue;
-    if (assert.hook !== opts.hook) continue;
-    if (!matchFilter(assert.filter, opts.candidate)) continue;
+  onRun?: (record: RunRecord) => void,
+): Promise<AssertFailure[]> {
+  if (adapter.skipIfAborted && ctx.signal?.aborted) return [];
 
-    const env = opts.buildEnv(event, ctx);
+  const failures: AssertFailure[] = [];
+  for (const assertion of asserts) {
+    // Active presets are expanded before execution; this is a narrowing guard.
+    if (isPreset(assertion)) continue;
+    if (assertion.hook !== adapter.hook) continue;
 
-    if (assert.when) {
-      const precondition = await evaluateShell(assert.when, env, ctx.signal, undefined, ctx.cwd);
-      // Non-zero means "not applicable"; null means timeout, abort, or a
-      // spawn failure and must not bypass a guard.
-      if (precondition.code === null) {
-        const decision = opts.onFail(assert, {
+    const candidate = adapter.candidate(event);
+    if (!matchFilter(assertion.filter, candidate)) continue;
+    const env = adapter.buildEnv(event, ctx);
+
+    if (assertion.when) {
+      const result = await evaluateShell(
+        assertion.when,
+        env,
+        ctx.signal,
+        undefined,
+        ctx.cwd,
+      );
+      // An ordinary non-zero precondition means not applicable. A timeout,
+      // abort, or spawn failure has code null and fails closed.
+      if (result.code === null) {
+        failures.push({
+          assertion,
           phase: "when",
-          command: assert.when,
-          result: precondition,
+          command: assertion.when,
+          result,
         });
-        if (decision !== "continue") return decision.value;
+        if (adapter.aggregation === "first") return failures;
         continue;
       }
-      if (!precondition.passed) continue;
+      if (!result.passed) continue;
     }
 
-    const t0 = Date.now();
-    const result = await evaluateShell(assert.shell, env, ctx.signal, undefined, ctx.cwd);
-    const elapsed = Date.now() - t0;
-    opts.onRun?.({
-      name: assert.name,
-      hook: opts.hook,
-      durationMs: elapsed,
+    const startedAt = Date.now();
+    const result = await evaluateShell(
+      assertion.shell,
+      env,
+      ctx.signal,
+      undefined,
+      ctx.cwd,
+    );
+    onRun?.({
+      name: assertion.name,
+      hook: adapter.hook,
+      durationMs: Date.now() - startedAt,
       passed: result.passed,
     });
 
     if (!result.passed) {
-      const decision = opts.onFail(assert, {
+      failures.push({
+        assertion,
         phase: "shell",
-        command: assert.shell,
+        command: assertion.shell,
         result,
       });
-      if (decision !== "continue") return decision.value;
+      if (adapter.aggregation === "first") return failures;
     }
   }
-  return undefined;
+  return failures;
 }
 
 /**
- * Run active tool_call asserts against a single tool call.
- *
- * Returns the first block (fail-fast), or `undefined` if all pass.
+ * Execute any adapter through the shared core. This is the internal adapter
+ * seam used by current native hooks and future synthetic hooks.
  */
+export async function executeHookAsserts<E>(
+  asserts: Assert[],
+  adapter: HookAdapter<E>,
+  event: E,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+): Promise<HookAdapterOutcome | undefined> {
+  const failures = await runAsserts(asserts, adapter, event, ctx, onRun);
+  return failures.length === 0 ? undefined : adapter.outcome(failures, event);
+}
+
+/** Run active tool_call assertions; first failure blocks the call. */
 export async function executeToolCallAsserts(
   asserts: Assert[],
   event: ToolCallEvent,
   ctx: ExtensionContext,
   onRun?: (record: RunRecord) => void,
 ): Promise<{ block: true; reason: string } | undefined> {
-  return runAsserts(asserts, event, ctx, {
-    hook: "tool_call",
-    candidate: { ...event.input, toolName: event.toolName },
-    buildEnv: buildEnv,
-    onFail: (assert, failure) => ({
-      value: {
-        block: true,
-        reason: failure.phase === "shell"
-          ? `pi-assert: assertion "${assert.name}" rejected ${event.toolName} — \`${failure.command}\``
-          : `pi-assert: assertion "${assert.name}" rejected ${event.toolName} during when — \`${failure.command}\``,
-      },
-    }),
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("tool_call"),
+    event,
+    ctx,
     onRun,
-  });
+  );
+  if (outcome?.action !== "block") return undefined;
+  return { block: true, reason: outcome.reason };
 }
 
-/**
- * Run active tool_result asserts against a single tool result.
- *
- * Returns a patch (replace content with a redacted message) and a reason
- * string when the first matching assert fails, or `undefined` if all pass.
- * The patch sets `isError: true` so the LLM sees a clear error rather than
- * silently hidden content.
- */
+/** Run active tool_result assertions; first failure suppresses the result. */
 export async function executeToolResultAsserts(
   asserts: Assert[],
   event: ToolResultEvent,
   ctx: ExtensionContext,
   onRun?: (record: RunRecord) => void,
 ): Promise<{ patch: ToolResultPatch; reason: string } | undefined> {
-  return runAsserts(asserts, event, ctx, {
-    hook: "tool_result",
-    candidate: { ...event.input, toolName: event.toolName },
-    buildEnv: buildResultEnv,
-    onFail: (assert, failure) => ({
-      value: {
-        reason: failure.phase === "shell"
-          ? `pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${failure.command}\``
-          : `pi-assert: assertion "${assert.name}" blocked ${event.toolName} result during when — \`${failure.command}\``,
-        patch: {
-          content: [
-            {
-              type: "text",
-              text: failure.phase === "shell"
-                ? `[BLOCKED by pi-assert] pi-assert: assertion "${assert.name}" blocked ${event.toolName} result — \`${failure.command}\`\n\nThe original tool result was suppressed.`
-                : `[BLOCKED by pi-assert] pi-assert: assertion "${assert.name}" blocked ${event.toolName} result during when — \`${failure.command}\`\n\nThe original tool result was suppressed.`,
-            },
-          ],
-          // Pass through details (when defined) so the patch is a complete
-          // replacement. When event.details is undefined, the runner's
-          // `!== undefined` check leaves the original details intact.
-          details: event.details,
-          isError: true,
-        },
-      },
-    }),
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("tool_result"),
+    event,
+    ctx,
     onRun,
-  });
+  );
+  if (outcome?.action !== "patch") return undefined;
+  return { patch: outcome.patch, reason: outcome.reason };
+}
+
+/** Run active turn_end assertions; failures are collected and report-only. */
+export async function executeTurnEndAsserts(
+  asserts: Assert[],
+  event: TurnEndEvent,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+): Promise<string[]> {
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("turn_end"),
+    event,
+    ctx,
+    onRun,
+  );
+  return outcome?.action === "report" ? outcome.messages : [];
 }
 
 /**
- * Run active agent_end asserts when the agent finishes a turn.
- *
- * Returns all failures (no fail-fast) so they can be reported together.
+ * Run active agent_end assertions. Failures are collected so the extension can
+ * inject one corrective message, preserving the original public executor API.
  */
 export async function executeAgentEndAsserts(
   asserts: Assert[],
@@ -207,44 +189,70 @@ export async function executeAgentEndAsserts(
   ctx: ExtensionContext,
   onRun?: (record: RunRecord) => void,
 ): Promise<string[]> {
-  // If the turn was interrupted, ctx.signal is already aborted and
-  // evaluateShell would SIGTERM every assert (code null) before it runs —
-  // reporting benign interrupts as spurious failures. Agent-end asserts
-  // are informational (they don't block), so skip them on abort.
-  if (ctx.signal?.aborted) return [];
-
-  const failures: string[] = [];
-  await runAsserts(asserts, event, ctx, {
-    hook: "agent_end",
-    candidate: { event: "agent_end" },
-    buildEnv: buildAgentEndEnv,
-    onFail: (assert, failure) => {
-      failures.push(
-        failure.phase === "shell"
-          ? `- **${assert.name}**: \`${failure.command}\` (exit ${failure.result.code})`
-          : `- **${assert.name}** (when): \`${failure.command}\` (exit ${failure.result.code})`,
-      );
-      return "continue";
-    },
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("agent_end"),
+    event,
+    ctx,
     onRun,
-  });
-  return failures;
+  );
+  return outcome?.action === "report" ? outcome.messages : [];
 }
 
-/**
- * Format the per-hook runtime summary for the informational TUI toast.
- * Returns `""` for an empty list so the caller can skip emitting entirely
- * (no noise when no assert ran).
- *
- * One compact line — count + total wall-clock duration — so the toast stays
- * readable:
- *
- * ```
- * pi-assert ran 3 commands in 19ms
- * ```
- */
+/** Run active agent_settled assertions; failures are collected and report-only. */
+export async function executeAgentSettledAsserts(
+  asserts: Assert[],
+  event: AgentSettledEvent,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+): Promise<string[]> {
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("agent_settled"),
+    event,
+    ctx,
+    onRun,
+  );
+  return outcome?.action === "report" ? outcome.messages : [];
+}
+
+/** Run session switch guards; all failures are aggregated into one cancel. */
+export async function executeSessionBeforeSwitchAsserts(
+  asserts: Assert[],
+  event: SessionBeforeSwitchEvent,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+): Promise<CancelHookOutcome | undefined> {
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("session_before_switch"),
+    event,
+    ctx,
+    onRun,
+  );
+  return outcome?.action === "cancel" ? outcome : undefined;
+}
+
+/** Run session fork guards; all failures are aggregated into one cancel. */
+export async function executeSessionBeforeForkAsserts(
+  asserts: Assert[],
+  event: SessionBeforeForkEvent,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+): Promise<CancelHookOutcome | undefined> {
+  const outcome = await executeHookAsserts(
+    asserts,
+    getHookAdapter("session_before_fork"),
+    event,
+    ctx,
+    onRun,
+  );
+  return outcome?.action === "cancel" ? outcome : undefined;
+}
+
+/** Compact informational TUI summary for executed main shells. */
 export function formatRunReport(runs: RunRecord[]): string {
   if (runs.length === 0) return "";
-  const totalMs = runs.reduce((sum, r) => sum + r.durationMs, 0);
+  const totalMs = runs.reduce((sum, run) => sum + run.durationMs, 0);
   return `pi-assert ran ${runs.length} command${runs.length === 1 ? "" : "s"} in ${totalMs}ms`;
 }

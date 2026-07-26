@@ -1,9 +1,11 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
-import type {
-  PersistedAssert,
-  PersistedPreset,
+import {
+  LIFECYCLE_HOOKS,
+  isLifecycleHook,
+  type PersistedAssert,
+  type PersistedPreset,
 } from "./domain/entry.js";
 
 export { entryKey } from "./domain/entry.js";
@@ -117,6 +119,11 @@ export function validateSectionedFile(file: SectionedFile): string | null {
     if (!isPlainObject(entries)) return `section "${source}" must be an object`;
     for (const [name, entry] of Object.entries(entries)) {
       if (!validateRuleEntry(entry)) {
+        if (isPlainObject(entry) && typeof entry.hook === "string" &&
+            !isLifecycleHook(entry.hook)) {
+          return `entry ${JSON.stringify(`${source}/${name}`)} has unknown lifecycle hook ` +
+            `${JSON.stringify(entry.hook)}; supported hooks: ${LIFECYCLE_HOOKS.join(", ")}`;
+        }
         const invalidRegex = findInvalidFilterRegex(entry);
         if (invalidRegex) {
           const location = `filter[${JSON.stringify(invalidRegex.key)}]` +
@@ -161,7 +168,6 @@ export type EntryFields = PersistedAssert;
 
 const ASSERT_KEYS = new Set(["description", "hook", "filter", "when", "shell", "default"]);
 const PRESET_KEYS = new Set(["description", "preset", "default"]);
-const HOOKS = new Set(["tool_call", "tool_result", "agent_end"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -216,7 +222,7 @@ export function validateEntryShape(def: unknown): def is EntryFields {
   const d = def;
   if (Object.keys(d).some((key) => !ASSERT_KEYS.has(key))) return false;
   if (typeof d.description !== "string" || typeof d.shell !== "string") return false;
-  if (typeof d.hook !== "string" || !HOOKS.has(d.hook)) return false;
+  if (!isLifecycleHook(d.hook)) return false;
   if (d.when !== undefined && typeof d.when !== "string") return false;
   if (d.default !== undefined && typeof d.default !== "boolean") return false;
   if (d.filter !== undefined) {

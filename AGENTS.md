@@ -5,14 +5,18 @@ fail user-defined shell checks.
 
 ## Architecture
 
-- **`pi-assert/index.ts`** — extension entry point. Subscribes to `session_start`
-  (load config), `tool_call` (run matching asserts, block on failure),
-  `tool_result` (run matching asserts, patch result with a redacted block on
-  failure so the LLM never sees the original output), and `agent_end` (run
-  matching asserts, inject custom message on failure so the agent can address
-  them).
+- **`pi-assert/index.ts`** — thin extension lifecycle wiring. Loads state, binds
+  every supported Pi event to its registry adapter, dispatches adapter-declared
+  notifications/control results, and dedupes corrective `agent_end` retries.
+- **`pi-assert/adapters.ts`** — exhaustive lifecycle adapter registry and the
+  internal `HookAdapter` seam. Each adapter owns its bounded filter candidate,
+  shell environment, failure action (`block`/`patch`/`cancel`/`report`),
+  aggregation, formatting, and feedback policy. Supports `tool_call`,
+  `tool_result`, `turn_end`, `agent_end`, `agent_settled`,
+  `session_before_switch`, and `session_before_fork`; deliberately excludes
+  non-cancellable `session_shutdown`.
 - **`pi-assert/engine.ts`** — config loading (`loadAsserts`), filter matching
-  (`matchFilter`), environment builder (`buildEnv`), and shell execution
+  (`matchFilter`), tool/lifecycle environment builders, and shell execution
   (`evaluateShell` via `child_process.exec`).
 - **`pi-assert/domain/entry.ts`** — shared persisted entry types, canonical
   source/name identity and ref parsing, plus `AssertIndex` lookups.
@@ -27,10 +31,10 @@ fail user-defined shell checks.
   helpers (`cleanEntry`, `entryContentSignature`, `entryNeedsUpdate`,
   `classifyEntry`). `cleanEntry` is the single owner of the on-disk record
   shape, shared by `installRule` and `updateRule`.
-- **`pi-assert/executor.ts`** — runs active asserts per hook. The three hook
-  handlers share one `runAsserts` core (filter → `when` → `shell`); each only
-  supplies its candidate, env builder, and fail policy (`{value}` fail-fast vs
-  `"continue"` collect).
+- **`pi-assert/executor.ts`** — the one filter → `when` → shell execution core.
+  `executeHookAsserts` accepts any `HookAdapter`; compatibility wrappers expose
+  the original tool/agent executors plus turn, settled, and session-guard
+  executors. No lifecycle hook has a separate assertion loop.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
@@ -69,7 +73,13 @@ fail user-defined shell checks.
 - Optional `when` precondition shell runs first; main `shell` only executes if
   `when` exits 0. Skip expensive asserts when they don't apply.
 - Default timeout of 5 seconds prevents hanging asserts.
-- First non-passing assert blocks the tool (fail-fast). Others don't run.
+- Tool hooks fail fast. `turn_end`, `agent_end`, `agent_settled`, and cancellable
+  session guards aggregate every failure; the adapter registry is the source of
+  truth for each hook's action and feedback.
+- Lifecycle adapters expose bounded scalar candidates through both filters and
+  JSON `PI_EVENT_PAYLOAD`; rich/native event objects are intentionally deferred.
+- `session_before_switch` and `session_before_fork` can cancel. `session_shutdown`
+  is not a supported assertion hook because Pi exposes no cancellation result.
 - Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.
 - No special handling for `"false"` — it's just the Unix `false` command
   (always exits 1).

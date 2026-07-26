@@ -50,6 +50,20 @@ describe("validateEntryShape", () => {
     assert.ok(validateEntryShape({ description: "d", hook: "tool_call", shell: "false" }));
   });
 
+  it("accepts every lifecycle hook backed by the adapter registry", () => {
+    for (const hook of [
+      "tool_call",
+      "tool_result",
+      "turn_end",
+      "agent_end",
+      "agent_settled",
+      "session_before_switch",
+      "session_before_fork",
+    ]) {
+      assert.ok(validateEntryShape({ description: "d", hook, shell: "true" }), hook);
+    }
+  });
+
   it("accepts an entry with all optional fields", () => {
     assert.ok(
       validateEntryShape({
@@ -115,6 +129,21 @@ describe("validateEntryShape", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateSectionedFile", () => {
+  it("reports an unknown lifecycle hook with the supported names", () => {
+    const error = validateSectionedFile({
+      local: {
+        guard: {
+          description: "d",
+          hook: "session_shutdown",
+          shell: "false",
+        },
+      },
+    });
+
+    assert.match(error ?? "", /entry "local\/guard" has unknown lifecycle hook "session_shutdown"/);
+    assert.match(error ?? "", /supported hooks: tool_call, tool_result, turn_end/);
+  });
+
   it("returns a source-qualified error for an invalid scalar regex", () => {
     const error = validateSectionedFile({
       local: {

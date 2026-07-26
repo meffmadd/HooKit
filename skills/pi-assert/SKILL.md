@@ -1,6 +1,6 @@
 ---
 name: pi-assert
-description: Define shell-based assertions in .pi/asserts.json that block Pi tool calls or redact results.
+description: Define shell assertions for Pi tool calls, results, turns, settled agents, and cancellable session changes.
 ---
 
 # pi-assert
@@ -45,12 +45,17 @@ entries override global entries by **source and name**, not name alone.
 
 Every shell assert requires `description`, `hook`, and `shell`.
 
-- `hook`: `tool_call`, `tool_result`, or `agent_end`.
+- `hook`: `tool_call`, `tool_result`, `turn_end`, `agent_end`,
+  `agent_settled`, `session_before_switch`, or `session_before_fork`. Unknown
+  lifecycle names fail loading clearly. `session_shutdown` is unsupported
+  because Pi cannot cancel it.
 - `filter`: optional object whose keys are implicitly ANDed. Tool candidates
   are `{ ...event.input, toolName }`, with trusted `toolName` taking
-  precedence; agent-end has `{ "event": "agent_end" }`. Dot-separated keys
-  resolve nested values, so `"request.target.path"` can match a deeply nested
-  tool input without `jq`.
+  precedence. Lifecycle candidates are bounded records: `turn_end` adds
+  `turnIndex`; agent hooks expose `event`; session switch exposes `reason` and
+  optional `targetSessionFile`; session fork exposes `entryId` and `position`.
+  Dot-separated keys resolve nested values, so `"request.target.path"` can
+  match a deeply nested tool input without `jq`.
   - Every string is a JavaScript regex source tested with `RegExp.test()`
     against a string candidate. The same matcher applies to tool names, paths,
     commands, and other string fields. Escape backslashes for JSON; regex
@@ -69,8 +74,9 @@ Every shell assert requires `description`, `hook`, and `shell`.
 
 Commands execute with `PWD` equal to `PI_CWD`. Tool hooks expose
 `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and `PI_CWD`; result hooks
-also expose `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`. Agent-end exposes
-`PI_EVENT` and `PI_CWD`.
+also expose `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`. Other lifecycle hooks
+expose `PI_EVENT`, JSON `PI_EVENT_PAYLOAD` (the bounded filter candidate), and
+`PI_CWD`.
 
 ## Presets
 
@@ -90,6 +96,8 @@ it cannot contain shell-assert fields. Refs are `local/name` or
 ```
 
 Use `/asserts` to enable entries, browse repos, install presets and their
-members, and edit local presets. A `tool_call` failure blocks the call; a
-`tool_result` failure replaces output with a redacted error; `agent_end`
-failures trigger a corrective turn.
+members, and edit local presets. `tool_call` and `tool_result` fail fast and
+block/patch respectively. `turn_end` and `agent_settled` collect failures and
+report only. `agent_end` collects failures and triggers one corrective turn.
+Session switch/fork hooks collect failures, cancel the action, and report one
+aggregate.

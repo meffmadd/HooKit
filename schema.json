@@ -43,12 +43,12 @@
             },
             "hook": {
               "type": "string",
-              "enum": ["tool_call", "tool_result", "agent_end"],
-              "description": "Pi event name to intercept. 'tool_call' fires before each tool executes; 'tool_result' fires after a tool runs (can patch the result); 'agent_end' fires when the agent finishes a prompt and goes idle."
+              "enum": ["tool_call", "tool_result", "turn_end", "agent_end", "agent_settled", "session_before_switch", "session_before_fork"],
+              "description": "Supported Pi lifecycle hook. Tool failures block or patch; turn_end and agent_settled failures report only; agent_end failures request one corrective turn; session_before_switch and session_before_fork failures cancel the action. session_shutdown is intentionally unsupported because Pi does not expose cancellation for it."
             },
             "filter": {
               "type": "object",
-              "description": "Filter matched against { ...event.input, toolName } for tool hooks or { event: 'agent_end' }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing.",
+              "description": "Filter matched against the hook adapter's bounded candidate: { ...event.input, toolName } for tool hooks; otherwise { event, ...documented scalar metadata }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing.",
               "additionalProperties": {
                 "anyOf": [
                   {
@@ -78,7 +78,7 @@
             },
             "shell": {
               "type": "string",
-              "description": "Shell command whose exit code decides pass/fail. Exit 0 → allow; non-zero → block (or trigger a new turn, for agent_end). Pipes, redirects, &&, || all work."
+              "description": "Shell command whose exit code decides pass/fail. Exit 0 passes; non-zero applies the selected hook's block, patch, cancel, or report policy. Pipes, redirects, &&, || all work."
             },
             "when": {
               "type": "string",

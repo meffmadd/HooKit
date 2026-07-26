@@ -1,6 +1,6 @@
 # pi-assert
 
-Shell guards for Pi tool calls. Assertions are loaded from project
+Shell guards for Pi tool and lifecycle events. Assertions are loaded from project
 `.pi/asserts.json` and global `~/.pi/asserts.json`; a project entry overrides a
 global entry only when both its **source section and name** match.
 
@@ -63,18 +63,30 @@ sources available to the installer.
 }
 ```
 
-Shell assertions require `description`, `hook` (`tool_call`, `tool_result`, or
-`agent_end`), and `shell`. Optional `filter`, `when`, and boolean `default`
-are supported. `when` only skips on an ordinary non-zero exit—timeouts and
-execution failures block. Shells run with `PWD` and `PI_CWD` set to the Pi
+Shell assertions require `description`, a supported `hook`, and `shell`.
+Optional `filter`, `when`, and boolean `default` are supported. `when` only
+skips on an ordinary non-zero exit—timeouts and execution failures apply the
+hook's fail-closed policy. Shells run with `PWD` and `PI_CWD` set to the Pi
 project directory.
+
+Supported hooks are `tool_call`, `tool_result`, `turn_end`, `agent_end`,
+`agent_settled`, `session_before_switch`, and `session_before_fork`. Unknown
+lifecycle names fail configuration loading with the supported list.
+`session_shutdown` is intentionally unsupported because Pi does not provide a
+way for an extension to cancel shutdown.
 
 ### Filters
 
 Tool-hook filters match `{ ...event.input, toolName }`, with the trusted
-`toolName` taking precedence. Agent-end filters match
-`{ "event": "agent_end" }`. Every filter key is implicitly ANDed.
-Dot-separated keys resolve nested input fields:
+`toolName` taking precedence. Other adapters expose bounded candidates:
+
+- `turn_end`: `{ event: "turn_end", turnIndex }`
+- `agent_end` / `agent_settled`: `{ event }`
+- `session_before_switch`: `{ event, reason, targetSessionFile? }`
+- `session_before_fork`: `{ event, entryId, position }`
+
+Every filter key is implicitly ANDed. Dot-separated keys resolve nested input
+fields:
 
 ```json
 {
@@ -121,15 +133,27 @@ A preset replaces shell fields with a `preset` array of qualified refs:
 }
 ```
 
-`tool_call` blocks a call, `tool_result` replaces a failed result with a
-redacted error, and `agent_end` starts a corrective turn for failures. Use
-`/asserts` to install, enable, disable, and manage rules and presets.
+### Hook failure policies
+
+| Hook | Aggregation | Failure behavior and feedback |
+| --- | --- | --- |
+| `tool_call` | first failure | blocks the call and reports the reason |
+| `tool_result` | first failure | replaces the result with a redacted error and reports the reason |
+| `turn_end` | all failures | report-only UI notification; cannot alter the completed turn |
+| `agent_end` | all failures | sends one corrective message; an identical repeat stops automatic retry |
+| `agent_settled` | all failures | report-only UI notification; does not start another run |
+| `session_before_switch` | all failures | cancels `/new` or `/resume` and reports one aggregate |
+| `session_before_fork` | all failures | cancels `/fork` or `/clone` and reports one aggregate |
+
+Use `/asserts` to install, enable, disable, and manage rules and presets.
 
 ## Environment
 
 Tool hooks receive `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and
 `PI_CWD`; result hooks additionally receive `PI_TOOL_RESULT` and
-`PI_TOOL_IS_ERROR`. Agent-end hooks receive `PI_EVENT=agent_end` and `PI_CWD`.
+`PI_TOOL_IS_ERROR`. Other lifecycle hooks receive `PI_EVENT`,
+`PI_EVENT_PAYLOAD` (the JSON-encoded bounded filter candidate), and `PI_CWD`.
+All commands also execute with `PWD` set to `PI_CWD`.
 
 ## License
 

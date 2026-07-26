@@ -175,6 +175,11 @@ describe("evaluateShell", () => {
         assert.strictEqual(result.passed, expected);
       });
     }
+
+    it("synchronous exec validation errors resolve as failures", async () => {
+      const result = await evaluateShell(String.fromCharCode(0), env);
+      assert.deepStrictEqual(result, { passed: false, code: null });
+    });
   });
 
   // ── Env merges on top of process.env ────────────────────────────

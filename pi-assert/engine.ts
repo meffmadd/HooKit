@@ -51,11 +51,12 @@ export interface ShellAssert extends AssertBase {
   /** Pi event name to intercept (e.g. "tool_call"). */
   hook: Hook;
   /**
-   * Optional key-value filter matched against the hook's candidate record
-   * (for tool_call/tool_result: `{ ...event.input, toolName }`; for
-   * agent_end: `{ event: "agent_end" }`). Dot-separated keys resolve nested
-   * fields. String values are JavaScript regex sources; numbers, booleans,
-   * and null use strict equality. Arrays mean "any of" and an empty array
+   * Optional key-value filter matched against the hook adapter's candidate
+   * record. Tool hooks use `{ ...event.input, toolName }`; lifecycle hooks use
+   * a bounded record containing `event` and their documented scalar metadata.
+   * Dot-separated keys resolve nested fields. String values are JavaScript
+   * regex sources; numbers, booleans, and null use strict equality. Arrays
+   * mean "any of" and an empty array
    * matches nothing.
    */
   filter?: EntryFilter;
@@ -94,13 +95,17 @@ export interface AssertEnv {
   [key: string]: string;
 }
 
-/** Structured environment passed to shell commands for agent_end hooks. */
-export interface AgentEndEnv {
+/** Structured environment passed to lifecycle-event shell commands. */
+export interface LifecycleEnv {
   PI_EVENT: string;
+  PI_EVENT_PAYLOAD: string;
   PI_CWD: string;
   /** Index signature lets these flow into `child_process.exec`'s `env`. */
   [key: string]: string;
 }
+
+/** Backward-compatible name for the agent_end lifecycle environment. */
+export type AgentEndEnv = LifecycleEnv;
 
 /** Structured environment passed to shell commands for tool_result hooks. */
 export interface ToolResultEnv {
@@ -122,10 +127,30 @@ export interface ToolCallEvent {
 }
 
 /** Minimal shape of the agent_end event we consume. */
-// The event has a `.messages` field we don't need, so the interface is
-// empty by design (lint allow).
+// The native event also has messages, intentionally deferred to rich metadata.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface AgentEndEvent {}
+
+/** Bounded native metadata consumed by the turn_end adapter. */
+export interface TurnEndEvent {
+  turnIndex: number;
+}
+
+/** agent_settled currently carries no metadata. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface AgentSettledEvent {}
+
+/** Cancellation event emitted before /new or /resume. */
+export interface SessionBeforeSwitchEvent {
+  reason: "new" | "resume";
+  targetSessionFile?: string;
+}
+
+/** Cancellation event emitted before /fork or /clone. */
+export interface SessionBeforeForkEvent {
+  entryId: string;
+  position: "before" | "at";
+}
 
 // Content block types come from pi-ai (transitive dep of pi-coding-agent).
 
@@ -373,9 +398,8 @@ function matchFilterScalar(expected: unknown, actual: unknown): boolean {
  * reach this matcher. Exact string matches therefore need anchors, such as
  * `^bash$`.
  *
- * For tool_call and tool_result hooks, the candidate is
- * `{ ...event.input, toolName }`. For agent_end it is
- * `{ event: "agent_end" }`.
+ * Tool adapters use `{ ...event.input, toolName }`. Lifecycle adapters use a
+ * bounded record containing `event` and documented scalar event metadata.
  */
 export function matchFilter(
   filter: Record<string, unknown> | undefined,
@@ -411,7 +435,7 @@ export function matchFilter(
  */
 function logEnv(
   env: Record<string, string>,
-  hook: "tool_call" | "tool_result" | "agent_end",
+  hook: Hook,
 ): void {
   if (process.env.PIASSERT_LOG_ENV?.toLowerCase() !== "true") return;
 
@@ -453,18 +477,29 @@ export function buildEnv(
 }
 
 /**
- * Build the environment variables passed to shell commands for agent_end hooks.
+ * Build the environment shared by non-tool lifecycle adapters. The payload is
+ * the same bounded record used for filtering, never the complete native event.
  */
+export function buildLifecycleEnv(
+  hook: Hook,
+  payload: Record<string, unknown>,
+  ctx: ExtensionContext,
+): LifecycleEnv {
+  const env: LifecycleEnv = {
+    PI_EVENT: hook,
+    PI_EVENT_PAYLOAD: JSON.stringify(payload),
+    PI_CWD: ctx.cwd,
+  };
+  logEnv(env, hook);
+  return env;
+}
+
+/** Backward-compatible agent_end environment builder. */
 export function buildAgentEndEnv(
   _event: AgentEndEvent,
   ctx: ExtensionContext,
 ): AgentEndEnv {
-  const env: AgentEndEnv = {
-    PI_EVENT: "agent_end",
-    PI_CWD: ctx.cwd,
-  };
-  logEnv(env, "agent_end");
-  return env;
+  return buildLifecycleEnv("agent_end", { event: "agent_end" }, ctx);
 }
 
 /**
@@ -519,41 +554,47 @@ export function evaluateShell(
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
   cwd?: string,
 ): Promise<ShellResult> {
-  return new Promise<ShellResult>((resolve, _reject) => {
+  return new Promise<ShellResult>((resolve) => {
     // Merge our env on top of process.env so the shell inherits PATH etc.
     const mergedEnv = { ...process.env, ...env, ...(cwd ? { PWD: cwd } : {}) };
 
-    const child = exec(shell, {
-      env: mergedEnv,
-      timeout: timeoutMs,
-      signal,
-      cwd,
-      // shell: defaults to /bin/sh on Unix, which is what we want
-    });
+    try {
+      const child = exec(shell, {
+        env: mergedEnv,
+        timeout: timeoutMs,
+        signal,
+        cwd,
+        // shell: defaults to /bin/sh on Unix, which is what we want
+      });
 
-    child.on("error", (err: NodeJS.ErrnoException) => {
-      // If the user aborts (AbortError), treat it as a block.
-      if (err.name === "AbortError" || (signal?.aborted ?? false)) {
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        // If the user aborts (AbortError), treat it as a block.
+        if (err.name === "AbortError" || (signal?.aborted ?? false)) {
+          resolve({ passed: false, code: null });
+          return;
+        }
+        // `killed` is set on ChildProcess error events (timeout / signal) but
+        // not exposed on the `ErrnoException` type.  Cast through `unknown`
+        // so we don't lie about the static type while still reading the
+        // runtime property Node sets.
+        const killed = (err as unknown as { killed?: boolean }).killed;
+        if (killed) {
+          // Timeout or signal killed the process → block.
+          resolve({ passed: false, code: null });
+          return;
+        }
+        // Other errors (e.g. shell binary not found) → block.
         resolve({ passed: false, code: null });
-        return;
-      }
-      // `killed` is set on ChildProcess error events (timeout / signal) but
-      // not exposed on the `ErrnoException` type.  Cast through `unknown`
-      // so we don't lie about the static type while still reading the
-      // runtime property Node sets.
-      const killed = (err as unknown as { killed?: boolean }).killed;
-      if (killed) {
-        // Timeout or signal killed the process → block.
-        resolve({ passed: false, code: null });
-        return;
-      }
-      // Other errors (e.g. shell binary not found) → block.
+      });
+
+      child.on("close", (code: number | null) => {
+        // exit 0 → pass, everything else → block
+        resolve({ passed: code === 0, code });
+      });
+    } catch {
+      // Invalid commands/options can make exec throw synchronously. They are
+      // execution failures too and must never escape a cancellable guard.
       resolve({ passed: false, code: null });
-    });
-
-    child.on("close", (code: number | null) => {
-      // exit 0 → pass, everything else → block
-      resolve({ passed: code === 0, code });
-    });
+    }
   });
 }

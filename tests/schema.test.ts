@@ -318,7 +318,31 @@ describe("validate", () => {
     },
 
     {
-      label: "rejects 'session_shutdown' as hook (not in enum)",
+      label: "accepts 'turn_end' as hook",
+      config: { local: { guard: { description: "d", hook: "turn_end", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "accepts 'agent_settled' as hook",
+      config: { local: { guard: { description: "d", hook: "agent_settled", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "accepts 'session_before_switch' as hook",
+      config: { local: { guard: { description: "d", hook: "session_before_switch", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "accepts 'session_before_fork' as hook",
+      config: { local: { guard: { description: "d", hook: "session_before_fork", shell: "true" } } },
+      expected: true,
+    },
+
+    {
+      label: "rejects 'session_shutdown' because it has no cancellation contract",
       config: { local: { guard: { description: "d", hook: "session_shutdown", shell: "true" } } },
       expected: false,
     },

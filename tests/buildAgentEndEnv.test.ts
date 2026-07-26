@@ -23,6 +23,7 @@ describe("buildAgentEndEnv", () => {
     const env = buildAgentEndEnv(event, ctx);
 
     assert.strictEqual(env.PI_EVENT, "agent_end");
+    assert.strictEqual(env.PI_EVENT_PAYLOAD, '{"event":"agent_end"}');
     assert.strictEqual(env.PI_CWD, "/home/user/project");
   });
 

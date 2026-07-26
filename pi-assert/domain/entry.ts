@@ -1,6 +1,23 @@
 /** Shared entry types and identity/reference helpers. */
 
-export type Hook = "tool_call" | "tool_result" | "agent_end";
+export const LIFECYCLE_HOOKS = [
+  "tool_call",
+  "tool_result",
+  "turn_end",
+  "agent_end",
+  "agent_settled",
+  "session_before_switch",
+  "session_before_fork",
+] as const;
+
+export type Hook = (typeof LIFECYCLE_HOOKS)[number];
+
+/** Narrow an unknown config value to a lifecycle hook supported by an adapter. */
+export function isLifecycleHook(value: unknown): value is Hook {
+  return typeof value === "string" &&
+    (LIFECYCLE_HOOKS as readonly string[]).includes(value);
+}
+
 export type FilterScalar = string | number | boolean | null;
 export type EntryFilter = Record<string, FilterScalar | FilterScalar[]>;
 
