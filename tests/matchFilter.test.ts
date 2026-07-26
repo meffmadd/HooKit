@@ -74,9 +74,113 @@ describe("matchFilter", () => {
     }
   });
 
+  // ── Regex string matching ───────────────────────────────────────
+
+  describe("string values are JavaScript regex sources", () => {
+    const cases: Array<{
+      label: string;
+      filter: Record<string, unknown>;
+      candidate: Record<string, unknown>;
+      expected: boolean;
+    }> = [
+      {
+        label: "unanchored tool name matches a substring",
+        filter: { toolName: "write" },
+        candidate: { toolName: "custom_write_tool" },
+        expected: true,
+      },
+      {
+        label: "anchors preserve exact tool-name matching",
+        filter: { toolName: "^write$" },
+        candidate: { toolName: "custom_write_tool" },
+        expected: false,
+      },
+      {
+        label: "tool-name suffix regex matches extension-provided names",
+        filter: { toolName: "_write$" },
+        candidate: { toolName: "custom_write" },
+        expected: true,
+      },
+      {
+        label: "path uses the same regex matcher",
+        filter: { path: "(^|/)\\.env.*$" },
+        candidate: { path: "/app/.env.local" },
+        expected: true,
+      },
+      {
+        label: "assertion reference uses the same regex matcher",
+        filter: { assertionRef: "^owner/rules/protect-" },
+        candidate: { assertionRef: "owner/rules/protect-env" },
+        expected: true,
+      },
+      {
+        label: "command uses the same regex matcher",
+        filter: { command: "(^|[;&|]\\s*)rm\\s+-rf(?:\\s|$)" },
+        candidate: { command: "echo done; rm -rf build" },
+        expected: true,
+      },
+      {
+        label: "a string pattern does not coerce a numeric candidate",
+        filter: { timeout: "^10$" },
+        candidate: { timeout: 10 },
+        expected: false,
+      },
+    ];
+
+    for (const { label, filter, candidate, expected } of cases) {
+      it(label, () => {
+        assert.strictEqual(matchFilter(filter, candidate), expected);
+      });
+    }
+  });
+
+  // ── Nested field resolution ─────────────────────────────────────
+
+  describe("dot-separated keys resolve nested candidate fields", () => {
+    const candidate = {
+      request: {
+        target: { path: "/workspace/.env.production", retries: 2 },
+        approved: false,
+        metadata: null,
+      },
+    };
+
+    it("matches a nested string with regex semantics", () => {
+      assert.strictEqual(
+        matchFilter({ "request.target.path": "(^|/)\\.env.*$" }, candidate),
+        true,
+      );
+    });
+
+    it("retains strict equality for nested numbers, booleans, and null", () => {
+      assert.strictEqual(matchFilter({
+        "request.target.retries": 2,
+        "request.approved": false,
+        "request.metadata": null,
+      }, candidate), true);
+      assert.strictEqual(matchFilter({ "request.target.retries": "^2$" }, candidate), false);
+    });
+
+    it("requires every nested key to match", () => {
+      assert.strictEqual(matchFilter({
+        "request.target.path": "\\.env",
+        "request.target.retries": 3,
+      }, candidate), false);
+    });
+
+    it("does not match missing paths or traverse through scalar values", () => {
+      assert.strictEqual(matchFilter({ "request.missing.path": "x" }, candidate), false);
+      assert.strictEqual(matchFilter({ "request.approved.value": false }, candidate), false);
+    });
+
+    it("resolves own properties only", () => {
+      assert.strictEqual(matchFilter({ "request.toString": ".*" }, candidate), false);
+    });
+  });
+
   // ── Positive matches ────────────────────────────────────────────
 
-  describe("positive matches (all filter keys present & equal)", () => {
+  describe("positive matches (all filter keys present & matching)", () => {
     type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent };
 
     const cases: Case[] = [
@@ -137,9 +241,9 @@ describe("matchFilter", () => {
     }
   });
 
-  // ── Type coercion (v1 uses strict ===) ──────────────────────────
+  // ── Type coercion ───────────────────────────────────────────────
 
-  describe("type coercion — v1 uses strict ===", () => {
+  describe("type coercion — strings require strings; other scalars use ===", () => {
     const evtWithUndefined: ToolCallEvent = {
       toolName: "test",
       toolCallId: "c",
@@ -175,8 +279,8 @@ describe("matchFilter", () => {
       input: { edits },
     };
 
-    // A plain (non-array) object filter value still uses === reference
-    // equality, unchanged from v1.
+    // Plain object filter values are schema-invalid, but matchFilter retains
+    // strict equality for non-string values passed directly.
     const obj = { foo: 1 };
     const evtWithObj: ToolCallEvent = {
       toolName: "edit",
@@ -187,7 +291,7 @@ describe("matchFilter", () => {
     type Case = { label: string; filter: Record<string, unknown>; event: ToolCallEvent; expected: boolean };
 
     const cases: Case[] = [
-      // Non-array object: === reference equality is still in effect.
+      // Non-array object: strict reference equality is still in effect.
       { label: "same object reference matches (===)",                       filter: { meta: obj },                               event: evtWithObj,    expected: true },
       { label: "different but deep-equal object does NOT match (===)",       filter: { meta: { foo: 1 } },                         event: evtWithObj,    expected: false },
       // Array filter values are now any-of, NOT reference equality.
@@ -213,9 +317,10 @@ describe("matchFilter", () => {
       { label: "toolName [write,edit] matches edit",     filter: { toolName: ["write", "edit"] }, event: editEvent,   expected: true },
       { label: "toolName [write,edit] rejects bash",     filter: { toolName: ["write", "edit"] }, event: bashEvent,   expected: false },
       { label: "toolName [write,edit] rejects read",    filter: { toolName: ["write", "edit"] }, event: emptyInput,  expected: false },
-      // single-element array ≡ scalar
-      { label: "single-element array ≡ scalar (write)",  filter: { toolName: ["write"] },        event: writeEvent,  expected: true },
-      { label: "single-element array ≡ scalar (reject)", filter: { toolName: ["write"] },        event: bashEvent,   expected: false },
+      // single-element array uses the same regex matcher as a scalar
+      { label: "single regex array matches write",       filter: { toolName: ["^write$"] },      event: writeEvent,  expected: true },
+      { label: "single regex array rejects bash",        filter: { toolName: ["^write$"] },      event: bashEvent,   expected: false },
+      { label: "array regexes may match substrings",     filter: { toolName: ["edit", "rit"] }, event: writeEvent,  expected: true },
       // array on a non-toolName key
       { label: "command [ls,pwd] matches ls",            filter: { command: ["ls", "pwd"] },      event: bashEvent,   expected: true },
       { label: "command [rm,pwd] rejects ls",           filter: { command: ["rm", "pwd"] },      event: bashEvent,   expected: false },

@@ -962,6 +962,35 @@ describe("loadAsserts", () => {
     assert.deepStrictEqual(loaded.map((entry) => entry.name), ["global"]);
   });
 
+  // ── Standalone: invalid configuration throws ────────────────────
+
+  it("invalid filter regex → throws a source-qualified AssertsParseError", () => {
+    clearGlobal();
+    const dir = setupCwd(10_001, {
+      local: {
+        "bad-regex": {
+          description: "d",
+          hook: "tool_call",
+          filter: { command: ["^safe$", "["] },
+          shell: "false",
+        },
+      },
+    });
+
+    let caught: unknown;
+    try {
+      loadAsserts(dir);
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught instanceof AssertsParseError);
+    const [error] = (caught as AssertsParseError).errors;
+    assert.strictEqual(error?.path, join(dir, ".pi", "asserts.json"));
+    assert.match(error?.reason ?? "", /entry "local\/bad-regex"/);
+    assert.match(error?.reason ?? "", /filter\["command"\]\[1\].*invalid regex/);
+  });
+
   // ── Standalone: malformed JSON throws ────────────────────────────
 
   it("malformed project JSON → throws AssertsParseError pointing at project file", () => {

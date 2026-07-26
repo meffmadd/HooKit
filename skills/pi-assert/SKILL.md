@@ -17,8 +17,11 @@ entries override global entries by **source and name**, not name alone.
     "block-env-write": {
       "description": "Prevent writes to environment files",
       "hook": "tool_call",
-      "filter": { "toolName": "write" },
-      "shell": "echo \"$PI_TOOL_INPUT\" | grep -q '\\.env' && exit 1 || exit 0"
+      "filter": {
+        "toolName": "^write$",
+        "path": "(^|/)\\.env.*$"
+      },
+      "shell": "false"
     },
     "clean-tree": {
       "description": "Require a clean tree after a turn",
@@ -31,7 +34,7 @@ entries override global entries by **source and name**, not name alone.
     "redact-secret-result": {
       "description": "Suppress leaked secrets from read results",
       "hook": "tool_result",
-      "filter": { "toolName": "read" },
+      "filter": { "toolName": "^read$" },
       "shell": "grep -q SECRET \"$PI_TOOL_RESULT\" && exit 1 || exit 0"
     }
   }
@@ -43,9 +46,22 @@ entries override global entries by **source and name**, not name alone.
 Every shell assert requires `description`, `hook`, and `shell`.
 
 - `hook`: `tool_call`, `tool_result`, or `agent_end`.
-- `filter`: optional object of scalar values or scalar arrays. Tool candidates
-  include the trusted `toolName` plus tool input; agent-end has
-  `{ "event": "agent_end" }`.
+- `filter`: optional object whose keys are implicitly ANDed. Tool candidates
+  are `{ ...event.input, toolName }`, with trusted `toolName` taking
+  precedence; agent-end has `{ "event": "agent_end" }`. Dot-separated keys
+  resolve nested values, so `"request.target.path"` can match a deeply nested
+  tool input without `jq`.
+  - Every string is a JavaScript regex source tested with `RegExp.test()`
+    against a string candidate. The same matcher applies to tool names, paths,
+    commands, and other string fields. Escape backslashes for JSON; regex
+    literal delimiters and flags are not supported. Invalid patterns fail
+    source-qualified configuration loading.
+  - Numbers, booleans, and `null` use strict equality without coercion.
+  - Arrays mean any-of. String members use regex semantics and non-string
+    members use strict equality; an empty array matches nothing.
+  - Anchor exact strings: `"^bash$"` matches only `bash`, while unanchored
+    `"bash"` also matches `mybash`. This is a migration change from the former
+    strict-equality behavior.
 - `when`: optional shell precondition. A normal non-zero exit skips the rule;
   timeout, abort, and spawn failure fail closed for guard hooks.
 - `default`: optional boolean; enables the source-qualified entry for a new

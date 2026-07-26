@@ -345,6 +345,41 @@ describe("validate", () => {
       expected: true,
     },
 
+    // ── Structured regex filters ────────────────────────────────────
+
+    {
+      label: "accepts regex strings on dot-separated nested keys",
+      config: {
+        local: {
+          "protect-env": {
+            description: "d",
+            hook: "tool_call",
+            filter: {
+              toolName: "_write$",
+              "request.target.path": "(^|/)\\.env.*$",
+            },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
+    {
+      label: "accepts mixed regex and strict scalar array members",
+      config: {
+        local: {
+          mixed: {
+            description: "d",
+            hook: "tool_call",
+            filter: { value: ["^ten$", 10, false, null] },
+            shell: "false",
+          },
+        },
+      },
+      expected: true,
+    },
+
     // ── Array filter values (any-of) ─────────────────────────────────
 
     {

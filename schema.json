@@ -48,14 +48,29 @@
             },
             "filter": {
               "type": "object",
-              "description": "Key-value filter matched against { toolName, ...event.input }. If every key matches, the assert fires. Omitted → fires on every tool call. Each value may be a scalar (strict === match) or an array — an array means 'any of' its elements match the candidate value (e.g. { \"toolName\": [\"write\", \"edit\"] } runs on either). An empty array matches nothing.",
+              "description": "Filter matched against { ...event.input, toolName } for tool hooks or { event: 'agent_end' }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing.",
               "additionalProperties": {
                 "anyOf": [
-                  { "type": ["string", "number", "boolean", "null"] },
+                  {
+                    "type": "string",
+                    "description": "JavaScript regular-expression source. It is unanchored unless ^ and $ are included; no regex-literal delimiters or flags are supported."
+                  },
+                  {
+                    "type": ["number", "boolean", "null"],
+                    "description": "Non-string scalar matched with strict equality and no type coercion."
+                  },
                   {
                     "type": "array",
-                    "description": "Array of scalars; candidate value matches if it === any element (any-of).",
-                    "items": { "type": ["string", "number", "boolean", "null"] },
+                    "description": "Any-of array. String members are JavaScript regex sources; number, boolean, and null members use strict equality. An empty array matches nothing.",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "JavaScript regular-expression source tested against string candidates."
+                        },
+                        { "type": ["number", "boolean", "null"] }
+                      ]
+                    },
                     "uniqueItems": false
                   }
                 ]

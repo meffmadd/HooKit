@@ -18,6 +18,7 @@ import {
   validateEntryShape,
   validatePresetShape,
   validateRuleEntry,
+  validateSectionedFile,
   writeSectionedFile,
   type SectionedFile,
 } from "../pi-assert/config.js";
@@ -54,12 +55,27 @@ describe("validateEntryShape", () => {
       validateEntryShape({
         description: "d",
         hook: "tool_call",
-        filter: { toolName: "bash" },
+        filter: { toolName: "^bash$", "request.target.path": "(^|/)\\.env.*$" },
         when: "true",
         shell: "false",
         default: true,
       }),
     );
+  });
+
+  it("rejects invalid regex sources in scalar and array filters", () => {
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "tool_call",
+      filter: { toolName: "[" },
+      shell: "false",
+    }));
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "tool_call",
+      filter: { toolName: ["^bash$", "(?"] },
+      shell: "false",
+    }));
   });
 
   it("rejects entries missing description", () => {
@@ -91,6 +107,44 @@ describe("validateEntryShape", () => {
     assert.ok(
       validateEntryShape({ description: "d", hook: "tool_call", shell: "false" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateSectionedFile
+// ---------------------------------------------------------------------------
+
+describe("validateSectionedFile", () => {
+  it("returns a source-qualified error for an invalid scalar regex", () => {
+    const error = validateSectionedFile({
+      local: {
+        "bad-pattern": {
+          description: "d",
+          hook: "tool_call",
+          filter: { command: "[" },
+          shell: "false",
+        },
+      },
+    });
+
+    assert.match(error ?? "", /entry "local\/bad-pattern"/);
+    assert.match(error ?? "", /filter\["command"\].*invalid regex "\["/);
+  });
+
+  it("qualifies an invalid array regex by source, key, and index", () => {
+    const error = validateSectionedFile({
+      "owner/rules": {
+        guard: {
+          description: "d",
+          hook: "tool_call",
+          filter: { toolName: ["^bash$", "(?"] },
+          shell: "false",
+        },
+      },
+    });
+
+    assert.match(error ?? "", /entry "owner\/rules\/guard"/);
+    assert.match(error ?? "", /filter\["toolName"\]\[1\].*invalid regex/);
   });
 });
 

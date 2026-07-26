@@ -52,11 +52,11 @@ export interface ShellAssert extends AssertBase {
   hook: Hook;
   /**
    * Optional key-value filter matched against the hook's candidate record
-   * (for tool_call/tool_result: `{ toolName, ...event.input }`; for
-   * agent_end: `{ event: "agent_end" }`).  Each value may be a scalar
-   * (strict `===` match) or an array — an array means "any of" the values
-   * (the candidate value matches if it `===` equals any element).  An empty
-   * array matches nothing.
+   * (for tool_call/tool_result: `{ ...event.input, toolName }`; for
+   * agent_end: `{ event: "agent_end" }`). Dot-separated keys resolve nested
+   * fields. String values are JavaScript regex sources; numbers, booleans,
+   * and null use strict equality. Arrays mean "any of" and an empty array
+   * matches nothing.
    */
   filter?: EntryFilter;
   /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
@@ -335,25 +335,47 @@ function readSections(
 // Filter matching
 // ---------------------------------------------------------------------------
 
+/** Resolve a dot-separated filter key through own candidate properties. */
+function resolveFilterField(
+  candidate: Record<string, unknown>,
+  key: string,
+): unknown {
+  let current: unknown = candidate;
+  for (const segment of key.split(".")) {
+    if (typeof current !== "object" || current === null ||
+        !Object.prototype.hasOwnProperty.call(current, segment)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+/** Apply the one scalar matcher shared by scalar and array filter values. */
+function matchFilterScalar(expected: unknown, actual: unknown): boolean {
+  if (typeof expected === "string") {
+    return typeof actual === "string" && new RegExp(expected).test(actual);
+  }
+  return actual === expected;
+}
+
 /**
  * Check whether the optional filter matches a candidate record.
- * Every key in the filter must match the corresponding value in the
- * candidate.  No filter → always matches.
+ * Every key in the filter must match; no filter always matches.
  *
- * Matching rule per key:
- * - If the filter value is an **array**, the candidate value matches when
- *   it `===` equals any element of the array ("any of").  An empty array
- *   matches nothing.
- * - Otherwise (a scalar), the candidate value must `===` equal the filter
- *   value (the original strict-equality behaviour).
+ * Dot-separated keys resolve nested candidate fields. A string filter value
+ * is a JavaScript regular-expression source tested against a string candidate
+ * value. Numbers, booleans, and null retain strict equality. Arrays preserve
+ * any-of behavior while applying those same per-element rules; an empty array
+ * matches nothing.
  *
- * A key missing from the candidate yields `undefined`, which matches an
- * array only if `undefined` is an explicit element, and a scalar only if
- * the scalar itself is `undefined` — matching the pre-array behaviour.
+ * Invalid regex sources are rejected by config validation before an assert can
+ * reach this matcher. Exact string matches therefore need anchors, such as
+ * `^bash$`.
  *
- * For tool_call hooks, the candidate is `{ toolName, ...event.input }`.
- * For tool_result hooks, the candidate is `{ toolName, ...event.input }`.
- * For agent_end hooks, the candidate is `{ event: "agent_end" }`.
+ * For tool_call and tool_result hooks, the candidate is
+ * `{ ...event.input, toolName }`. For agent_end it is
+ * `{ event: "agent_end" }`.
  */
 export function matchFilter(
   filter: Record<string, unknown> | undefined,
@@ -361,12 +383,11 @@ export function matchFilter(
 ): boolean {
   if (!filter) return true;
 
-  for (const key of Object.keys(filter)) {
-    const expected = filter[key];
+  for (const [key, expected] of Object.entries(filter)) {
+    const actual = resolveFilterField(candidate, key);
     if (Array.isArray(expected)) {
-      // Empty array → matches nothing (an IN () with no members).
-      if (!expected.includes(candidate[key] as never)) return false;
-    } else if (candidate[key] !== expected) {
+      if (!expected.some((value) => matchFilterScalar(value, actual))) return false;
+    } else if (!matchFilterScalar(expected, actual)) {
       return false;
     }
   }

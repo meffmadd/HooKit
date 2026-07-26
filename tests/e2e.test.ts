@@ -138,6 +138,42 @@ describe("e2e: orchestration", () => {
     assert.strictEqual(allowed, undefined);
   });
 
+  it("regex strings and nested fields match through the full execution path", async () => {
+    const cwd = setupConfig("e2e-structured-filter", {
+      "protect-env": {
+        description: "d",
+        hook: "tool_call",
+        filter: {
+          toolName: "_write$",
+          "request.target.path": "(^|/)\\.env.*$",
+        },
+        shell: "false",
+      },
+    });
+    const asserts = loadAsserts(cwd);
+
+    const blocked = await runAsserts(asserts, {
+      toolName: "vendor_write",
+      toolCallId: "nested-block",
+      input: { request: { target: { path: "/app/.env.local" } } },
+    }, defaultCtx);
+    assert.ok(blocked?.block);
+
+    const wrongTool = await runAsserts(asserts, {
+      toolName: "write",
+      toolCallId: "nested-tool-miss",
+      input: { request: { target: { path: "/app/.env.local" } } },
+    }, defaultCtx);
+    assert.strictEqual(wrongTool, undefined);
+
+    const safePath = await runAsserts(asserts, {
+      toolName: "vendor_write",
+      toolCallId: "nested-path-miss",
+      input: { request: { target: { path: "/app/config.json" } } },
+    }, defaultCtx);
+    assert.strictEqual(safePath, undefined);
+  });
+
   // 5.3 ── Two asserts, first matches → fail-fast ──────────────────
 
   it("fail-fast: first matching assert blocks, second never runs", async () => {

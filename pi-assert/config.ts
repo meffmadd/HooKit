@@ -117,6 +117,13 @@ export function validateSectionedFile(file: SectionedFile): string | null {
     if (!isPlainObject(entries)) return `section "${source}" must be an object`;
     for (const [name, entry] of Object.entries(entries)) {
       if (!validateRuleEntry(entry)) {
+        const invalidRegex = findInvalidFilterRegex(entry);
+        if (invalidRegex) {
+          const location = `filter[${JSON.stringify(invalidRegex.key)}]` +
+            (invalidRegex.index === undefined ? "" : `[${invalidRegex.index}]`);
+          return `entry ${JSON.stringify(`${source}/${name}`)} ${location} has invalid regex ` +
+            `${JSON.stringify(invalidRegex.pattern)}: ${invalidRegex.reason}`;
+        }
         return `entry "${source}/${name}" does not match the assert or preset schema`;
       }
     }
@@ -166,6 +173,37 @@ function isFilterValue(value: unknown): boolean {
   return scalar(value) || (Array.isArray(value) && value.every(scalar));
 }
 
+interface InvalidFilterRegex {
+  key: string;
+  index?: number;
+  pattern: string;
+  reason: string;
+}
+
+/** Return the first invalid string regex in an entry's filter, if any. */
+function findInvalidFilterRegex(def: unknown): InvalidFilterRegex | null {
+  if (!isPlainObject(def) || !isPlainObject(def.filter)) return null;
+
+  for (const [key, value] of Object.entries(def.filter)) {
+    const patterns = Array.isArray(value) ? value : [value];
+    for (let index = 0; index < patterns.length; index++) {
+      const pattern = patterns[index];
+      if (typeof pattern !== "string") continue;
+      try {
+        new RegExp(pattern);
+      } catch (err) {
+        return {
+          key,
+          ...(Array.isArray(value) ? { index } : {}),
+          pattern,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Type guard for an assert entry's shape.
  *
@@ -181,8 +219,10 @@ export function validateEntryShape(def: unknown): def is EntryFields {
   if (typeof d.hook !== "string" || !HOOKS.has(d.hook)) return false;
   if (d.when !== undefined && typeof d.when !== "string") return false;
   if (d.default !== undefined && typeof d.default !== "boolean") return false;
-  if (d.filter !== undefined &&
-      (!isPlainObject(d.filter) || !Object.values(d.filter).every(isFilterValue))) return false;
+  if (d.filter !== undefined) {
+    if (!isPlainObject(d.filter) || !Object.values(d.filter).every(isFilterValue)) return false;
+    if (findInvalidFilterRegex(d)) return false;
+  }
   // A rule is exactly one kind; don't let a valid assert hide a preset field.
   return d.preset === undefined;
 }
