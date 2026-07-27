@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import {
   LIFECYCLE_HOOKS,
+  isAssertResultOutcome,
   isLifecycleHook,
   type PersistedAssert,
   type PersistedPreset,
@@ -191,6 +192,8 @@ function findInvalidFilterRegex(def: unknown): InvalidFilterRegex | null {
   if (!isPlainObject(def) || !isPlainObject(def.filter)) return null;
 
   for (const [key, value] of Object.entries(def.filter)) {
+    // assert_result outcomes are exact enum values, not regex sources.
+    if (def.hook === "assert_result" && key === "outcome") continue;
     const patterns = Array.isArray(value) ? value : [value];
     for (let index = 0; index < patterns.length; index++) {
       const pattern = patterns[index];
@@ -217,6 +220,49 @@ function findInvalidFilterRegex(def: unknown): InvalidFilterRegex | null {
  * both the runtime loader (on-disk entries) and the installer
  * (rule-repo entries) — description is required in both.
  */
+const ASSERT_RESULT_FILTER_KEYS = new Set([
+  "event",
+  "assertionRef",
+  "outcome",
+  "code",
+]);
+
+function isScalarOrArrayOf(
+  value: unknown,
+  predicate: (item: unknown) => boolean,
+): boolean {
+  return Array.isArray(value) ? value.every(predicate) : predicate(value);
+}
+
+/** assert_result has a bounded, field-specific filter contract. */
+function validateAssertResultFilter(filter: unknown): boolean {
+  if (!isPlainObject(filter)) return false;
+  if (Object.keys(filter).some((key) => !ASSERT_RESULT_FILTER_KEYS.has(key))) {
+    return false;
+  }
+
+  if (filter.event !== undefined &&
+      !isScalarOrArrayOf(filter.event, (value) => typeof value === "string")) {
+    return false;
+  }
+  if (filter.assertionRef !== undefined &&
+      !isScalarOrArrayOf(filter.assertionRef, (value) => typeof value === "string")) {
+    return false;
+  }
+  if (filter.outcome !== undefined &&
+      !isScalarOrArrayOf(filter.outcome, isAssertResultOutcome)) {
+    return false;
+  }
+  if (filter.code !== undefined &&
+      !isScalarOrArrayOf(
+        filter.code,
+        (value) => value === null || typeof value === "number",
+      )) {
+    return false;
+  }
+  return true;
+}
+
 export function validateEntryShape(def: unknown): def is EntryFields {
   if (!isPlainObject(def)) return false;
   const d = def;
@@ -228,6 +274,7 @@ export function validateEntryShape(def: unknown): def is EntryFields {
   if (d.filter !== undefined) {
     if (!isPlainObject(d.filter) || !Object.values(d.filter).every(isFilterValue)) return false;
     if (findInvalidFilterRegex(d)) return false;
+    if (d.hook === "assert_result" && !validateAssertResultFilter(d.filter)) return false;
   }
   // A rule is exactly one kind; don't let a valid assert hide a preset field.
   return d.preset === undefined;

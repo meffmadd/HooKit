@@ -59,6 +59,7 @@ describe("validateEntryShape", () => {
       "agent_settled",
       "session_before_switch",
       "session_before_fork",
+      "assert_result",
     ]) {
       assert.ok(validateEntryShape({ description: "d", hook, shell: "true" }), hook);
     }
@@ -89,6 +90,59 @@ describe("validateEntryShape", () => {
       hook: "tool_call",
       filter: { toolName: ["^bash$", "(?"] },
       shell: "false",
+    }));
+  });
+
+  it("enforces the bounded assert_result filter contract", () => {
+    assert.ok(validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: {
+        event: "^assert_result$",
+        assertionRef: "^local/",
+        outcome: ["pass", "block", "patch", "cancel", "report"],
+        code: [0, 1, null],
+      },
+      shell: "true",
+    }));
+    assert.ok(validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { outcome: "pass", code: 0 },
+      shell: "true",
+    }));
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { outcome: "rejected" },
+      shell: "true",
+    }));
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { outcome: ["pass", "error"] },
+      shell: "true",
+    }));
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { code: "^1$" },
+      shell: "true",
+    }));
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { originHook: "tool_call" },
+      shell: "true",
+    }));
+  });
+
+  it("rejects invalid assertionRef regexes for assert_result", () => {
+    assert.ok(!validateEntryShape({
+      description: "d",
+      hook: "assert_result",
+      filter: { assertionRef: "[" },
+      shell: "true",
     }));
   });
 
@@ -174,6 +228,22 @@ describe("validateSectionedFile", () => {
 
     assert.match(error ?? "", /entry "owner\/rules\/guard"/);
     assert.match(error ?? "", /filter\["toolName"\]\[1\].*invalid regex/);
+  });
+
+  it("reports invalid assert_result assertionRef regexes", () => {
+    const error = validateSectionedFile({
+      local: {
+        handler: {
+          description: "d",
+          hook: "assert_result",
+          filter: { assertionRef: "[" },
+          shell: "true",
+        },
+      },
+    });
+
+    assert.match(error ?? "", /entry "local\/handler"/);
+    assert.match(error ?? "", /filter\["assertionRef"\].*invalid regex/);
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -37,6 +37,99 @@ function extensionHarness(): {
     },
   };
 }
+
+describe("index synthetic result dispatch", () => {
+  it("awaits detached handlers without changing the originating block", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-results-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          passes: {
+            description: "pass first",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          blocks: {
+            description: "then block",
+            hook: "tool_call",
+            shell: "exit 6",
+            default: true,
+          },
+          "failing-handler": {
+            description: "handler reporting must be isolated",
+            hook: "assert_result",
+            shell: "false",
+            default: true,
+          },
+          logger: {
+            description: "record every result",
+            hook: "assert_result",
+            filter: {
+              assertionRef: "^local/",
+              outcome: ["pass", "block"],
+            },
+            shell: "printf '%s\\n' \"$PI_EVENT_PAYLOAD\" >> handled.log",
+            default: true,
+          },
+        },
+      }));
+
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => {
+            if (message.includes("assert_result")) {
+              throw new Error("synthetic reporting failed");
+            }
+          },
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+
+      const result = await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "call-1", input: { command: "echo hi" } },
+        ctx,
+      );
+      assert.deepStrictEqual(result, {
+        block: true,
+        reason: 'pi-assert: assertion "blocks" rejected bash — `exit 6`',
+      });
+
+      const payloads = readFileSync(join(root, "handled.log"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { assertionRef: string; outcome: string });
+      assert.deepStrictEqual(payloads.map(({ assertionRef, outcome }) => ({
+        assertionRef,
+        outcome,
+      })), [
+        { assertionRef: "local/passes", outcome: "pass" },
+        { assertionRef: "local/blocks", outcome: "block" },
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("index session guard dispatch", () => {
   it("returns cancellation even when failure feedback throws", async () => {

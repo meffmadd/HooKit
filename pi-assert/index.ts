@@ -3,7 +3,8 @@ import { AssertsState } from "./ui/state.js";
 import { registerAssertsCommand } from "./ui/asserts.js";
 import { clearRepoEntriesCache } from "./installer.js";
 import {
-  executeHookAsserts,
+  dispatchAssertResults,
+  executeHookAssertsWithResults,
   formatRunReport,
   type RunRecord,
 } from "./executor.js";
@@ -12,7 +13,7 @@ import {
   type HookAdapterOutcome,
   type HookEventMap,
 } from "./adapters.js";
-import type { Hook } from "./domain/entry.js";
+import type { NativeHook } from "./domain/entry.js";
 
 function projectIsTrusted(ctx: ExtensionContext): boolean {
   const trustAware = ctx as ExtensionContext & { isProjectTrusted?: () => boolean };
@@ -79,19 +80,49 @@ export default function (pi: ExtensionAPI) {
   registerAssertsCommand(pi, state);
 
   /** Run one registered adapter and dispatch its declared user feedback. */
-  async function runHook<H extends Hook>(
+  async function runHook<H extends NativeHook>(
     hook: H,
     event: HookEventMap[H],
     ctx: ExtensionContext,
   ): Promise<HookAdapterOutcome | undefined> {
     const adapter = getHookAdapter(hook);
-    const outcome = await executeHookAsserts(
-      state.activeList(),
+    const activeAsserts = state.activeList();
+    const execution = await executeHookAssertsWithResults(
+      activeAsserts,
       adapter,
       event,
       ctx,
       (record) => promptRuns.push(record),
     );
+
+    // The originating decision is computed before handlers run and is never
+    // passed to them. Synthetic feedback and infrastructure failures are
+    // best-effort so they cannot replace that decision.
+    const outcome = execution.outcome;
+    try {
+      await dispatchAssertResults(
+        activeAsserts,
+        execution.results,
+        ctx,
+        (message) => {
+          if (ctx.hasUI) ctx.ui.notify(message, "error");
+        },
+      );
+    } catch (error) {
+      // The dispatcher isolates each handler; this outer boundary also covers
+      // unexpected setup failures without leaking into Pi's native callback.
+      try {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `pi-assert: assert_result dispatch failed — ${detail}`,
+            "error",
+          );
+        }
+      } catch {
+        // Reporting synthetic-dispatch infrastructure is best-effort.
+      }
+    }
 
     // Preserve the existing quiet summary boundary at agent_end. turn_end runs
     // are included; agent_settled and session guards have their own feedback.

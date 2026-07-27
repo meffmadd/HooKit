@@ -15,11 +15,16 @@ import {
   type ExtensionContext,
   type SessionBeforeForkEvent,
   type SessionBeforeSwitchEvent,
+  type ShellAssert,
   type ToolCallEvent,
   type ToolResultEvent,
   type ToolResultPatch,
   type TurnEndEvent,
 } from "./engine.js";
+import {
+  entryRef,
+  type AssertResultEvent,
+} from "./domain/entry.js";
 
 // Preserve the original executor-module type import path after moving the
 // structured failure record behind the adapter seam.
@@ -37,6 +42,36 @@ export interface RunRecord {
   passed: boolean;
 }
 
+/** Canonical synthetic record emitted for one originating assertion. */
+export type AssertionResultRecord = AssertResultEvent;
+
+/** Single construction seam for the canonical result record and future enrichment. */
+function makeAssertionResult(
+  assertion: ShellAssert,
+  outcome: AssertionResultRecord["outcome"],
+  code: AssertionResultRecord["code"],
+): AssertionResultRecord {
+  return Object.freeze({
+    event: "assert_result",
+    assertionRef: entryRef(assertion.source, assertion.name),
+    outcome,
+    code,
+  });
+}
+
+interface RunAssertsResult {
+  failures: AssertFailure[];
+  results: AssertionResultRecord[];
+}
+
+export interface HookExecutionOptions {
+  /** Isolate one assertion's unexpected error, then continue in order. */
+  onAssertionError?: (
+    assertion: Assert,
+    error: unknown,
+  ) => void | Promise<void>;
+}
+
 /**
  * Shared filter → `when` → shell core. Hook adapters provide only event
  * projection and failure policy; no lifecycle hook owns a parallel loop.
@@ -47,73 +82,137 @@ async function runAsserts<E>(
   event: E,
   ctx: ExtensionContext,
   onRun?: (record: RunRecord) => void,
-): Promise<AssertFailure[]> {
-  if (adapter.skipIfAborted && ctx.signal?.aborted) return [];
+  options?: HookExecutionOptions,
+): Promise<RunAssertsResult> {
+  if (adapter.skipIfAborted && ctx.signal?.aborted) {
+    return { failures: [], results: [] };
+  }
 
   const failures: AssertFailure[] = [];
+  const results: AssertionResultRecord[] = [];
+  const emitResults = adapter.hook !== "assert_result";
+
   for (const assertion of asserts) {
     // Active presets are expanded before execution; this is a narrowing guard.
     if (isPreset(assertion)) continue;
     if (assertion.hook !== adapter.hook) continue;
 
-    const candidate = adapter.candidate(event);
-    if (!matchFilter(assertion.filter, candidate)) continue;
-    const env = adapter.buildEnv(event, ctx);
+    try {
+      const candidate = adapter.candidate(event);
+      const matches = adapter.matchesFilter ?? matchFilter;
+      if (!matches(assertion.filter, candidate)) continue;
+      const env = adapter.buildEnv(event, ctx);
 
-    if (assertion.when) {
+      if (assertion.when) {
+        const result = await evaluateShell(
+          assertion.when,
+          env,
+          ctx.signal,
+          undefined,
+          ctx.cwd,
+        );
+        // An ordinary non-zero precondition means not applicable. A timeout,
+        // abort, or spawn failure has code null and fails closed.
+        if (result.code === null) {
+          failures.push({
+            assertion,
+            phase: "when",
+            command: assertion.when,
+            result,
+          });
+          if (emitResults) {
+            results.push(makeAssertionResult(
+              assertion,
+              adapter.failureAction,
+              null,
+            ));
+          }
+          if (adapter.aggregation === "first") return { failures, results };
+          continue;
+        }
+        if (!result.passed) continue;
+      }
+
+      const startedAt = Date.now();
       const result = await evaluateShell(
-        assertion.when,
+        assertion.shell,
         env,
         ctx.signal,
         undefined,
         ctx.cwd,
       );
-      // An ordinary non-zero precondition means not applicable. A timeout,
-      // abort, or spawn failure has code null and fails closed.
-      if (result.code === null) {
+      onRun?.({
+        name: assertion.name,
+        hook: adapter.hook,
+        durationMs: Date.now() - startedAt,
+        passed: result.passed,
+      });
+
+      if (emitResults) {
+        results.push(makeAssertionResult(
+          assertion,
+          result.passed ? "pass" : adapter.failureAction,
+          result.code,
+        ));
+      }
+
+      if (!result.passed) {
         failures.push({
           assertion,
-          phase: "when",
-          command: assertion.when,
+          phase: "shell",
+          command: assertion.shell,
           result,
         });
-        if (adapter.aggregation === "first") return failures;
-        continue;
+        if (adapter.aggregation === "first") return { failures, results };
       }
-      if (!result.passed) continue;
-    }
-
-    const startedAt = Date.now();
-    const result = await evaluateShell(
-      assertion.shell,
-      env,
-      ctx.signal,
-      undefined,
-      ctx.cwd,
-    );
-    onRun?.({
-      name: assertion.name,
-      hook: adapter.hook,
-      durationMs: Date.now() - startedAt,
-      passed: result.passed,
-    });
-
-    if (!result.passed) {
-      failures.push({
-        assertion,
-        phase: "shell",
-        command: assertion.shell,
-        result,
-      });
-      if (adapter.aggregation === "first") return failures;
+    } catch (error) {
+      if (!options?.onAssertionError) throw error;
+      try {
+        await options.onAssertionError(assertion, error);
+      } catch {
+        // Isolation callback feedback is best-effort.
+      }
     }
   }
-  return failures;
+  return { failures, results };
+}
+
+export interface HookExecution {
+  /** Frozen native/report decision, computed before synthetic dispatch. */
+  readonly outcome: HookAdapterOutcome | undefined;
+  /** Frozen assertion decisions in execution order. */
+  readonly results: readonly AssertionResultRecord[];
+}
+
+/** Execute an adapter and retain the synthetic records for internal dispatch. */
+export async function executeHookAssertsWithResults<E>(
+  asserts: Assert[],
+  adapter: HookAdapter<E>,
+  event: E,
+  ctx: ExtensionContext,
+  onRun?: (record: RunRecord) => void,
+  options?: HookExecutionOptions,
+): Promise<HookExecution> {
+  const execution = await runAsserts(asserts, adapter, event, ctx, onRun, options);
+  const outcome = execution.failures.length === 0
+    ? undefined
+    : adapter.outcome(execution.failures, event);
+
+  // Freeze the complete decision boundary before synthetic dispatch. The
+  // assertion objects referenced by failures remain shared runtime records,
+  // but handlers never receive this outcome or its arrays.
+  if (outcome) {
+    Object.freeze(outcome.failures);
+    Object.freeze(outcome.messages);
+    Object.freeze(outcome);
+  }
+  Object.freeze(execution.results);
+  return Object.freeze({ outcome, results: execution.results });
 }
 
 /**
- * Execute any adapter through the shared core. This is the internal adapter
- * seam used by current native hooks and future synthetic hooks.
+ * Execute any adapter through the shared core while preserving the original
+ * public outcome-only API.
  */
 export async function executeHookAsserts<E>(
   asserts: Assert[],
@@ -122,8 +221,84 @@ export async function executeHookAsserts<E>(
   ctx: ExtensionContext,
   onRun?: (record: RunRecord) => void,
 ): Promise<HookAdapterOutcome | undefined> {
-  const failures = await runAsserts(asserts, adapter, event, ctx, onRun);
-  return failures.length === 0 ? undefined : adapter.outcome(failures, event);
+  return (await executeHookAssertsWithResults(
+    asserts,
+    adapter,
+    event,
+    ctx,
+    onRun,
+  )).outcome;
+}
+
+export type AssertResultReporter = (message: string) => void | Promise<void>;
+
+async function reportBestEffort(
+  report: AssertResultReporter | undefined,
+  message: string,
+): Promise<void> {
+  if (!report) return;
+  try {
+    await report(message);
+  } catch {
+    // Result-handler reporting must never affect the originating callback.
+  }
+}
+
+function errorDetail(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
+function dispatchErrorMessage(assertion: Assert, error: unknown): string {
+  const ref = isPreset(assertion)
+    ? assertion.name
+    : entryRef(assertion.source, assertion.name);
+  return `pi-assert: assert_result handler "${ref}" failed to execute — ${errorDetail(error)}`;
+}
+
+/**
+ * Dispatch synthetic results in result-major, configured-handler order.
+ *
+ * Each handler goes through the same adapter executor in isolation. The
+ * detached context intentionally omits the originating signal, and both
+ * execution and feedback errors are swallowed after best-effort reporting.
+ */
+export async function dispatchAssertResults(
+  asserts: Assert[],
+  results: readonly AssertionResultRecord[],
+  ctx: ExtensionContext,
+  report?: AssertResultReporter,
+): Promise<void> {
+  const detachedCtx: ExtensionContext = { cwd: ctx.cwd };
+  const adapter = getHookAdapter("assert_result");
+
+  for (const result of results) {
+    try {
+      const execution = await executeHookAssertsWithResults(
+        asserts,
+        adapter,
+        result,
+        detachedCtx,
+        undefined,
+        {
+          onAssertionError: (handler, error) =>
+            reportBestEffort(report, dispatchErrorMessage(handler, error)),
+        },
+      );
+      if (execution.outcome?.action === "report") {
+        await reportBestEffort(report, execution.outcome.feedbackMessage);
+      }
+    } catch (error) {
+      await reportBestEffort(
+        report,
+        `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ` +
+          errorDetail(error),
+      );
+    }
+  }
 }
 
 /** Run active tool_call assertions; first failure blocks the call. */

@@ -1,6 +1,6 @@
 ---
 name: pi-assert
-description: Define shell assertions for Pi tool calls, results, turns, settled agents, and cancellable session changes.
+description: Define shell assertions and result handlers for Pi tool calls, results, turns, settled agents, and cancellable session changes.
 ---
 
 # pi-assert
@@ -46,14 +46,15 @@ entries override global entries by **source and name**, not name alone.
 Every shell assert requires `description`, `hook`, and `shell`.
 
 - `hook`: `tool_call`, `tool_result`, `turn_end`, `agent_end`,
-  `agent_settled`, `session_before_switch`, or `session_before_fork`. Unknown
-  lifecycle names fail loading clearly. `session_shutdown` is unsupported
-  because Pi cannot cancel it.
+  `agent_settled`, `session_before_switch`, `session_before_fork`, or the
+  synthetic `assert_result`. Unknown hook names fail loading clearly.
+  `session_shutdown` is unsupported because Pi cannot cancel it.
 - `filter`: optional object whose keys are implicitly ANDed. Tool candidates
   are `{ ...event.input, toolName }`, with trusted `toolName` taking
   precedence. Lifecycle candidates are bounded records: `turn_end` adds
   `turnIndex`; agent hooks expose `event`; session switch exposes `reason` and
-  optional `targetSessionFile`; session fork exposes `entryId` and `position`.
+  optional `targetSessionFile`; session fork exposes `entryId` and `position`;
+  `assert_result` exposes `event`, `assertionRef`, `outcome`, and `code`.
   Dot-separated keys resolve nested values, so `"request.target.path"` can
   match a deeply nested tool input without `jq`.
   - Every string is a JavaScript regex source tested with `RegExp.test()`
@@ -73,10 +74,43 @@ Every shell assert requires `description`, `hook`, and `shell`.
   session.
 
 Commands execute with `PWD` equal to `PI_CWD`. Tool hooks expose
-`PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and `PI_CWD`; result hooks
-also expose `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`. Other lifecycle hooks
-expose `PI_EVENT`, JSON `PI_EVENT_PAYLOAD` (the bounded filter candidate), and
-`PI_CWD`.
+`PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and `PI_CWD`; `tool_result`
+also exposes `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`. Lifecycle and synthetic
+hooks expose `PI_EVENT`, JSON `PI_EVENT_PAYLOAD` (the bounded filter candidate),
+and `PI_CWD`.
+
+## Assertion-result handlers
+
+Use `assert_result` for report-only handling after another assertion decides:
+
+```json
+{
+  "local": {
+    "handle-failures": {
+      "description": "Log selected local failures",
+      "hook": "assert_result",
+      "filter": {
+        "assertionRef": "^local/",
+        "outcome": ["block", "patch", "cancel", "report"]
+      },
+      "shell": "./scripts/log-assert-result.sh"
+    }
+  }
+}
+```
+
+`assertionRef` is a regex matched against canonical `source/name`. `outcome` is
+an exact scalar or any-of list containing `pass`, `block`, `patch`, `cancel`,
+or `report`; regex syntax is not accepted. `code` is matched strictly as a
+number or `null`. The bounded JSON payload is
+`{ event: "assert_result", assertionRef, outcome, code }`.
+
+A main shell emits one result: `pass` with code `0`, or its hook action with the
+non-zero exit code/`null`. A `when` execution failure emits the hook action with
+`null`; filter misses and ordinary non-zero `when` skips emit nothing. Handlers
+are awaited in order without the originating abort signal. Their failures are
+reported but cannot change the already-computed originating decision, and they
+never emit recursive results.
 
 ## Presets
 
@@ -100,4 +134,4 @@ members, and edit local presets. `tool_call` and `tool_result` fail fast and
 block/patch respectively. `turn_end` and `agent_settled` collect failures and
 report only. `agent_end` collects failures and triggers one corrective turn.
 Session switch/fork hooks collect failures, cancel the action, and report one
-aggregate.
+aggregate. `assert_result` is always report-only.

@@ -348,6 +348,82 @@ describe("validate", () => {
     },
 
     {
+      label: "accepts assert_result with its bounded filter",
+      config: {
+        local: {
+          handler: {
+            description: "d",
+            hook: "assert_result",
+            filter: {
+              event: "^assert_result$",
+              assertionRef: "^local/",
+              outcome: ["pass", "block", "patch", "cancel", "report"],
+              code: [0, 1, null],
+            },
+            shell: "true",
+          },
+        },
+      },
+      expected: true,
+    },
+    {
+      label: "rejects unknown assert_result outcome",
+      config: {
+        local: {
+          handler: {
+            description: "d",
+            hook: "assert_result",
+            filter: { outcome: "error" },
+            shell: "true",
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects regex syntax in exact assert_result outcome",
+      config: {
+        local: {
+          handler: {
+            description: "d",
+            hook: "assert_result",
+            filter: { outcome: "p.*" },
+            shell: "true",
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects string assert_result code filters",
+      config: {
+        local: {
+          handler: {
+            description: "d",
+            hook: "assert_result",
+            filter: { code: "^1$" },
+            shell: "true",
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects unbounded assert_result filter fields",
+      config: {
+        local: {
+          handler: {
+            description: "d",
+            hook: "assert_result",
+            filter: { originHook: "tool_call" },
+            shell: "true",
+          },
+        },
+      },
+      expected: false,
+    },
+
+    {
       label: "accepts 'agent_end' as hook",
       config: { local: { guard: { description: "d", hook: "agent_end", shell: "true" } } },
       expected: true,

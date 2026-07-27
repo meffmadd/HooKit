@@ -48,16 +48,16 @@ interface AssertBase {
 
 /** A shell-based assert: `shell` (+ optional `when`/`filter`) run on a hook. */
 export interface ShellAssert extends AssertBase {
-  /** Pi event name to intercept (e.g. "tool_call"). */
+  /** Native or synthetic hook name to intercept (e.g. "tool_call"). */
   hook: Hook;
   /**
    * Optional key-value filter matched against the hook adapter's candidate
    * record. Tool hooks use `{ ...event.input, toolName }`; lifecycle hooks use
    * a bounded record containing `event` and their documented scalar metadata.
-   * Dot-separated keys resolve nested fields. String values are JavaScript
-   * regex sources; numbers, booleans, and null use strict equality. Arrays
-   * mean "any of" and an empty array
-   * matches nothing.
+   * Dot-separated keys resolve nested fields. String values are normally
+   * JavaScript regex sources; numbers, booleans, and null use strict equality.
+   * `assert_result.outcome` is the field-specific exception: an exact enum
+   * scalar/list. Arrays mean "any of" and an empty array matches nothing.
    */
   filter?: EntryFilter;
   /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
@@ -95,7 +95,7 @@ export interface AssertEnv {
   [key: string]: string;
 }
 
-/** Structured environment passed to lifecycle-event shell commands. */
+/** Structured environment passed to lifecycle or synthetic hook commands. */
 export interface LifecycleEnv {
   PI_EVENT: string;
   PI_EVENT_PAYLOAD: string;
@@ -477,8 +477,8 @@ export function buildEnv(
 }
 
 /**
- * Build the environment shared by non-tool lifecycle adapters. The payload is
- * the same bounded record used for filtering, never the complete native event.
+ * Build the environment shared by non-tool native and synthetic adapters. The
+ * payload is the bounded filter candidate, never the complete native event.
  */
 export function buildLifecycleEnv(
   hook: Hook,

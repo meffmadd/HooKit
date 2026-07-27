@@ -54,6 +54,7 @@ describe("hook adapter registry", () => {
         agent_settled: ["report", "all", "notify-error"],
         session_before_switch: ["cancel", "all", "notify-error"],
         session_before_fork: ["cancel", "all", "notify-error"],
+        assert_result: ["report", "all", "notify-error"],
       },
     );
   });
@@ -91,6 +92,20 @@ describe("hook adapter registry", () => {
     });
     assert.deepStrictEqual(getHookAdapter("agent_settled").candidate({}), {
       event: "agent_settled",
+    });
+
+    const result = {
+      event: "assert_result" as const,
+      assertionRef: "local/no-rm-rf",
+      outcome: "block" as const,
+      code: 1,
+    };
+    assert.deepStrictEqual(getHookAdapter("assert_result").candidate(result), result);
+    assert.deepStrictEqual(getHookAdapter("assert_result").buildEnv(result, ctx), {
+      PI_EVENT: "assert_result",
+      PI_EVENT_PAYLOAD:
+        '{"event":"assert_result","assertionRef":"local/no-rm-rf","outcome":"block","code":1}',
+      PI_CWD: "/workspace",
     });
   });
 });

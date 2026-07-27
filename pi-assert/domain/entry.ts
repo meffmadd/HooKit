@@ -1,6 +1,6 @@
 /** Shared entry types and identity/reference helpers. */
 
-export const LIFECYCLE_HOOKS = [
+export const NATIVE_HOOKS = [
   "tool_call",
   "tool_result",
   "turn_end",
@@ -10,7 +10,34 @@ export const LIFECYCLE_HOOKS = [
   "session_before_fork",
 ] as const;
 
+/** Every configurable hook, including pi-assert's synthetic result hook. */
+export const LIFECYCLE_HOOKS = [...NATIVE_HOOKS, "assert_result"] as const;
+
+export type NativeHook = (typeof NATIVE_HOOKS)[number];
 export type Hook = (typeof LIFECYCLE_HOOKS)[number];
+
+export const ASSERT_RESULT_OUTCOMES = [
+  "pass",
+  "block",
+  "patch",
+  "cancel",
+  "report",
+] as const;
+
+export type AssertResultOutcome = (typeof ASSERT_RESULT_OUTCOMES)[number];
+
+export function isAssertResultOutcome(value: unknown): value is AssertResultOutcome {
+  return typeof value === "string" &&
+    (ASSERT_RESULT_OUTCOMES as readonly string[]).includes(value);
+}
+
+/** Bounded synthetic event emitted after one assertion makes a decision. */
+export interface AssertResultEvent {
+  readonly event: "assert_result";
+  readonly assertionRef: string;
+  readonly outcome: AssertResultOutcome;
+  readonly code: number | null;
+}
 
 /** Narrow an unknown config value to a lifecycle hook supported by an adapter. */
 export function isLifecycleHook(value: unknown): value is Hook {

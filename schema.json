@@ -43,12 +43,12 @@
             },
             "hook": {
               "type": "string",
-              "enum": ["tool_call", "tool_result", "turn_end", "agent_end", "agent_settled", "session_before_switch", "session_before_fork"],
-              "description": "Supported Pi lifecycle hook. Tool failures block or patch; turn_end and agent_settled failures report only; agent_end failures request one corrective turn; session_before_switch and session_before_fork failures cancel the action. session_shutdown is intentionally unsupported because Pi does not expose cancellation for it."
+              "enum": ["tool_call", "tool_result", "turn_end", "agent_end", "agent_settled", "session_before_switch", "session_before_fork", "assert_result"],
+              "description": "Supported native or synthetic hook. Tool failures block or patch; turn_end and agent_settled failures report only; agent_end failures request one corrective turn; session_before_switch and session_before_fork failures cancel the action. assert_result handles individual assertion decisions and is always report-only. session_shutdown is intentionally unsupported because Pi does not expose cancellation for it."
             },
             "filter": {
               "type": "object",
-              "description": "Filter matched against the hook adapter's bounded candidate: { ...event.input, toolName } for tool hooks; otherwise { event, ...documented scalar metadata }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing.",
+              "description": "Filter matched against the hook adapter's bounded candidate: { ...event.input, toolName } for tool hooks; otherwise { event, ...documented scalar metadata }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is normally a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing. assert_result narrows this contract: assertionRef/event are regex sources, outcome is an exact enum value, and code is numeric or null.",
               "additionalProperties": {
                 "anyOf": [
                   {
@@ -94,6 +94,19 @@
               "description": "Mutual exclusivity: a shell assert must not carry `preset` (use a preset entry instead)."
             }
           },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "hook": { "const": "assert_result" } },
+                "required": ["hook"]
+              },
+              "then": {
+                "properties": {
+                  "filter": { "$ref": "#/$defs/assertResultFilter" }
+                }
+              }
+            }
+          ],
           "additionalProperties": false
         },
         {
@@ -138,6 +151,43 @@
           "additionalProperties": false
         }
       ]
+    },
+    "assertResultFilter": {
+      "type": "object",
+      "description": "Bounded assert_result filter. assertionRef and event use regex matching; outcome is exact any-of; code uses strict numeric/null matching.",
+      "properties": {
+        "event": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "assertionRef": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            { "type": "string", "enum": ["pass", "block", "patch", "cancel", "report"] },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["pass", "block", "patch", "cancel", "report"]
+              }
+            }
+          ]
+        },
+        "code": {
+          "anyOf": [
+            { "type": ["number", "null"] },
+            { "type": "array", "items": { "type": ["number", "null"] } }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "repo": {
       "type": "object",

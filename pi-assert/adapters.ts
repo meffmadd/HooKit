@@ -2,6 +2,7 @@ import {
   buildEnv,
   buildLifecycleEnv,
   buildResultEnv,
+  matchFilter,
   type AgentEndEvent,
   type AgentSettledEvent,
   type ExtensionContext,
@@ -14,9 +15,14 @@ import {
   type ToolResultPatch,
   type TurnEndEvent,
 } from "./engine.js";
-import type { Hook } from "./domain/entry.js";
+import {
+  type AssertResultEvent,
+  type AssertResultOutcome,
+  type EntryFilter,
+  type Hook,
+} from "./domain/entry.js";
 
-/** Native event shape consumed by each registered lifecycle adapter. */
+/** Native or synthetic event shape consumed by each registered adapter. */
 export interface HookEventMap {
   tool_call: ToolCallEvent;
   tool_result: ToolResultEvent;
@@ -25,9 +31,10 @@ export interface HookEventMap {
   agent_settled: AgentSettledEvent;
   session_before_switch: SessionBeforeSwitchEvent;
   session_before_fork: SessionBeforeForkEvent;
+  assert_result: AssertResultEvent;
 }
 
-export type FailureAction = "block" | "patch" | "cancel" | "report";
+export type FailureAction = Exclude<AssertResultOutcome, "pass">;
 export type FailureAggregation = "first" | "all";
 export type FeedbackPolicy = "notify-error" | "corrective-turn";
 
@@ -42,7 +49,7 @@ export interface AssertFailure {
 interface HookOutcomeBase {
   /** Adapter action; mirrors Pi's available event result contract. */
   action: FailureAction;
-  /** Structured records retained for future assertion-result dispatch. */
+  /** Structured originating failures used to format and freeze the decision. */
   failures: AssertFailure[];
   /** Adapter-formatted failure lines or reasons. */
   messages: string[];
@@ -97,6 +104,11 @@ export interface HookAdapter<E = unknown> {
   /** Report-only hooks skip an already-aborted turn instead of inventing errors. */
   skipIfAborted?: boolean;
   candidate(event: E): Record<string, unknown>;
+  /** Optional field-specific matcher; defaults to the shared regex matcher. */
+  matchesFilter?(
+    filter: EntryFilter | undefined,
+    candidate: Record<string, unknown>,
+  ): boolean;
   buildEnv(event: E, ctx: ExtensionContext): Record<string, string>;
   outcome(failures: AssertFailure[], event: E): HookAdapterOutcome;
 }
@@ -148,6 +160,27 @@ const sessionBeforeForkCandidate = (event: SessionBeforeForkEvent) => ({
   entryId: event.entryId,
   position: event.position,
 });
+const assertResultCandidate = (event: AssertResultEvent) => ({
+  event: "assert_result",
+  assertionRef: event.assertionRef,
+  outcome: event.outcome,
+  code: event.code,
+});
+
+/** `outcome` is exact enum matching; other result fields retain shared rules. */
+function matchAssertResultFilter(
+  filter: EntryFilter | undefined,
+  candidate: Record<string, unknown>,
+): boolean {
+  if (!filter) return true;
+  const { outcome, ...sharedFields } = filter;
+  if (!matchFilter(sharedFields, candidate)) return false;
+  if (outcome === undefined) return true;
+  const actual = candidate.outcome;
+  return Array.isArray(outcome)
+    ? outcome.some((expected) => expected === actual)
+    : outcome === actual;
+}
 
 const toolCallAdapter = defineHookAdapter<ToolCallEvent>({
   hook: "tool_call",
@@ -305,7 +338,26 @@ const sessionBeforeForkAdapter = defineHookAdapter<SessionBeforeForkEvent>({
   },
 });
 
-/** Exhaustive registry: every accepted lifecycle hook has exactly one adapter. */
+const assertResultAdapter = defineHookAdapter<AssertResultEvent>({
+  hook: "assert_result",
+  failureAction: "report",
+  aggregation: "all",
+  feedback: "notify-error",
+  candidate: assertResultCandidate,
+  matchesFilter: matchAssertResultFilter,
+  buildEnv: lifecycleBuilder("assert_result", assertResultCandidate),
+  outcome: (failures) => {
+    const messages = failures.map(failureLine);
+    return {
+      action: "report",
+      failures,
+      messages,
+      feedbackMessage: reportMessage("assert_result", messages),
+    };
+  },
+});
+
+/** Exhaustive registry: every accepted native or synthetic hook has one adapter. */
 export const HOOK_ADAPTERS = {
   tool_call: toolCallAdapter,
   tool_result: toolResultAdapter,
@@ -314,6 +366,7 @@ export const HOOK_ADAPTERS = {
   agent_settled: agentSettledAdapter,
   session_before_switch: sessionBeforeSwitchAdapter,
   session_before_fork: sessionBeforeForkAdapter,
+  assert_result: assertResultAdapter,
 } satisfies { [H in Hook]: HookAdapter<HookEventMap[H]> };
 
 /** Read-only map form exposed for internal dispatchers such as assert_result. */
