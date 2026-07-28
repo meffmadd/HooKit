@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   getHookAdapter,
   type AssertFailure,
@@ -9,6 +10,7 @@ import {
   matchFilter,
   evaluateShell,
   isPreset,
+  buildPiContextMetadataSnapshot,
   type Assert,
   type AgentEndEvent,
   type AgentSettledEvent,
@@ -48,12 +50,14 @@ export type AssertionResultRecord = AssertResultEvent;
 /** Single construction seam for the canonical result record and future enrichment. */
 function makeAssertionResult(
   assertion: ShellAssert,
+  runId: string,
   outcome: AssertionResultRecord["outcome"],
   code: AssertionResultRecord["code"],
 ): AssertionResultRecord {
   return Object.freeze({
     event: "assert_result",
     assertionRef: entryRef(assertion.source, assertion.name),
+    runId,
     outcome,
     code,
   });
@@ -101,7 +105,20 @@ async function runAsserts<E>(
       const candidate = adapter.candidate(event);
       const matches = adapter.matchesFilter ?? matchFilter;
       if (!matches(assertion.filter, candidate)) continue;
-      const env = adapter.buildEnv(event, ctx);
+
+      // One fresh correlation ID and one metadata snapshot per filter-matched
+      // assertion invocation. The same environment object is reused by `when`
+      // and the main shell; a retry or sibling assertion gets a new UUID.
+      const runId = randomUUID();
+      const env = {
+        ...adapter.buildEnv(event, ctx),
+        PI_ASSERT_REF: entryRef(assertion.source, assertion.name),
+        PI_ASSERT_HOOK: assertion.hook,
+        PI_ASSERT_RUN_ID: runId,
+        // Builders retain PI_EVENT for standalone callers; this deliberate
+        // re-overlay makes the shared executor guarantee the adapter identity.
+        PI_EVENT: adapter.hook,
+      };
 
       if (assertion.when) {
         const result = await evaluateShell(
@@ -123,6 +140,7 @@ async function runAsserts<E>(
           if (emitResults) {
             results.push(makeAssertionResult(
               assertion,
+              runId,
               adapter.failureAction,
               null,
             ));
@@ -151,6 +169,7 @@ async function runAsserts<E>(
       if (emitResults) {
         results.push(makeAssertionResult(
           assertion,
+          runId,
           result.passed ? "pass" : adapter.failureAction,
           result.code,
         ));
@@ -272,7 +291,10 @@ export async function dispatchAssertResults(
   ctx: ExtensionContext,
   report?: AssertResultReporter,
 ): Promise<void> {
-  const detachedCtx: ExtensionContext = { cwd: ctx.cwd };
+  const detachedCtx: ExtensionContext = {
+    cwd: ctx.cwd,
+    metadataSnapshot: buildPiContextMetadataSnapshot(ctx),
+  };
   const adapter = getHookAdapter("assert_result");
 
   for (const result of results) {

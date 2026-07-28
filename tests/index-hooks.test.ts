@@ -26,6 +26,7 @@ function extensionHarness(): {
     },
     registerCommand() {},
     appendEntry() {},
+    getThinkingLevel: () => "high",
   } as unknown as ExtensionAPI;
 
   return {
@@ -52,7 +53,7 @@ describe("index synthetic result dispatch", () => {
           passes: {
             description: "pass first",
             hook: "tool_call",
-            shell: "true",
+            shell: "printf '%s' \"$PI_REASONING_LEVEL\" > reasoning.log",
             default: true,
           },
           blocks: {
@@ -111,6 +112,7 @@ describe("index synthetic result dispatch", () => {
         block: true,
         reason: 'pi-assert: assertion "blocks" rejected bash — `exit 6`',
       });
+      assert.equal(readFileSync(join(root, "reasoning.log"), "utf8"), "high");
 
       const payloads = readFileSync(join(root, "handled.log"), "utf8")
         .trim()

@@ -100,6 +100,7 @@ describe("validateEntryShape", () => {
       filter: {
         event: "^assert_result$",
         assertionRef: "^local/",
+        runId: "^[0-9a-f-]+$",
         outcome: ["pass", "block", "patch", "cancel", "report"],
         code: [0, 1, null],
       },
@@ -137,13 +138,15 @@ describe("validateEntryShape", () => {
     }));
   });
 
-  it("rejects invalid assertionRef regexes for assert_result", () => {
-    assert.ok(!validateEntryShape({
-      description: "d",
-      hook: "assert_result",
-      filter: { assertionRef: "[" },
-      shell: "true",
-    }));
+  it("rejects invalid identity regexes for assert_result", () => {
+    for (const filter of [{ assertionRef: "[" }, { runId: "[" }]) {
+      assert.ok(!validateEntryShape({
+        description: "d",
+        hook: "assert_result",
+        filter,
+        shell: "true",
+      }));
+    }
   });
 
   it("rejects entries missing description", () => {

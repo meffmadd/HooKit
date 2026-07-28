@@ -97,6 +97,7 @@ describe("hook adapter registry", () => {
     const result = {
       event: "assert_result" as const,
       assertionRef: "local/no-rm-rf",
+      runId: "00000000-0000-4000-8000-000000000020",
       outcome: "block" as const,
       code: 1,
     };
@@ -104,7 +105,7 @@ describe("hook adapter registry", () => {
     assert.deepStrictEqual(getHookAdapter("assert_result").buildEnv(result, ctx), {
       PI_EVENT: "assert_result",
       PI_EVENT_PAYLOAD:
-        '{"event":"assert_result","assertionRef":"local/no-rm-rf","outcome":"block","code":1}',
+        '{"event":"assert_result","assertionRef":"local/no-rm-rf","runId":"00000000-0000-4000-8000-000000000020","outcome":"block","code":1}',
       PI_CWD: "/workspace",
     });
   });

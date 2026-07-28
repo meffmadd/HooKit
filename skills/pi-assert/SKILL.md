@@ -54,7 +54,8 @@ Every shell assert requires `description`, `hook`, and `shell`.
   precedence. Lifecycle candidates are bounded records: `turn_end` adds
   `turnIndex`; agent hooks expose `event`; session switch exposes `reason` and
   optional `targetSessionFile`; session fork exposes `entryId` and `position`;
-  `assert_result` exposes `event`, `assertionRef`, `outcome`, and `code`.
+  `assert_result` exposes `event`, `assertionRef`, originating `runId`,
+  `outcome`, and `code`.
   Dot-separated keys resolve nested values, so `"request.target.path"` can
   match a deeply nested tool input without `jq`.
   - Every string is a JavaScript regex source tested with `RegExp.test()`
@@ -73,11 +74,35 @@ Every shell assert requires `description`, `hook`, and `shell`.
 - `default`: optional boolean; enables the source-qualified entry for a new
   session.
 
-Commands execute with `PWD` equal to `PI_CWD`. Tool hooks expose
-`PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and `PI_CWD`; `tool_result`
-also exposes `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`. Lifecycle and synthetic
-hooks expose `PI_EVENT`, JSON `PI_EVENT_PAYLOAD` (the bounded filter candidate),
-and `PI_CWD`.
+### Shell environment
+
+Every matching rule receives:
+
+- session: `PI_SESSION_ID`, optional `PI_SESSION_FILE`, optional
+  `PI_SESSION_NAME`, and optional `PI_SESSION_LEAF_ID`
+- model: optional `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL`
+- runtime: `PI_MODE` (`tui`, `rpc`, `json`, or `print`) and
+  `PI_PROJECT_TRUSTED` (`true` or `false`)
+- context usage: optional `PI_CONTEXT_TOKENS`, `PI_CONTEXT_WINDOW`, and
+  `PI_CONTEXT_PERCENT`
+- invocation: `PI_EVENT`, canonical `PI_ASSERT_REF`, configured
+  `PI_ASSERT_HOOK`, fresh UUID `PI_ASSERT_RUN_ID`, and `PI_CWD`
+
+Optional or unknown fields are unset, never empty or stringified
+`null`/`undefined`. A rule's `when` and main `shell` share the exact metadata
+snapshot and run ID. Other rules, events, repeated executions, and retries get
+fresh IDs; run IDs are correlation IDs, not idempotency keys.
+
+Tool hooks additionally expose `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, and JSON
+`PI_TOOL_INPUT`; `tool_result` also exposes text `PI_TOOL_RESULT` and
+`PI_TOOL_IS_ERROR`. Lifecycle and synthetic hooks expose JSON
+`PI_EVENT_PAYLOAD` (the bounded filter candidate). `PI_EVENT` is universal,
+including `tool_call` and `tool_result`. Commands execute with `PWD` equal to
+`PI_CWD`.
+
+pi-assert removes stale inherited values for all variables it manages before
+spawning each shell, while preserving unrelated values such as `PATH` and
+`PI_CODING_AGENT`.
 
 ## Assertion-result handlers
 
@@ -99,18 +124,22 @@ Use `assert_result` for report-only handling after another assertion decides:
 }
 ```
 
-`assertionRef` is a regex matched against canonical `source/name`. `outcome` is
-an exact scalar or any-of list containing `pass`, `block`, `patch`, `cancel`,
-or `report`; regex syntax is not accepted. `code` is matched strictly as a
-number or `null`. The bounded JSON payload is
-`{ event: "assert_result", assertionRef, outcome, code }`.
+`assertionRef` is a regex matched against canonical `source/name`; `runId` is
+a regex matched against the originating UUID. `outcome` is an exact scalar or
+any-of list containing `pass`, `block`, `patch`, `cancel`, or `report`; regex
+syntax is not accepted. `code` is matched strictly as a number or `null`. The
+bounded JSON payload is
+`{ event: "assert_result", assertionRef, runId, outcome, code }`.
 
 A main shell emits one result: `pass` with code `0`, or its hook action with the
 non-zero exit code/`null`. A `when` execution failure emits the hook action with
-`null`; filter misses and ordinary non-zero `when` skips emit nothing. Handlers
-are awaited in order without the originating abort signal. Their failures are
-reported but cannot change the already-computed originating decision, and they
-never emit recursive results.
+`null`; filter misses and ordinary non-zero `when` skips emit nothing. In a
+handler, payload `assertionRef`/`runId` identify the originating rule and run;
+the handler's `PI_ASSERT_REF`/`PI_ASSERT_RUN_ID` identify the handler currently
+executing and therefore carry a separate run ID. Handlers retain the bounded
+session/model/runtime snapshot and are awaited in order without the originating
+abort signal. Their failures cannot change the already-computed originating
+decision, and they never emit recursive results.
 
 ## Presets
 

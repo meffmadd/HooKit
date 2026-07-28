@@ -5,8 +5,10 @@ fail user-defined shell checks.
 
 ## Architecture
 
-- **`pi-assert/index.ts`** — thin extension lifecycle wiring. Loads state, binds
-  every supported Pi event to its registry adapter, freezes native outcomes,
+- **`pi-assert/index.ts`** — thin extension lifecycle wiring. Loads state,
+  projects Pi's rich context onto the bounded engine seam (including the
+  reasoning-level compatibility fallback), binds every supported Pi event to
+  its registry adapter, freezes native outcomes,
   dispatches synthetic `assert_result` records, dispatches adapter-declared
   notifications/control results, and dedupes corrective `agent_end` retries.
 - **`pi-assert/adapters.ts`** — exhaustive lifecycle adapter registry and the
@@ -18,8 +20,9 @@ fail user-defined shell checks.
   report-only `assert_result`; deliberately excludes non-cancellable
   `session_shutdown`.
 - **`pi-assert/engine.ts`** — config loading (`loadAsserts`), filter matching
-  (`matchFilter`), tool/lifecycle environment builders, and shell execution
-  (`evaluateShell` via `child_process.exec`).
+  (`matchFilter`), the shared bounded Pi-context metadata snapshot, tool/lifecycle
+  environment builders, and shell execution (`evaluateShell` via
+  `child_process.exec`) with stale managed metadata stripped from inheritance.
 - **`pi-assert/domain/entry.ts`** — shared persisted entry types, canonical
   source/name identity and ref parsing, plus `AssertIndex` lookups.
 - **`pi-assert/config.ts`** — single owner of the on-disk `asserts.json`
@@ -34,11 +37,14 @@ fail user-defined shell checks.
   `classifyEntry`). `cleanEntry` is the single owner of the on-disk record
   shape, shared by `installRule` and `updateRule`.
 - **`pi-assert/executor.ts`** — the one filter → `when` → shell execution core.
+  It overlays canonical assertion identity plus one fresh UUID run ID per
+  filter-matched invocation, reused by that invocation's `when` and shell.
   `executeHookAssertsWithResults` computes an adapter outcome plus ordered
-  synthetic result records; `dispatchAssertResults` runs each result handler
-  through that same core in a detached, isolated context. Compatibility
-  wrappers preserve the original hook APIs. No hook has a separate assertion
-  loop, and `assert_result` execution suppresses recursive records.
+  synthetic result records carrying the origin run ID; `dispatchAssertResults`
+  runs each result handler through that same core in a detached, isolated
+  context with only a bounded metadata snapshot. Compatibility wrappers
+  preserve the original hook APIs. No hook has a separate assertion loop, and
+  `assert_result` execution suppresses recursive records.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
@@ -82,9 +88,10 @@ fail user-defined shell checks.
   truth for each hook's action and feedback.
 - Lifecycle adapters expose bounded scalar candidates through both filters and
   JSON `PI_EVENT_PAYLOAD`; rich/native event objects are intentionally deferred.
-  `assert_result` exposes only `event`, canonical `assertionRef`, individual
-  `outcome`, and numeric/`null` `code`. Its handlers are awaited without the
-  originating abort signal and can never alter the frozen originating outcome.
+  `assert_result` exposes only `event`, canonical `assertionRef`, originating
+  `runId`, individual `outcome`, and numeric/`null` `code`. Its handlers are
+  awaited without the originating abort signal and can never alter the frozen
+  originating outcome; handler assertion/run identity remains separate.
 - `session_before_switch` and `session_before_fork` can cancel. `session_shutdown`
   is not a supported assertion hook because Pi exposes no cancellation result.
 - Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.

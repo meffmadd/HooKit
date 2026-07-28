@@ -84,7 +84,7 @@ Tool-hook filters match `{ ...event.input, toolName }`, with the trusted
 - `agent_end` / `agent_settled`: `{ event }`
 - `session_before_switch`: `{ event, reason, targetSessionFile? }`
 - `session_before_fork`: `{ event, entryId, position }`
-- `assert_result`: `{ event: "assert_result", assertionRef, outcome, code }`
+- `assert_result`: `{ event: "assert_result", assertionRef, runId, outcome, code }`
 
 Every filter key is implicitly ANDed. Dot-separated keys resolve nested input
 fields:
@@ -143,17 +143,18 @@ makes a decision:
 ```
 
 `assertionRef` is the canonical `source/name` identity and uses the normal
-JavaScript regex matcher. `outcome` is exact (not regex) and accepts one value
-or an any-of list containing `pass`, `block`, `patch`, `cancel`, or `report`.
-`code` uses strict number-or-`null` matching. A pass has code `0`; an ordinary
-failure has its non-zero shell exit code; timeout, abort, spawn failure, and a
-`when` execution failure currently use `null`.
+JavaScript regex matcher. `runId` is the originating assertion invocation's
+UUID and uses that same regex matcher. `outcome` is exact (not regex) and
+accepts one value or an any-of list containing `pass`, `block`, `patch`,
+`cancel`, or `report`. `code` uses strict number-or-`null` matching. A pass has
+code `0`; an ordinary failure has its non-zero shell exit code; timeout, abort,
+spawn failure, and a `when` execution failure currently use `null`.
 
 Filter misses and ordinary non-zero `when` skips emit no result. Fail-fast hooks
 emit preceding passes and their first failure; aggregate hooks emit every
-result in execution order. Handlers are awaited with a detached abort signal,
-run in configured order, and fail open relative to the already-computed native
-decision. Handler results never emit another `assert_result`, preventing
+result in execution order. Handlers are awaited without the originating abort
+signal, run in configured order, and fail open relative to the already-computed
+native decision. Handler results never emit another `assert_result`, preventing
 recursion.
 
 A preset replaces shell fields with a `preset` array of qualified refs:
@@ -186,13 +187,56 @@ Use `/asserts` to install, enable, disable, and manage rules and presets.
 
 ## Environment
 
-Tool hooks receive `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and
-`PI_CWD`; `tool_result` additionally receives `PI_TOOL_RESULT` and
-`PI_TOOL_IS_ERROR`. Lifecycle and synthetic hooks receive `PI_EVENT`,
-`PI_EVENT_PAYLOAD` (the JSON-encoded bounded filter candidate), and `PI_CWD`.
-For result handlers, `PI_EVENT` is `assert_result` and the payload contains
-`event`, `assertionRef`, `outcome`, and `code`. All commands also execute with
-`PWD` set to `PI_CWD`.
+Every matching assertion receives the following shared variables. Optional
+values are genuinely unset when Pi does not know them; they are never the
+strings `"null"`/`"undefined"` or an empty placeholder.
+
+| Variable | Meaning |
+| --- | --- |
+| `PI_SESSION_ID` | Current Pi session ID |
+| `PI_SESSION_FILE` | Current session JSONL path; unset for ephemeral sessions |
+| `PI_SESSION_NAME` | Current display name; unset for unnamed sessions |
+| `PI_SESSION_LEAF_ID` | Current branch leaf; unset at the session root |
+| `PI_PROVIDER` | Selected model provider; unset without a selected model |
+| `PI_MODEL` | Selected model ID; unset without a selected model |
+| `PI_REASONING_LEVEL` | Current effective reasoning level when available |
+| `PI_MODE` | Pi mode: `tui`, `rpc`, `json`, or `print` |
+| `PI_PROJECT_TRUSTED` | `true` or `false` for current project trust |
+| `PI_CONTEXT_TOKENS` | Current context token count when known |
+| `PI_CONTEXT_WINDOW` | Active model context-window size when context usage is available |
+| `PI_CONTEXT_PERCENT` | Current context percentage when known |
+| `PI_CWD` | Current Pi project directory |
+| `PI_EVENT` | Current hook name, including `tool_call` and `tool_result` |
+| `PI_ASSERT_REF` | Canonical `source/name` of the rule currently executing |
+| `PI_ASSERT_HOOK` | That rule's configured hook |
+| `PI_ASSERT_RUN_ID` | Fresh UUID for this one assertion invocation |
+
+A rule's `when` and main `shell` receive the same metadata snapshot and the
+same `PI_ASSERT_RUN_ID`. Every other rule, event invocation, retry, or repeated
+execution gets a fresh run ID. It is an observability/correlation ID, not an
+idempotency key or stable retry identifier.
+
+Hook-specific variables remain available:
+
+- `tool_call`: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, and JSON `PI_TOOL_INPUT`
+- `tool_result`: all tool-call variables plus text `PI_TOOL_RESULT` and boolean
+  string `PI_TOOL_IS_ERROR`
+- lifecycle and synthetic hooks: JSON `PI_EVENT_PAYLOAD`, containing exactly
+  the adapter's bounded filter candidate rather than the native event
+
+For `assert_result`, `PI_EVENT_PAYLOAD` contains
+`{ event, assertionRef, runId, outcome, code }`. The payload's `assertionRef`
+and `runId` identify the **originating** rule invocation. The handler's own
+`PI_ASSERT_REF` and `PI_ASSERT_RUN_ID` identify the **currently executing
+handler**, so its run ID is different. Handler execution retains the bounded
+session/model/runtime snapshot but remains detached from the originating abort
+signal.
+
+All commands execute with `PWD` set to `PI_CWD`. Before spawning a shell,
+pi-assert removes inherited values for every variable it manages and overlays
+only current values, preventing a parent Pi session from leaking stale
+metadata. Unrelated ambient variables such as `PATH` and the process marker
+`PI_CODING_AGENT` remain inherited.
 
 ## License
 

@@ -357,6 +357,7 @@ describe("validate", () => {
             filter: {
               event: "^assert_result$",
               assertionRef: "^local/",
+              runId: "^[0-9a-f-]+$",
               outcome: ["pass", "block", "patch", "cancel", "report"],
               code: [0, 1, null],
             },

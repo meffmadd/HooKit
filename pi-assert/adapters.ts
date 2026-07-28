@@ -163,6 +163,7 @@ const sessionBeforeForkCandidate = (event: SessionBeforeForkEvent) => ({
 const assertResultCandidate = (event: AssertResultEvent) => ({
   event: "assert_result",
   assertionRef: event.assertionRef,
+  runId: event.runId,
   outcome: event.outcome,
   code: event.code,
 });

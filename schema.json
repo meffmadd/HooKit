@@ -48,7 +48,7 @@
             },
             "filter": {
               "type": "object",
-              "description": "Filter matched against the hook adapter's bounded candidate: { ...event.input, toolName } for tool hooks; otherwise { event, ...documented scalar metadata }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is normally a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing. assert_result narrows this contract: assertionRef/event are regex sources, outcome is an exact enum value, and code is numeric or null.",
+              "description": "Filter matched against the hook adapter's bounded candidate: { ...event.input, toolName } for tool hooks; otherwise { event, ...documented scalar metadata }. Every key is required to match (implicit AND); omitted or empty filters match every candidate. Dot-separated keys resolve nested candidate fields. Every string value is normally a JavaScript regular-expression source tested with RegExp.test() against a string candidate; use anchors such as '^bash$' for exact matching. Invalid regexes fail runtime configuration loading. Numbers, booleans, and null use strict equality without coercion. Arrays are any-of and apply the same rule to each member; an empty array matches nothing. assert_result narrows this contract: assertionRef/runId/event are regex sources, outcome is an exact enum value, and code is numeric or null.",
               "additionalProperties": {
                 "anyOf": [
                   {
@@ -154,7 +154,7 @@
     },
     "assertResultFilter": {
       "type": "object",
-      "description": "Bounded assert_result filter. assertionRef and event use regex matching; outcome is exact any-of; code uses strict numeric/null matching.",
+      "description": "Bounded assert_result filter. assertionRef, runId, and event use regex matching; outcome is exact any-of; code uses strict numeric/null matching.",
       "properties": {
         "event": {
           "anyOf": [
@@ -163,6 +163,12 @@
           ]
         },
         "assertionRef": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "runId": {
           "anyOf": [
             { "type": "string" },
             { "type": "array", "items": { "type": "string" } }

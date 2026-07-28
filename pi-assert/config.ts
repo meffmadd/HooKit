@@ -223,6 +223,7 @@ function findInvalidFilterRegex(def: unknown): InvalidFilterRegex | null {
 const ASSERT_RESULT_FILTER_KEYS = new Set([
   "event",
   "assertionRef",
+  "runId",
   "outcome",
   "code",
 ]);
@@ -247,6 +248,10 @@ function validateAssertResultFilter(filter: unknown): boolean {
   }
   if (filter.assertionRef !== undefined &&
       !isScalarOrArrayOf(filter.assertionRef, (value) => typeof value === "string")) {
+    return false;
+  }
+  if (filter.runId !== undefined &&
+      !isScalarOrArrayOf(filter.runId, (value) => typeof value === "string")) {
     return false;
   }
   if (filter.outcome !== undefined &&

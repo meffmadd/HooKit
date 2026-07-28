@@ -87,6 +87,7 @@ export function isPreset(a: Assert): a is PresetAssert {
 
 /** Structured environment passed to shell commands for tool_call hooks. */
 export interface AssertEnv {
+  PI_EVENT: "tool_call";
   PI_TOOL_NAME: string;
   PI_TOOL_CALL_ID: string;
   PI_TOOL_INPUT: string;
@@ -109,6 +110,7 @@ export type AgentEndEnv = LifecycleEnv;
 
 /** Structured environment passed to shell commands for tool_result hooks. */
 export interface ToolResultEnv {
+  PI_EVENT: "tool_result";
   PI_TOOL_NAME: string;
   PI_TOOL_CALL_ID: string;
   PI_TOOL_INPUT: string;
@@ -171,10 +173,53 @@ export interface ToolResultPatch {
   isError?: boolean;
 }
 
-/** Minimal shape of the extension context we consume. */
+/** Bounded, immutable Pi session/model/runtime metadata exposed to shells. */
+export interface PiContextMetadataSnapshot {
+  readonly PI_SESSION_ID?: string;
+  readonly PI_SESSION_FILE?: string;
+  readonly PI_SESSION_NAME?: string;
+  readonly PI_SESSION_LEAF_ID?: string;
+  readonly PI_PROVIDER?: string;
+  readonly PI_MODEL?: string;
+  readonly PI_REASONING_LEVEL?: string;
+  readonly PI_MODE?: string;
+  readonly PI_PROJECT_TRUSTED?: "true" | "false";
+  readonly PI_CONTEXT_TOKENS?: string;
+  readonly PI_CONTEXT_WINDOW?: string;
+  readonly PI_CONTEXT_PERCENT?: string;
+  readonly [key: string]: string | undefined;
+}
+
+/** Context-usage subset consumed by the metadata snapshot builder. */
+export interface PiContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
+/**
+ * Focused structural subset of Pi's ExtensionContext consumed by the engine.
+ * The precomputed snapshot seam keeps synthetic handlers detached from the
+ * originating rich context while lightweight tests can continue using cwd.
+ */
 export interface ExtensionContext {
   cwd: string;
   signal?: AbortSignal;
+  sessionManager?: {
+    getSessionId?(): string;
+    getSessionFile?(): string | undefined;
+    getSessionName?(): string | undefined;
+    getLeafId?(): string | null;
+  };
+  model?: { provider: string; id: string };
+  thinkingLevel?: string;
+  /** Compatibility seam for Pi versions exposing thinking on ExtensionAPI. */
+  getThinkingLevel?(): string | undefined;
+  mode?: "tui" | "rpc" | "json" | "print";
+  isProjectTrusted?(): boolean;
+  getContextUsage?(): PiContextUsage | undefined;
+  /** Internal detached-execution seam; preferred over consulting rich state. */
+  metadataSnapshot?: PiContextMetadataSnapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +504,62 @@ function logEnv(
 // Environment builder
 // ---------------------------------------------------------------------------
 
+function addNonEmptyString(
+  target: Record<string, string>,
+  key: string,
+  value: string | undefined | null,
+): void {
+  if (typeof value === "string" && value.length > 0) target[key] = value;
+}
+
+function addFiniteNumber(
+  target: Record<string, string>,
+  key: string,
+  value: number | null | undefined,
+): void {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    target[key] = String(value);
+  }
+}
+
+/**
+ * Resolve one bounded snapshot of Pi session, model, runtime, and context usage
+ * metadata. Optional or unknown values are omitted rather than stringified.
+ */
+export function buildPiContextMetadataSnapshot(
+  ctx: ExtensionContext,
+): PiContextMetadataSnapshot {
+  if (ctx.metadataSnapshot) return ctx.metadataSnapshot;
+
+  const metadata: Record<string, string> = {};
+  const session = ctx.sessionManager;
+  addNonEmptyString(metadata, "PI_SESSION_ID", session?.getSessionId?.());
+  addNonEmptyString(metadata, "PI_SESSION_FILE", session?.getSessionFile?.());
+  addNonEmptyString(metadata, "PI_SESSION_NAME", session?.getSessionName?.());
+  addNonEmptyString(metadata, "PI_SESSION_LEAF_ID", session?.getLeafId?.());
+
+  addNonEmptyString(metadata, "PI_PROVIDER", ctx.model?.provider);
+  addNonEmptyString(metadata, "PI_MODEL", ctx.model?.id);
+  addNonEmptyString(
+    metadata,
+    "PI_REASONING_LEVEL",
+    ctx.thinkingLevel ?? ctx.getThinkingLevel?.(),
+  );
+  addNonEmptyString(metadata, "PI_MODE", ctx.mode);
+  if (ctx.isProjectTrusted) {
+    metadata.PI_PROJECT_TRUSTED = ctx.isProjectTrusted() ? "true" : "false";
+  }
+
+  const usage = ctx.getContextUsage?.();
+  if (usage) {
+    addFiniteNumber(metadata, "PI_CONTEXT_TOKENS", usage.tokens);
+    addFiniteNumber(metadata, "PI_CONTEXT_WINDOW", usage.contextWindow);
+    addFiniteNumber(metadata, "PI_CONTEXT_PERCENT", usage.percent);
+  }
+
+  return Object.freeze(metadata) as PiContextMetadataSnapshot;
+}
+
 /**
  * Build the environment variables passed to shell commands for tool_call hooks.
  */
@@ -467,6 +568,8 @@ export function buildEnv(
   ctx: ExtensionContext,
 ): AssertEnv {
   const env: AssertEnv = {
+    ...buildPiContextMetadataSnapshot(ctx),
+    PI_EVENT: "tool_call",
     PI_TOOL_NAME: event.toolName,
     PI_TOOL_CALL_ID: event.toolCallId,
     PI_TOOL_INPUT: JSON.stringify(event.input),
@@ -486,6 +589,7 @@ export function buildLifecycleEnv(
   ctx: ExtensionContext,
 ): LifecycleEnv {
   const env: LifecycleEnv = {
+    ...buildPiContextMetadataSnapshot(ctx),
     PI_EVENT: hook,
     PI_EVENT_PAYLOAD: JSON.stringify(payload),
     PI_CWD: ctx.cwd,
@@ -518,6 +622,8 @@ export function buildResultEnv(
     .map((c) => c.text);
 
   const env: ToolResultEnv = {
+    ...buildPiContextMetadataSnapshot(ctx),
+    PI_EVENT: "tool_result",
     PI_TOOL_NAME: event.toolName,
     PI_TOOL_CALL_ID: event.toolCallId,
     PI_TOOL_INPUT: JSON.stringify(event.input),
@@ -534,6 +640,33 @@ export function buildResultEnv(
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+
+/** Every environment key owned by pi-assert rather than inherited ambiently. */
+const ASSERT_MANAGED_ENV_KEYS = [
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
+  "PI_SESSION_NAME",
+  "PI_SESSION_LEAF_ID",
+  "PI_PROVIDER",
+  "PI_MODEL",
+  "PI_REASONING_LEVEL",
+  "PI_MODE",
+  "PI_PROJECT_TRUSTED",
+  "PI_CONTEXT_TOKENS",
+  "PI_CONTEXT_WINDOW",
+  "PI_CONTEXT_PERCENT",
+  "PI_ASSERT_REF",
+  "PI_ASSERT_HOOK",
+  "PI_ASSERT_RUN_ID",
+  "PI_EVENT",
+  "PI_EVENT_PAYLOAD",
+  "PI_TOOL_NAME",
+  "PI_TOOL_CALL_ID",
+  "PI_TOOL_INPUT",
+  "PI_TOOL_RESULT",
+  "PI_TOOL_IS_ERROR",
+  "PI_CWD",
+] as const;
 
 /**
  * Run a shell command and return `true` if it exits with code 0 (pass).
@@ -555,8 +688,12 @@ export function evaluateShell(
   cwd?: string,
 ): Promise<ShellResult> {
   return new Promise<ShellResult>((resolve) => {
-    // Merge our env on top of process.env so the shell inherits PATH etc.
-    const mergedEnv = { ...process.env, ...env, ...(cwd ? { PWD: cwd } : {}) };
+    // Inherit unrelated ambient values such as PATH and PI_CODING_AGENT, but
+    // remove every key managed by pi-assert before overlaying the current
+    // invocation. This prevents nested Pi sessions from leaking stale values.
+    const inheritedEnv = { ...process.env };
+    for (const key of ASSERT_MANAGED_ENV_KEYS) delete inheritedEnv[key];
+    const mergedEnv = { ...inheritedEnv, ...env, ...(cwd ? { PWD: cwd } : {}) };
 
     try {
       const child = exec(shell, {

@@ -35,6 +35,8 @@ export function isAssertResultOutcome(value: unknown): value is AssertResultOutc
 export interface AssertResultEvent {
   readonly event: "assert_result";
   readonly assertionRef: string;
+  /** Correlation ID of the originating assertion invocation. */
+  readonly runId: string;
   readonly outcome: AssertResultOutcome;
   readonly code: number | null;
 }

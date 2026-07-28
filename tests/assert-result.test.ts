@@ -194,12 +194,14 @@ describe("assert_result dispatch", () => {
       Object.freeze({
         event: "assert_result",
         assertionRef: "local/a",
+        runId: "00000000-0000-4000-8000-000000000001",
         outcome: "pass",
         code: 0,
       }),
       Object.freeze({
         event: "assert_result",
         assertionRef: "local/b",
+        runId: "00000000-0000-4000-8000-000000000002",
         outcome: "block",
         code: 1,
       }),
@@ -225,6 +227,7 @@ describe("assert_result dispatch", () => {
       assertion("matching", "assert_result", "printf 'match\\n' >> filters.log", {
         filter: {
           assertionRef: "^local/origin$",
+          runId: "^00000000-0000-4000-8000-",
           outcome: ["pass", "block"],
           code: [0, 1],
         },
@@ -248,18 +251,21 @@ describe("assert_result dispatch", () => {
         {
           event: "assert_result",
           assertionRef: "local/origin",
+          runId: "00000000-0000-4000-8000-000000000003",
           outcome: "pass",
           code: 0,
         },
         {
           event: "assert_result",
           assertionRef: "local/origin",
+          runId: "00000000-0000-4000-8000-000000000004",
           outcome: "block",
           code: 1,
         },
         {
           event: "assert_result",
           assertionRef: "local/origin",
+          runId: "00000000-0000-4000-8000-000000000005",
           outcome: "block",
           code: null,
         },
@@ -315,12 +321,14 @@ describe("assert_result dispatch", () => {
         {
           event: "assert_result",
           assertionRef: "local/a",
+          runId: "00000000-0000-4000-8000-000000000006",
           outcome: "pass",
           code: 0,
         },
         {
           event: "assert_result",
           assertionRef: "local/b",
+          runId: "00000000-0000-4000-8000-000000000007",
           outcome: "report",
           code: 1,
         },
@@ -347,6 +355,7 @@ describe("assert_result dispatch", () => {
     const result: AssertionResultRecord = {
       event: "assert_result",
       assertionRef: "local/origin",
+      runId: "00000000-0000-4000-8000-000000000008",
       outcome: "pass",
       code: 0,
     };

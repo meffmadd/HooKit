@@ -1,4 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext as PiExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { AssertsState } from "./ui/state.js";
 import { registerAssertsCommand } from "./ui/asserts.js";
 import { clearRepoEntriesCache } from "./installer.js";
@@ -14,11 +17,37 @@ import {
   type HookEventMap,
 } from "./adapters.js";
 import type { NativeHook } from "./domain/entry.js";
+import type { ExtensionContext as AssertExtensionContext } from "./engine.js";
 
-function projectIsTrusted(ctx: ExtensionContext): boolean {
-  const trustAware = ctx as ExtensionContext & { isProjectTrusted?: () => boolean };
+type ThinkingAwareContext = PiExtensionContext & {
+  readonly thinkingLevel?: string;
+};
+
+function projectIsTrusted(ctx: PiExtensionContext): boolean {
+  const trustAware = ctx as PiExtensionContext & {
+    isProjectTrusted?: () => boolean;
+  };
   // Fail closed when running against a Pi build too old to expose trust.
   return trustAware.isProjectTrusted?.() ?? false;
+}
+
+/** Project Pi's rich context onto the bounded assertion-engine seam. */
+function assertionContext(
+  pi: ExtensionAPI,
+  ctx: PiExtensionContext,
+): AssertExtensionContext {
+  const thinkingAware = ctx as ThinkingAwareContext;
+  return {
+    cwd: ctx.cwd,
+    signal: ctx.signal,
+    sessionManager: ctx.sessionManager,
+    model: ctx.model,
+    getThinkingLevel: () =>
+      thinkingAware.thinkingLevel ?? pi.getThinkingLevel(),
+    mode: ctx.mode,
+    isProjectTrusted: ctx.isProjectTrusted?.bind(ctx),
+    getContextUsage: ctx.getContextUsage?.bind(ctx),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -83,15 +112,16 @@ export default function (pi: ExtensionAPI) {
   async function runHook<H extends NativeHook>(
     hook: H,
     event: HookEventMap[H],
-    ctx: ExtensionContext,
+    ctx: PiExtensionContext,
   ): Promise<HookAdapterOutcome | undefined> {
     const adapter = getHookAdapter(hook);
     const activeAsserts = state.activeList();
+    const assertCtx = assertionContext(pi, ctx);
     const execution = await executeHookAssertsWithResults(
       activeAsserts,
       adapter,
       event,
-      ctx,
+      assertCtx,
       (record) => promptRuns.push(record),
     );
 
@@ -103,7 +133,7 @@ export default function (pi: ExtensionAPI) {
       await dispatchAssertResults(
         activeAsserts,
         execution.results,
-        ctx,
+        assertCtx,
         (message) => {
           if (ctx.hasUI) ctx.ui.notify(message, "error");
         },
@@ -174,7 +204,7 @@ export default function (pi: ExtensionAPI) {
   >(
     hook: H,
     event: HookEventMap[H],
-    ctx: ExtensionContext,
+    ctx: PiExtensionContext,
   ): Promise<{ cancel: true } | undefined> {
     try {
       const outcome = await runHook(hook, event, ctx);
