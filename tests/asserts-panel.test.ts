@@ -5,7 +5,10 @@
 import { describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-import { AssertsPanel } from "../pi-assert/ui/asserts.js";
+import {
+  AssertsPanel,
+  registerAssertsCommand,
+} from "../pi-assert/ui/asserts.js";
 import { AssertsState } from "../pi-assert/ui/state.js";
 import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
 import { clearRepoEntriesCache } from "../pi-assert/installer.js";
@@ -22,6 +25,7 @@ function mockTheme(): Theme {
   return {
     fg: (role: string, text: string) =>
       role === "accent" ? `[${text}]` : text,
+    bg: (_role: string, text: string) => text,
     bold: (text: string) => text,
     underline: (text: string) => text,
     strikethrough: (text: string) => text,
@@ -1065,6 +1069,76 @@ describe("AssertsPanel fuzzy search", () => {
     assert.ok(panel.isSearchActive, "search is active after /");
     const lines = panel.render(80);
     assert.ok(queryLine(lines), "renders the /query▏ line");
+  });
+
+  it("keeps the bottom search hint visible inside the /asserts overlay", async () => {
+    const state = {
+      entries: Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
+      active: new Set<string>(),
+      broken: false,
+      projectTrusted: false,
+      refresh() {},
+      updateStatus() {},
+      isActive() { return false; },
+      enable() {},
+      disable() {},
+      disableAll() {},
+      persist() {},
+    } as unknown as AssertsState;
+
+    let handler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+    const pi = {
+      registerCommand(_name: string, command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    } as unknown as ExtensionAPI;
+
+    registerAssertsCommand(pi, state);
+    assert.ok(handler, "registers the /asserts command");
+
+    const rows = 24;
+    const ctx = {
+      cwd: "/tmp",
+      isProjectTrusted: () => false,
+      ui: {
+        theme: mockTheme(),
+        notify() {},
+        setStatus() {},
+        custom: async (
+          factory: (
+            tui: { terminal: { rows: number }; requestRender(): void },
+            theme: Theme,
+            keybindings: object,
+            done: () => void,
+          ) => { handleInput(data: string): void; render(width: number): string[] },
+          options: {
+            overlayOptions: { maxHeight: number | string; margin: number };
+          },
+        ) => {
+          const component = factory(
+            { terminal: { rows }, requestRender() {} },
+            mockTheme(),
+            {},
+            () => {},
+          );
+          component.handleInput("/");
+          const { maxHeight, margin } = options.overlayOptions;
+          const requestedHeight = typeof maxHeight === "number"
+            ? maxHeight
+            : Math.floor(rows * Number.parseFloat(maxHeight) / 100);
+          const overlayMaxHeight = Math.min(requestedHeight, rows - margin * 2);
+          const visible = component.render(80).slice(0, overlayMaxHeight);
+          const lastVisible = [...visible].reverse().find((line: string) => line.trim());
+          assert.ok(
+            lastVisible?.includes("exit search"),
+            "the overlay viewport retains the bottom row of the search hint",
+          );
+          return null;
+        },
+      },
+    } as unknown as ExtensionContext;
+
+    await handler!("", ctx);
   });
 
   it("typing filters within sections and hides empty sections", () => {

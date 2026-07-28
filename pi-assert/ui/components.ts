@@ -253,6 +253,9 @@ class HintLine implements Component {
 // ---------------------------------------------------------------------------
 const DIALOG_WIDTH = 80;
 const DIALOG_MIN_WIDTH = 24;
+const DIALOG_MARGIN = 4;
+const SECTIONED_PANEL_MAX_HEIGHT = "80%" as const;
+const SECTIONED_PANEL_PADDING_Y = 1;
 
 // ---------------------------------------------------------------------------
 // OverlayBox — the single owner of the pi-assert overlay background.
@@ -349,9 +352,29 @@ export function dialogOverlay(maxHeight: SizeValue) {
       width: DIALOG_WIDTH,
       minWidth: DIALOG_MIN_WIDTH,
       maxHeight,
-      margin: 4,
+      margin: DIALOG_MARGIN,
     },
   };
+}
+
+/**
+ * Vertical content budget for the shared sectioned-panel overlay.
+ *
+ * Pi resolves percentage heights against the whole terminal, then clamps the
+ * result to the space left inside the overlay margins.  Reserve the
+ * OverlayBox's vertical padding too, so Pi never has to slice the rendered
+ * component from the bottom (which would remove the hint line).
+ */
+export function sectionedPanelHeight(terminalRows: number): number {
+  const percentHeight = Math.floor(terminalRows * 0.8);
+  const insideMargins = Math.max(1, terminalRows - DIALOG_MARGIN * 2);
+  const overlayHeight = Math.max(1, Math.min(percentHeight, insideMargins));
+  return Math.max(1, overlayHeight - SECTIONED_PANEL_PADDING_Y * 2);
+}
+
+/** Overlay geometry paired with {@link sectionedPanelHeight}. */
+export function sectionedPanelOverlay() {
+  return dialogOverlay(SECTIONED_PANEL_MAX_HEIGHT);
 }
 
 // ---------------------------------------------------------------------------

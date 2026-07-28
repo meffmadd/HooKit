@@ -25,7 +25,8 @@ import {
   HINT_T_TOGGLE_DEFAULT,
   OverlayBox,
   SectionNavigator,
-  dialogOverlay,
+  sectionedPanelHeight,
+  sectionedPanelOverlay,
   renderAssertDetail,
   renderDetailList,
   renderHintLine,
@@ -909,10 +910,7 @@ export function registerAssertsCommand(
             panel.setRequestRender(() => tui.requestRender());
             panel.startOrphanCheck();
 
-            const panelHeight = Math.max(
-              10,
-              Math.floor(tui.terminal.rows * 0.8) - 2,
-            );
+            const panelHeight = sectionedPanelHeight(tui.terminal.rows);
 
             const panelComponent = {
               render: (w: number) => panel.render(w, panelHeight),
@@ -938,7 +936,7 @@ export function registerAssertsCommand(
               },
             };
           },
-          dialogOverlay("80%"),
+          sectionedPanelOverlay(),
         );
 
         if (action === "install") {

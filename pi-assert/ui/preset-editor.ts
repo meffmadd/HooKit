@@ -35,7 +35,8 @@ import {
   HINT_SEARCH,
   OverlayBox,
   SectionNavigator,
-  dialogOverlay,
+  sectionedPanelHeight,
+  sectionedPanelOverlay,
   renderDetailList,
   renderHintLine,
 } from "./components.js";
@@ -286,7 +287,7 @@ export async function runPresetEditor(
     panel.setTheme(theme);
     panel.setKeybindings(kb);
 
-    const panelHeight = Math.max(10, Math.floor(tui.terminal.rows * 0.8) - 2);
+    const panelHeight = sectionedPanelHeight(tui.terminal.rows);
 
     const panelComponent = {
       render: (w: number) => panel.render(w, panelHeight),
@@ -309,5 +310,5 @@ export async function runPresetEditor(
         tui.requestRender();
       },
     };
-  }, dialogOverlay("80%"));
+  }, sectionedPanelOverlay());
 }
