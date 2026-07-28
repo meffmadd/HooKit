@@ -14,20 +14,18 @@ import { catalogStorageLocations } from "../config.js";
 import { fetchRepoEntries } from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
-  HINT_E_EDIT_PRESET,
-  HINT_ENTER_ENABLE,
   HINT_ESC_CANCEL,
+  HINT_ESC_CLOSE,
   HINT_ESC_EXIT_SEARCH,
   HINT_ENTER_CONFIRM,
   HINT_I_INSTALL_ASSERTS,
   HINT_N_NEW_PRESET,
-  HINT_R_REMOVE,
-  HINT_T_TOGGLE_DEFAULT,
+  HINT_SEARCH,
   OverlayBox,
   SectionNavigator,
   sectionedPanelHeight,
   sectionedPanelOverlay,
-  renderAssertDetail,
+  renderContextualActions,
   renderDetailList,
   renderHintLine,
   textInputDialog,
@@ -263,14 +261,26 @@ export class AssertsPanel extends SectionedPanel {
     return [...this.renderHeaderLines(), "", `  Remove "${this.confirm.name}"?`];
   }
 
-  protected detailBlockFor(a: CatalogEntry | undefined, width: number): string[] {
-    if (!a) return [];
+  protected detailPrefixFor(a: CatalogEntry, _width: number): string[] {
     return [
       ...this.readonlyDetailLines(a),
       ...this.orphanedDetailLines(a),
       ...this.danglingDetailLines(a),
-      ...renderAssertDetail(this.theme, width, a),
     ];
+  }
+
+  protected detailSuffixFor(a: CatalogEntry, width: number): string[] {
+    const items: HintItem[] = [
+      ["Enter", this.activeFor(a) ? "disable" : "enable"],
+    ];
+    if (!this.searchActive) {
+      items.push(["t", a.default ? "unset default" : "set default"]);
+      items.push(["r", "remove"]);
+      if (isCatalogPreset(a) && a.source === "local") {
+        items.push(["e", "edit preset"]);
+      }
+    }
+    return renderContextualActions(this.theme, width, items, this.keybindings);
   }
 
   protected renderHeaderLines(): string[] {
@@ -430,11 +440,8 @@ export class AssertsPanel extends SectionedPanel {
       },
       detailFor: (a) =>
         isCatalogPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
-      detailPrefix: (a) => [
-        ...this.readonlyDetailLines(a),
-        ...this.orphanedDetailLines(a),
-        ...this.danglingDetailLines(a),
-      ],
+      detailPrefix: (a) => this.detailPrefixFor(a, width),
+      detailSuffix: (a, detailWidth) => this.detailSuffixFor(a, detailWidth),
     });
   }
 
@@ -527,7 +534,7 @@ export class AssertsPanel extends SectionedPanel {
     ];
   }
 
-  /** The one hint source — confirm-aware so `render`'s tail always emits the right hint. */
+  /** Panel-wide footer actions; focused-row actions live in the detail suffix. */
   protected hintLine(width?: number): string[] {
     if (this.confirm) {
       return renderHintLine(this.theme, width, [
@@ -537,37 +544,17 @@ export class AssertsPanel extends SectionedPanel {
     }
 
     if (this.searchActive) {
-      return renderHintLine(this.theme, width, [
-        HINT_ENTER_ENABLE,
-        HINT_ESC_EXIT_SEARCH,
-      ], this.keybindings);
-    }
-
-    const items: HintItem[] = [
-      HINT_ENTER_ENABLE,
-      HINT_T_TOGGLE_DEFAULT,
-    ];
-    if (this.state.active.size > 0) {
-      items.push(HINT_D_DISABLE_ALL);
-    }
-    items.push(HINT_R_REMOVE);
-    items.push(HINT_I_INSTALL_ASSERTS);
-    items.push(HINT_N_NEW_PRESET);
-    // `e` edits presets only — advertise it iff the focused row is a preset,
-    // so the hint never teases an action that doesn't apply to a shell
-    // assert.  A non-local preset is read-only (`❄`): the `e` action is
-    // shown crossed out (disabled) so the user sees it exists but doesn't
-    // apply here, and the detail line explains why.  Pressing `e` anyway
-    // still notifies (defensive).
-    const focused = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
-    if (focused && isCatalogPreset(focused)) {
-      items.push(
-        focused.source === "local"
-          ? HINT_E_EDIT_PRESET
-          : ["e", "Edit preset", true],
+      return renderHintLine(
+        this.theme,
+        width,
+        [HINT_ESC_EXIT_SEARCH],
+        this.keybindings,
       );
     }
-    items.push(HINT_ESC_CANCEL);
+
+    const items: HintItem[] = [HINT_SEARCH];
+    if (this.state.active.size > 0) items.push(HINT_D_DISABLE_ALL);
+    items.push(HINT_I_INSTALL_ASSERTS, HINT_N_NEW_PRESET, HINT_ESC_CLOSE);
     return renderHintLine(this.theme, width, items, this.keybindings);
   }
 
@@ -720,10 +707,9 @@ export class AssertsPanel extends SectionedPanel {
     // loop runs the two-step editor (`description` → `asserts` panel, the same
     // sectioned panel as `/asserts`: Tab/Shift+Tab, `Enter` toggles membership,
     // `Esc` commits + back) and submits local-preset edit intent to the catalog.
-    // Only local presets are editable.  A non-local preset is read-only (`❄`):
-    // the hint line shows `e Edit preset` crossed out and the detail block
-    // shows `❄ non-editable — copy via n to customize`, so the state is
-    // visible at a glance.  Pressing `e` anyway notifies (defensive).  An
+    // Only local presets are editable. A non-local preset is read-only (`❄`):
+    // its contextual action line omits `e edit preset` and the detail block
+    // explains the restriction. Pressing `e` anyway notifies (defensive). An
     // `Esc` with no changes is a no-op (see `editPreset`).  Non-presets
     // notify instead of acting.
     if (matchesKey(data, "e")) {

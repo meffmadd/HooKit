@@ -122,10 +122,11 @@ export function renderAssertDetail(
 // Shared hint-line format
 //
 // Every panel and dialog uses the same style: `key` segments in accent and
-// `action` segments in dim, joined by ` · ` with a 2-space indent.  The
-// segment constants below keep the vocabulary consistent; `renderHintLine`
-// and the `HintLine` component are the single place that handles greedy,
-// whole-item wrapping when the line is too long.
+// `action` segments in dim, joined by ` · `. Persistent/dialog hints use a
+// 2-space indent; focused-row actions extend the same formatter with a 4-space
+// inset and accent `›` marker. The segment constants keep vocabulary
+// consistent, while one formatter owns configured-key lookup, normalization,
+// fitting, and greedy whole-segment wrapping.
 // ---------------------------------------------------------------------------
 export const HINT_ENTER_SELECT: [string, string] = ["Enter", "select"];
 export const HINT_ENTER_OPEN: [string, string] = ["Enter", "open"];
@@ -133,63 +134,161 @@ export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
 export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
 export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "remove"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
-export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "toggle"];
+// Generic constants retained for non-contextual callers; sectioned panels
+// derive predictive focused-row labels directly from current state.
+export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
 export const HINT_ENTER_TOGGLE: [string, string] = ["Enter", "toggle"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "cancel"];
+export const HINT_ESC_CLOSE: [string, string] = ["Esc", "close"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
 export const HINT_ESC_SAVE_BACK: [string, string] = ["Esc", "save & back"];
 export const HINT_ESC_EXIT_SEARCH: [string, string] = ["Esc", "exit search"];
-export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "Toggle default"];
-export const HINT_D_DISABLE_ALL: [string, string] = ["d", "Disable all"];
-export const HINT_R_REMOVE: [string, string] = ["r", "Remove"];
-export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "Install rules"];
-export const HINT_N_NEW_PRESET: [string, string] = ["n", "New preset"];
-export const HINT_E_EDIT_PRESET: [string, string] = ["e", "Edit preset"];
+export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "toggle default"];
+export const HINT_D_DISABLE_ALL: [string, string] = ["d", "disable all"];
+export const HINT_R_REMOVE: [string, string] = ["r", "remove"];
+export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "install rules"];
+export const HINT_N_NEW_PRESET: [string, string] = ["n", "new preset"];
+export const HINT_E_EDIT_PRESET: [string, string] = ["e", "edit preset"];
 export const HINT_SEARCH: [string, string] = ["/", "search"];
 
 /**
  * A hint segment: a `[key, action]` pair, optionally with a third `disabled`
- * flag.  A disabled item renders the whole `key action` run dim + struck
- * through, signalling an action that exists but doesn't apply to the focused
- * row (e.g. `e Edit preset` on a non-local, read-only preset).  The existing
- * `HINT_*` constants are `[string, string]` and stay valid — a 2-tuple is a
- * member of this union.
+ * flag. Disabled segments remain supported by dialogs, although sectioned
+ * panels omit actions that do not apply to their focused row.
  */
 export type HintItem = [string, string] | [string, string, boolean];
 
-/** Format a single hint segment (no indent/separator). */
+const NAMED_KEY_LABELS: Readonly<Record<string, string>> = {
+  escape: "Esc",
+  esc: "Esc",
+  enter: "Enter",
+  return: "Enter",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+  insert: "Insert",
+  clear: "Clear",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pagedown: "PageDown",
+  space: "Space",
+};
+
+const ARROW_LABELS: Readonly<Record<string, string>> = {
+  up: "↑",
+  down: "↓",
+  left: "←",
+  right: "→",
+};
+
+/**
+ * Convert Pi key identifiers to compact terminal labels. This changes only
+ * presentation; matching still goes through the injected KeybindingsManager.
+ */
+function displayKey(key: string): string {
+  const modifierParts: string[] = [];
+  let rawBase = key;
+  // Peel modifier prefixes instead of splitting on every `+`: `ctrl++` is a
+  // valid binding whose base key is the literal plus symbol.
+  while (true) {
+    const match = /^(ctrl|shift|alt|super)\+(.+)$/i.exec(rawBase);
+    if (!match) break;
+    modifierParts.push(match[1]!);
+    rawBase = match[2]!;
+  }
+  const base = rawBase.toLowerCase();
+  const modifiers = modifierParts.map((part) => {
+    switch (part.toLowerCase()) {
+      case "ctrl": return "Ctrl";
+      case "shift": return "Shift";
+      case "alt": return process.platform === "darwin" ? "Option" : "Alt";
+      case "super": return "Super";
+      default: return part.charAt(0).toUpperCase() + part.slice(1);
+    }
+  });
+
+  if (modifiers.length === 0) {
+    // Preserve literal one-character hotkeys exactly (`d`, `/`, etc.).
+    if (rawBase.length === 1) return rawBase;
+    return ARROW_LABELS[base] ?? NAMED_KEY_LABELS[base] ??
+      rawBase.charAt(0).toUpperCase() + rawBase.slice(1);
+  }
+
+  // Modified arrows use words (`Option-Left`) while unmodified arrows use
+  // compact glyphs. Modified letters are uppercased (`Ctrl-C`).
+  const displayBase = base in ARROW_LABELS
+    ? base.charAt(0).toUpperCase() + base.slice(1)
+    : NAMED_KEY_LABELS[base] ??
+      (rawBase.length === 1 ? rawBase.toUpperCase() :
+        rawBase.charAt(0).toUpperCase() + rawBase.slice(1));
+  return [...modifiers, displayBase].join("-");
+}
+
+function configuredKeyLabel(
+  rawKey: string,
+  keybindings?: KeybindingsManager,
+): string {
+  const lower = rawKey.toLowerCase();
+  const binding = lower === "enter" || lower === "return"
+    ? "tui.select.confirm"
+    : lower === "esc" || lower === "escape"
+      ? "tui.select.cancel"
+      : null;
+  const configured = binding && typeof keybindings?.getKeys === "function"
+    ? keybindings.getKeys(binding).map((key) => displayKey(String(key)))
+    : [];
+  return configured.length > 0 ? configured.join("/") : displayKey(rawKey);
+}
+
+/** Format a single hint segment (no prefix/separator). */
 function formatHintItem(
   theme: Theme,
   item: HintItem,
   keybindings?: KeybindingsManager,
 ): string {
   const [rawKey, action, disabled] = item;
-  const binding = rawKey === "Enter"
-    ? "tui.select.confirm"
-    : rawKey === "Esc"
-      ? "tui.select.cancel"
-      : null;
-  const configured = binding && typeof keybindings?.getKeys === "function"
-    ? keybindings.getKeys(binding).map(String).join("/")
-    : "";
-  const key = configured || rawKey;
+  const key = configuredKeyLabel(rawKey, keybindings);
   if (disabled) {
     return theme.strikethrough(theme.fg("dim", `${key} ${action}`));
   }
   return theme.fg("accent", key) + theme.fg("dim", " " + action);
 }
 
-/** Format the full hint line from hint segments. */
+interface HintPresentation {
+  /** Visible inset before the marker or first action. */
+  indent: number;
+  /** Optional first-line marker; continuation lines reserve its width. */
+  marker?: string;
+}
+
+const FOOTER_HINT_PRESENTATION: HintPresentation = { indent: 2 };
+const CONTEXT_HINT_PRESENTATION: HintPresentation = { indent: 4, marker: "›" };
+
+function hintPrefix(
+  theme: Theme,
+  presentation: HintPresentation,
+  continuation: boolean,
+): string {
+  const indent = " ".repeat(presentation.indent);
+  if (!presentation.marker) return theme.fg("dim", indent);
+  const marker = continuation
+    ? " ".repeat(visibleWidth(presentation.marker))
+    : theme.fg("accent", presentation.marker);
+  return theme.fg("dim", indent) + marker + theme.fg("dim", " ");
+}
+
+/** Format one complete line of hint segments. */
 function formatHint(
   theme: Theme,
   items: HintItem[],
-  keybindings?: KeybindingsManager,
+  keybindings: KeybindingsManager | undefined,
+  presentation: HintPresentation,
+  continuation: boolean,
 ): string {
-  const dim = (s: string) => theme.fg("dim", s);
-  const indent = dim("  ");
-  const separator = dim(" · ");
-  return indent + items
-    .map((i) => formatHintItem(theme, i, keybindings))
+  const separator = theme.fg("dim", " · ");
+  return hintPrefix(theme, presentation, continuation) + items
+    .map((item) => formatHintItem(theme, item, keybindings))
     .join(separator);
 }
 
@@ -199,36 +298,89 @@ export function fitLines(lines: string[], width: number): string[] {
   return lines.map((line) => truncateToWidth(line, safeWidth, ""));
 }
 
-/**
- * Render a hint line that wraps greedily at whole segments when it would
- * exceed `width`.  Returns one or two lines so long hints never break a key
- * away from its description.
- */
+function renderHints(
+  theme: Theme,
+  width: number | undefined,
+  items: HintItem[],
+  keybindings: KeybindingsManager | undefined,
+  presentation: HintPresentation,
+): string[] {
+  if (items.length === 0) return [];
+  const single = formatHint(theme, items, keybindings, presentation, false);
+  if (width === undefined) return [single];
+  if (visibleWidth(single) <= width) return fitLines([single], width);
+
+  // Greedy whole-segment wrapping. Separators are added only between two
+  // segments on the same line, so a key is never stranded from its action.
+  const lines: string[] = [];
+  let current: HintItem[] = [];
+  for (const item of items) {
+    const candidate = [...current, item];
+    const continuation = lines.length > 0;
+    if (current.length > 0 && visibleWidth(formatHint(
+      theme,
+      candidate,
+      keybindings,
+      presentation,
+      continuation,
+    )) > width) {
+      lines.push(formatHint(
+        theme,
+        current,
+        keybindings,
+        presentation,
+        continuation,
+      ));
+      current = [item];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) {
+    lines.push(formatHint(
+      theme,
+      current,
+      keybindings,
+      presentation,
+      lines.length > 0,
+    ));
+  }
+  return fitLines(lines, width);
+}
+
+/** Render the shared persistent/dialog hint presentation. */
 export function renderHintLine(
   theme: Theme,
   width: number | undefined,
   items: HintItem[],
   keybindings?: KeybindingsManager,
 ): string[] {
-  const single = formatHint(theme, items, keybindings);
-  if (width === undefined) return [single];
-  if (visibleWidth(single) <= width) return fitLines([single], width);
+  return renderHints(
+    theme,
+    width,
+    items,
+    keybindings,
+    FOOTER_HINT_PRESENTATION,
+  );
+}
 
-  // Greedy whole-item wrapping with no two-line assumption.
-  const lines: string[] = [];
-  let current: HintItem[] = [];
-  for (const item of items) {
-    const candidate = [...current, item];
-    if (current.length > 0 &&
-        visibleWidth(formatHint(theme, candidate, keybindings)) > width) {
-      lines.push(formatHint(theme, current, keybindings));
-      current = [item];
-    } else {
-      current = candidate;
-    }
-  }
-  if (current.length > 0) lines.push(formatHint(theme, current, keybindings));
-  return fitLines(lines, width);
+/**
+ * Render focused-row actions with an accent `›` marker. Wrapped lines align
+ * with the first action and still break only between complete segments.
+ */
+export function renderContextualActions(
+  theme: Theme,
+  width: number,
+  items: HintItem[],
+  keybindings?: KeybindingsManager,
+): string[] {
+  return renderHints(
+    theme,
+    width,
+    items,
+    keybindings,
+    CONTEXT_HINT_PRESENTATION,
+  );
 }
 
 /** Component wrapper around `renderHintLine` that receives the dialog width. */
@@ -650,6 +802,12 @@ export interface DetailListOptions<T> {
    */
   detailPrefix?: (item: T) => string[];
   /**
+   * Optional final lines for the focused row, emitted after warning prefixes
+   * and shell/when/asserts metadata. Sectioned panels use this for contextual
+   * actions; install pickers omit it and retain their existing rendering.
+   */
+  detailSuffix?: (item: T, width: number) => string[];
+  /**
    * When set, the shell/when detail block highlights query matches (search
    * mode).  Omitted by the install wizard, which has no search.
    */
@@ -691,6 +849,7 @@ export function renderDetailList<T>(
       for (const l of prefixLines) lines.push(l);
       const entry = detailFor(item);
       if (entry) lines.push(...renderAssertDetail(theme, width, entry, opts.highlightQuery));
+      lines.push(...(opts.detailSuffix?.(item, width) ?? []));
     }
   }
 
@@ -720,6 +879,7 @@ export class DetailList<T = SelectItem> implements Component {
     private renderRow: (item: T, selected: boolean, width: number) => string,
     private detailFor: (item: T) => AssertDetailEntry | undefined,
     private keybindings?: KeybindingsManager,
+    private detailSuffix?: (item: T, width: number) => string[],
   ) {}
 
   invalidate() {}
@@ -735,6 +895,7 @@ export class DetailList<T = SelectItem> implements Component {
       showScrollIndicator: true,
       renderRow: this.renderRow,
       detailFor: this.detailFor,
+      detailSuffix: this.detailSuffix,
     });
   }
 
@@ -980,8 +1141,8 @@ export interface SectionedLayout {
  * Compute the viewport plan for a sectioned body with one focused (anchor)
  * section.  Pure: given the section count, the focused section/index, the
  * focused section's row count, the focused row's detail-block height, and
- * the content lines available (header/query/hint already subtracted by the
- * caller), returns which sections to show and the focused section's row
+ * the content lines available (header/query/framed footer already subtracted
+ * by the caller), returns which sections to show and the focused section's row
  * window.
  *
  * `inactiveHeaderHeight` (default 1) is the line count of one inactive
@@ -994,7 +1155,7 @@ export function layoutSectionedBody(opts: {
   focusedIndex: number;
   activeLen: number;
   detailBlockHeight: number;
-  /** Content lines available (header/query/hint already subtracted). */
+  /** Content lines available (header/query/framed footer already subtracted). */
   available: number;
   /** Lines one inactive section header occupies (default 1). */
   inactiveHeaderHeight?: number;

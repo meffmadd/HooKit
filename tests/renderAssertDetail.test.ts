@@ -8,11 +8,17 @@ import assert from "node:assert/strict";
 
 import {
   renderAssertDetail,
+  renderContextualActions,
   renderDetailList,
   renderHintLine,
   DetailList,
 } from "../pi-assert/ui/components.js";
-import { visibleWidth, type SelectItem } from "@earendil-works/pi-tui";
+import {
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+  type SelectItem,
+} from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 function mockTheme(): Theme {
@@ -39,6 +45,55 @@ describe("width contract", () => {
     ];
     assert.ok(lines.length > 2, "narrow hints can wrap to more than two lines");
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
+  });
+
+  it("wraps contextual actions only between segments and aligns continuations", () => {
+    const theme = {
+      fg: (_role: string, text: string) => text,
+      strikethrough: (text: string) => text,
+    } as unknown as Theme;
+    const lines = renderContextualActions(theme, 35, [
+      ["Enter", "enable"],
+      ["t", "set default"],
+      ["r", "remove"],
+      ["e", "edit preset"],
+    ]);
+    assert.deepEqual(lines, [
+      "    › Enter enable · t set default",
+      "      r remove · e edit preset",
+    ]);
+    assert.ok(lines.every((line) => visibleWidth(line) <= 35));
+    assert.match(lines[1]!, /^ {6}\S/, "continuation aligns after the marker");
+  });
+});
+
+describe("shared hint key labels", () => {
+  const theme = {
+    fg: (_role: string, text: string) => text,
+    strikethrough: (text: string) => text,
+  } as unknown as Theme;
+
+  it("normalizes Pi's default cancel bindings", () => {
+    const kb = new KeybindingsManager(TUI_KEYBINDINGS);
+    const line = renderHintLine(theme, 80, [["Esc", "close"]], kb)[0]!;
+    assert.equal(line, "  Esc/Ctrl-C close");
+  });
+
+  it("normalizes customized names, modifiers, arrows, and literal hotkeys", () => {
+    const kb = new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.confirm": ["enter", "tab", "backspace", "up", "alt+left", "ctrl++"],
+      "tui.select.cancel": ["escape", "ctrl+c", "shift+tab"],
+    });
+    const line = renderHintLine(theme, 200, [
+      ["Enter", "act"],
+      ["Esc", "close"],
+      ["d", "disable all"],
+    ], kb)[0]!;
+    const alt = process.platform === "darwin" ? "Option-Left" : "Alt-Left";
+    assert.equal(
+      line,
+      `  Enter/Tab/Backspace/↑/${alt}/Ctrl-+ act · Esc/Ctrl-C/Shift-Tab close · d disable all`,
+    );
   });
 });
 
@@ -184,6 +239,36 @@ describe("renderDetailList", () => {
     assert.ok(rowIdx >= 0, "alpha row exists");
     assert.ok(shellIdx >= 0, "alpha shell line exists");
     assert.equal(shellIdx, rowIdx + 1, "shell line sits directly under the highlighted row");
+  });
+
+  it("emits an optional suffix last for only the focused row", () => {
+    const lines = renderDetailList(theme, 80, {
+      items,
+      selectedIndex: 0,
+      renderRow: (item) => item.name,
+      detailFor: (item) => ({ shell: item.shell, when: item.when }),
+      detailPrefix: (item) => [`    warning-${item.name}`],
+      detailSuffix: (item) => [`    action-${item.name}`],
+    });
+    const prefix = lines.findIndex((l) => l.includes("warning-alpha"));
+    const shell = lines.findIndex((l) => l.includes("alpha-cmd"));
+    const when = lines.findIndex((l) => l.includes("test -f a"));
+    const suffix = lines.findIndex((l) => l.includes("action-alpha"));
+    assert.ok(prefix >= 0 && shell > prefix && when > shell && suffix > when);
+    assert.ok(!lines.some((l) => l.includes("action-beta")), "non-focused row has no suffix");
+  });
+
+  it("leaves rendering unchanged when no suffix is supplied", () => {
+    const base = render(items, 0);
+    const emptySuffix = renderDetailList(theme, 80, {
+      items,
+      selectedIndex: 0,
+      renderRow: (item, selected) =>
+        selected ? theme.fg("accent", item.name) : item.name,
+      detailFor: (item) => ({ shell: item.shell, when: item.when }),
+      detailSuffix: () => [],
+    });
+    assert.deepEqual(emptySuffix, base);
   });
 
   it("uses the '> ' prefix only for the highlighted row", () => {

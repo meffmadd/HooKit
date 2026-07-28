@@ -40,11 +40,13 @@ fail user-defined shell checks.
   persistence; fetched entries are submitted to Assertion Catalog mutations.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
-  `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
-  by both the `/asserts` panel and every install picker), `selectDialog`/
-  `textInputDialog` (built on a shared `dialogShell`), and
-  `renderAssertDetail`. `selectDialog` supports a focus-aware dynamic hint
-  (`hintFor`) and a confirm-on-select guard (`confirmOnSelect`).
+  `DetailList` (the selectable list with inline `shell:`/`when:` detail and an
+  optional focused-row suffix, used by both sectioned panels and every install
+  picker), `selectDialog`/`textInputDialog` (built on a shared `dialogShell`),
+  `renderAssertDetail`, and the one hint formatter for readable configured
+  keys, greedy whole-action wrapping, and contextual `›` action runs.
+  `selectDialog` supports a focus-aware dynamic hint (`hintFor`) and a
+  confirm-on-select guard (`confirmOnSelect`).
 - **`pi-assert/ui/state.ts`** — session activation between Assertion Catalog
   and Hook Evaluation. It accepts fresh catalogs, reconciles source-qualified
   saved/default activation, expands one preset level with deduplication, and
@@ -62,15 +64,17 @@ fail user-defined shell checks.
 - **`pi-assert/ui/sectioned-panel.ts`** — `SectionedPanel`, the shared base
   for the `/asserts` panel and the preset editor's assert picker. Owns the
   composition (`render`/`bodyLines`/windowing/`renderSectionHeader`/
-  `moveFocus`), the search lifecycle, the section-header `Tab`/`Shift+Tab`
-  jump-key hints, AND the shared input (`handleSearchInput`/`handleNavInput`/
-  `toggleFocused`) so both views are identical except for panel-specific
-  action keys (which live in each subclass `handleInput`).
+  `moveFocus`), full-width muted `DynamicBorder` footer framing, the search
+  lifecycle, the section-header `Tab`/`Shift+Tab` jump-key hints, AND the
+  shared input (`handleSearchInput`/`handleNavInput`/`toggleFocused`) so both
+  views are identical except for panel-specific action keys (which live in
+  each subclass `handleInput`).
 - **`pi-assert/ui/preset-editor.ts`** — the preset editor's assert picker
   (`PresetEditorPanel`, a `SectionedPanel` subclass). Adds only the
-  panel-specific hooks: header, hint, `renderSection` (`✓`/space membership
-  badge), empty-state message, and the one panel-specific key (`Esc` = commit +
-  back). Search, navigation, and toggle are inherited — no parallel path.
+  panel-specific hooks: header, footer hint, contextual add/remove action,
+  `renderSection` (`✓`/space membership badge), empty-state message, and the
+  one panel-specific key (`Esc` = commit + back). Search, navigation, and
+  toggle are inherited — no parallel path.
 - **`skills/pi-assert/SKILL.md`** — bundled skill describing the format, hooks,
   filters, shell, env vars, and common patterns.
 
@@ -147,16 +151,21 @@ fail user-defined shell checks.
   `shell`/`when` tier, so a search for a ref name surfaces the referencing
   preset and highlights it across the joined string — the coerce output must
   match the renderer's join so highlight positions align with the rank.
+- **Focused-entry actions are contextual; panel-wide actions stay in the
+  footer.** Both sectioned panels append an unboxed accent `›` action run as
+  the final focused-row detail. `/asserts` predicts individual enable/disable
+  and default transitions, always offers removal, and offers editing only for
+  local presets; search retains only its still-active Enter action. The preset
+  editor predicts membership add/remove. The persistent footer contains only
+  search, panel-wide commands, and close/back, framed by full-width muted
+  `DynamicBorder` rules. Shared hint formatting normalizes configured Pi key
+  ids without changing input matching and wraps only between action segments.
 - **Only local presets are editable; repo presets are read-only.** The `/asserts`
   panel's `e` action is gated on `source === "local"`; a non-local preset
-  carries a `❄` (snowflake, dim) badge so the read-only state is visible at a
-  glance, and three signals reinforce it when focused: the hint line shows
-  `e Edit preset` **crossed out** (dim + `strikethrough` via the shared
-  `HintItem` disabled flag), the detail block shows a `❄ non-editable — copy
-  via n to customize` note (`readonlyDetailLines`), and pressing `e` anyway
-  notifies (defensive). Catalog `edit-local-preset` intent enforces local-only
-  ownership and preserves the on-disk `default`. Forking a repo preset to
-  local on edit was removed — to customize a repo preset, copy its content
-  into a new local preset via `n`. The `❄`/`§`/`⚠` badges are all
+  carries a `❄` (snowflake, dim) badge, omits `e edit preset` from its
+  contextual action run, shows a `❄ non-editable` detail note, and defensively
+  notifies if `e` is pressed anyway. Catalog `edit-local-preset` intent
+  enforces local-only ownership and preserves the on-disk `default`. Forking a
+  repo preset to local on edit was removed. The `❄`/`§`/`⚠` badges are all
   text-presentation BMP glyphs (reliable single-width in monospace terminals),
   not emoji.

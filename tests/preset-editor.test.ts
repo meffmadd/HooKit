@@ -353,15 +353,44 @@ describe("PresetEditorPanel navigation", () => {
 // Hint line
 // ═══════════════════════════════════════════════════════════════════
 
-describe("PresetEditorPanel hint", () => {
-  it("renders Enter/search/Esc hint in normal mode", () => {
+describe("PresetEditorPanel hints", () => {
+  it("renders focused membership action separately from the panel footer", () => {
     const panel = makePanel([makeAssert("a")]);
     const lines = panel.render(80);
-    const hint = lines.find((l) => plain(l).includes("toggle"))!;
-    assert.ok(hint, "hint line exists");
-    assert.ok(plain(hint).includes("Enter"), "Enter in hint");
-    assert.ok(plain(hint).includes("search"), "search in hint");
-    assert.ok(plain(hint).includes("Esc"), "Esc in hint");
-    assert.ok(!plain(hint).includes("Space"), "Space not in hint");
+    const action = lines.find((l) => plain(l).includes("Enter add"))!;
+    const footer = lines.find((l) => plain(l).includes("save & back"))!;
+    assert.ok(action && plain(action).includes("›"), "focused row advertises Enter add");
+    assert.ok(plain(footer).startsWith("  / search"), "footer starts with search");
+    assert.ok(plain(footer).includes("Esc save & back"), "footer advertises save & back");
+    assert.ok(!plain(footer).includes("Enter"), "footer omits focused-row toggling");
+  });
+
+  it("predicts Enter remove for an existing member and updates after toggling", () => {
+    const panel = makePanel([makeAssert("a")], new Set(["local/a"]));
+    let action = panel.render(80).find((l) => plain(l).includes("Enter remove"));
+    assert.ok(action, "existing membership predicts removal");
+    panel.handleInput(ENTER);
+    action = panel.render(80).find((l) => plain(l).includes("Enter add"));
+    assert.ok(action, "action updates after removal");
+  });
+
+  it("retains Enter add/remove in search while the footer only exits search", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    panel.handleInput("/");
+    panel.handleInput("a");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => plain(l).includes("› Enter add")));
+    const footer = plain(lines.find((l) => plain(l).includes("exit search")) ?? "");
+    assert.equal(footer, "  Esc exit search");
+    assert.ok(!footer.includes("Enter"));
+  });
+
+  it("keeps the focused row, contextual action, and framed footer in a constrained viewport", () => {
+    const lines = makePanel([makeAssert("a")]).render(60, 9);
+    assert.ok(lines.some((l) => plain(l).startsWith("> ") && plain(l).includes("a")));
+    assert.ok(lines.some((l) => plain(l).includes("› Enter add")));
+    assert.match(lines.at(-3) ?? "", /^─+$/);
+    assert.ok(plain(lines.at(-2) ?? "").includes("save & back"));
+    assert.match(lines.at(-1) ?? "", /^─+$/);
   });
 });

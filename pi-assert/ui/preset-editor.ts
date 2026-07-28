@@ -7,10 +7,11 @@
  * Inherits the entire composition path (`render`/`bodyLines`/windowing/
  * `renderSectionHeader`/`moveFocus`) AND the shared input (`handleSearchInput`/`
  * `handleNavInput`/`toggleFocused`) from `SectionedPanel` — the same path the
- * `/asserts` panel uses.  This class supplies only the panel-specific hooks:
- * header, hint, `renderSection` (badge column = ✓/space membership), the
- * empty-state message, and the one panel-specific key (`Esc` = commit).  No
- * parallel render, search, or navigation path — one shared implementation
+ * `/asserts` panel uses. This class supplies only the panel-specific hooks:
+ * header, footer hint, contextual membership action, `renderSection` (badge
+ * column = ✓/space membership), the empty-state message, and the one
+ * panel-specific key (`Esc` = commit). No parallel render, search, or
+ * navigation path — one shared implementation
  * (see AGENTS.md).
  */
 
@@ -29,7 +30,6 @@ import {
   type CatalogPreset,
 } from "../assertion-catalog/index.js";
 import {
-  HINT_ENTER_TOGGLE,
   HINT_ESC_SAVE_BACK,
   HINT_ESC_EXIT_SEARCH,
   HINT_SEARCH,
@@ -37,6 +37,7 @@ import {
   SectionNavigator,
   sectionedPanelHeight,
   sectionedPanelOverlay,
+  renderContextualActions,
   renderDetailList,
   renderHintLine,
 } from "./components.js";
@@ -141,16 +142,26 @@ export class PresetEditorPanel extends SectionedPanel {
 
   protected hintLine(width?: number): string[] {
     if (this.searchActive) {
-      return renderHintLine(this.theme, width, [
-        HINT_ENTER_TOGGLE,
-        HINT_ESC_EXIT_SEARCH,
-      ], this.keybindings);
+      return renderHintLine(
+        this.theme,
+        width,
+        [HINT_ESC_EXIT_SEARCH],
+        this.keybindings,
+      );
     }
-    return renderHintLine(this.theme, width, [
-      HINT_ENTER_TOGGLE,
-      HINT_SEARCH,
-      HINT_ESC_SAVE_BACK,
-    ], this.keybindings);
+    return renderHintLine(
+      this.theme,
+      width,
+      [HINT_SEARCH, HINT_ESC_SAVE_BACK],
+      this.keybindings,
+    );
+  }
+
+  protected detailSuffixFor(a: CatalogEntry, width: number): string[] {
+    return renderContextualActions(this.theme, width, [[
+      "Enter",
+      this.selected.has(this.refOf(a)) ? "remove" : "add",
+    ]], this.keybindings);
   }
 
   protected renderSection(
@@ -213,6 +224,7 @@ export class PresetEditorPanel extends SectionedPanel {
       },
       detailFor: (a) =>
         isCatalogPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
+      detailSuffix: (a, detailWidth) => this.detailSuffixFor(a, detailWidth),
     });
   }
 

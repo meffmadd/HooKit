@@ -17,6 +17,7 @@ import type {
   ExtensionContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -192,10 +193,9 @@ describe("AssertsPanel", () => {
       Array.from({ length: 8 }, (_, i) => makeAssert(`a-${i}`)),
     );
 
-    // terminalHeight 14 (not 12): the always-present Presets header above
-    // `local` reserves 2 extra lines (header + separator), so the windowed
-    // section needs a touch more height to show 3 rows.
-    const lines = panel.render(80, 14);
+    // The framed footer and focused-row action are both reserved by viewport
+    // accounting; height 16 leaves room for a three-row active window.
+    const lines = panel.render(80, 16);
     const activeHeader = lines.find((l) => l.includes("[Local]"));
 
     assert.ok(activeHeader, "active section header is shown");
@@ -425,38 +425,34 @@ describe("AssertsPanel", () => {
 
   // ── Hint line ───────────────────────────────────────────────────
 
-  it("shows the d Disable all hint when asserts are active", () => {
+  it("shows the d disable all footer action when asserts are active", () => {
     const panel = makePanel([makeAssert("alpha")], new Set(["alpha"]));
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => l.includes("Disable all")),
-      "shows Disable all when an assert is active",
-    );
-    assert.ok(
-      lines.some((l) => l.includes("[d]")),
-      "Disable all is bound to the d key",
+      lines.some((l) => l.includes("[d] disable all")),
+      "shows disable all when an assert is active",
     );
   });
 
-  it("hides the d Disable all hint when nothing is active", () => {
+  it("hides the d disable all footer action when nothing is active", () => {
     const panel = makePanel([makeAssert("alpha")]);
     const lines = panel.render(80);
     assert.ok(
-      !lines.some((l) => l.includes("Disable all")),
-      "hides Disable all when nothing is active",
+      !lines.some((l) => l.includes("disable all")),
+      "hides disable all when nothing is active",
     );
   });
 
-  it("binds Remove to r (not d)", () => {
+  it("binds the focused-row remove action to r (not d)", () => {
     const panel = makePanel([makeAssert("alpha", "repo/owner")]);
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => l.includes("[r] Remove")),
-      "Remove is bound to r",
+      lines.some((l) => l.includes("[›]") && l.includes("[r] remove")),
+      "remove is bound to r in the contextual action line",
     );
     assert.ok(
-      !lines.some((l) => l.includes("[d] Remove")),
-      "Remove is no longer bound to d",
+      !lines.some((l) => l.includes("[d] remove")),
+      "remove is not bound to d",
     );
   });
 
@@ -524,12 +520,12 @@ describe("AssertsPanel", () => {
     );
   });
 
-  it("shows the Remove hint for a local section", () => {
+  it("shows the contextual remove action for a local section", () => {
     const panel = makePanel([makeAssert("alpha")]);
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => l.includes("[r] Remove")),
-      "the Remove hint appears for local sections too",
+      lines.some((l) => l.includes("[›]") && l.includes("[r] remove")),
+      "the remove action appears for local entries too",
     );
   });
 
@@ -544,33 +540,111 @@ describe("AssertsPanel", () => {
     );
   });
 
-  // Structural guard: `render` is the single emission point that always tails
-  // the output with a hint line, so no mode (empty / confirm / bounded /
-  // unbounded) can forget the hint — the regression that prompted this.
-  it("every render mode ends with a hint line", () => {
+  it("renders predictive focused-row actions in the required order", () => {
+    const panel = makePanel([makeAssert("alpha")]);
+    const action = plain(panel.render(100).find((l) => l.includes("[›]")) ?? "");
+    assert.match(
+      action,
+      /› Enter enable · t set default · r remove/,
+      "disabled, non-default entry advertises its next transitions",
+    );
+
+    const enabledDefault = makePanel(
+      [makeAssert("alpha", "local", true)],
+      new Set(["alpha"]),
+    );
+    const next = plain(enabledDefault.render(100).find((l) => l.includes("[›]")) ?? "");
+    assert.match(next, /› Enter disable · t unset default · r remove/);
+  });
+
+  it("uses individual activation for Enter even when a preset covers the entry", () => {
+    const panel = makePanel(
+      [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+      new Set(["safety"]),
+    );
+    panel.nav.cycleSection("next"); // Presets → Local (guard)
+    const action = plain(panel.render(100).find((l) => l.includes("[›]")) ?? "");
+    assert.ok(action.includes("Enter enable"), "next Enter individually enables guard");
+    assert.ok(!action.includes("Enter disable"), "preset coverage does not redefine the toggle");
+  });
+
+  it("places contextual actions after warning and assertion detail lines", () => {
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "echo alpha", when: "true" }),
+    ]);
+    const lines = panel.render(100);
+    const shell = lines.findIndex((l) => l.includes("shell:"));
+    const when = lines.findIndex((l) => l.includes("when:"));
+    const action = lines.findIndex((l) => l.includes("[›]"));
+    const topBorder = lines.findIndex((l) => /^─+$/.test(l));
+    assert.ok(shell >= 0 && when > shell && action > when, "action follows shell/when details");
+    assert.ok(topBorder > action, "action is the final focused-row detail before the footer");
+  });
+
+  it("keeps only panel-wide commands in the normal footer, in order", () => {
+    const panel = makePanel([makeAssert("alpha")], new Set(["alpha"]));
+    const footer = plain(panel.render(120).find((l) => l.includes("close")) ?? "");
+    assert.match(
+      footer,
+      /^  \/ search · d disable all · i install rules · n new preset · Esc close$/,
+    );
+    assert.ok(!footer.includes("Enter"), "focused-row toggle is not global");
+    assert.ok(!footer.includes(" t ") && !footer.includes(" r ") && !footer.includes(" e "));
+  });
+
+  it("renders and accepts customized select bindings", () => {
+    const active = new Set<string>();
+    const panel = makePanel([makeAssert("alpha")], active);
+    panel.setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.confirm": "space",
+      "tui.select.cancel": "ctrl+x",
+    }));
+
+    let lines = panel.render(100);
+    assert.ok(lines.some((l) => l.includes("[Space] enable")));
+    assert.ok(lines.some((l) => l.includes("[Ctrl-X] close")));
+    panel.handleInput(" ", makeCtx());
+    assert.ok(active.has("alpha"), "custom confirm key toggles the focused entry");
+    lines = panel.render(100);
+    assert.ok(lines.some((l) => l.includes("[Space] disable")));
+    assert.equal(panel.handleInput("\x18", makeCtx()), "cancel", "custom cancel key closes");
+  });
+
+  // Structural guard: `render` is the single emission point that frames the
+  // persistent footer in every mode.
+  it("every render mode ends with a framed hint", () => {
     const panel = makePanel([
       makeAssert("alpha", "repo/owner"),
       makeAssert("beta", "repo/owner"),
     ]);
-    const isHint = (l: string) =>
-      /Remove|Esc|Install|enable|Toggle|Disable|confirm|cancel/.test(l);
+    const assertFramed = (lines: string[], label: string): void => {
+      assert.match(lines.at(-1) ?? "", /^─+$/, `${label}: bottom border`);
+      assert.match(lines.at(-3) ?? "", /^─+$/, `${label}: top border`);
+      assert.ok((lines.at(-2) ?? "").trim(), `${label}: hint between borders`);
+    };
 
-    // Empty panel.
-    assert.ok(
-      isHint([...makePanel([]).render(80, 20)].reverse().find((l) => l.trim())!),
-      "empty panel ends with a hint",
-    );
-    // Bounded + unbounded normal.
-    assert.ok(isHint([...panel.render(80, 20)].reverse().find((l) => l.trim())!),"bounded normal ends with a hint");
-    assert.ok(isHint([...panel.render(80)].reverse().find((l) => l.trim())!),
-      "unbounded normal ends with a hint",
-    );
-    // Confirm.
+    assertFramed(makePanel([]).render(80, 20), "empty");
+    assertFramed(panel.render(80, 20), "bounded normal");
+    assertFramed(panel.render(80), "unbounded normal");
     panel.handleInput("r", makeCtx());
-    assert.ok(
-      isHint([...panel.render(80, 20)].reverse().find((l) => l.trim())!),
-      "confirm ends with a hint",
-    );
+    assertFramed(panel.render(80, 20), "confirm");
+  });
+
+  it("renders both footer rules full-width with the borderMuted theme role", () => {
+    const roles: string[] = [];
+    const theme = {
+      fg(role: string, text: string) { roles.push(role); return text; },
+      bg: (_role: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      strikethrough: (text: string) => text,
+    } as unknown as Theme;
+    const panel = makePanel([makeAssert("alpha")]);
+    panel.setTheme(theme);
+    const borders = panel.render(37).filter((l) => /^─+$/.test(l));
+    assert.equal(borders.length, 2);
+    assert.ok(borders.every((line) => line.length === 37), "rules span the panel width");
+    assert.ok(roles.filter((role) => role === "borderMuted").length >= 2);
   });
 });
 
@@ -1128,10 +1202,15 @@ describe("AssertsPanel fuzzy search", () => {
             : Math.floor(rows * Number.parseFloat(maxHeight) / 100);
           const overlayMaxHeight = Math.min(requestedHeight, rows - margin * 2);
           const visible = component.render(80).slice(0, overlayMaxHeight);
-          const lastVisible = [...visible].reverse().find((line: string) => line.trim());
           assert.ok(
-            lastVisible?.includes("exit search"),
-            "the overlay viewport retains the bottom row of the search hint",
+            visible.some((line: string) => line.includes("exit search")),
+            "the overlay viewport retains the search hint",
+          );
+          const lastVisible = [...visible].reverse().find((line: string) => line.trim());
+          assert.match(
+            lastVisible?.trim() ?? "",
+            /^─+$/,
+            "the bottom footer border remains visible after the hint",
           );
           return null;
         },
@@ -1337,15 +1416,23 @@ describe("AssertsPanel fuzzy search", () => {
     assert.ok(active.has("alpha"), "Enter toggles in normal mode");
   });
 
-  it("shows the search hint while search is active", () => {
+  it("shows only Enter context plus exit-search footer while searching", () => {
     const panel = makePanel([makeAssert("alpha"), makeAssert("beta", "repo/aaa")]);
     panel.handleInput("/", makeCtx());
-    const hint = panel.render(80).find((l) => l.includes("exit search"));
-    assert.ok(hint, "search hint mentions 'exit search'");
-    // r/t/d/i are suspended during search — their hints must not appear.
-    const hintLines = panel.render(80).filter((l) => l.includes("exit search"));
-    assert.ok(!hintLines.some((l) => /Remove|Install|Toggle default|Disable all/.test(l)),
-      "r/t/d/i hints are omitted during search");
+    const lines = panel.render(100);
+    const action = plain(lines.find((l) => l.includes("[›]")) ?? "");
+    const footer = plain(lines.find((l) => l.includes("exit search")) ?? "");
+    assert.match(action, /^    › Enter enable$/, "only the still-available row action remains");
+    assert.match(footer, /^  Esc exit search$/, "footer advertises only leaving search");
+    assert.ok(!lines.some((l) => /set default|remove|edit preset|disable all|install rules/.test(l)));
+  });
+
+  it("feeds normal action letters into the query while searching", () => {
+    const panel = makePanel([makeAssert("tre-rule")]);
+    panel.handleInput("/", makeCtx());
+    for (const key of "tre") panel.handleInput(key, makeCtx());
+    const query = panel.render(100).find((l) => l.includes("▏"));
+    assert.ok(query && plain(query).includes("/tre"), "t/r/e are query characters in search");
   });
 
   // ── Highlight rendering ─────────────────────────────────────────
@@ -1835,42 +1922,39 @@ describe("AssertsPanel M3: e key (edit preset, local only)", () => {
   });
 });
 
-// ── e hint: crossed out for non-local (read-only) presets ─────────
+// ── e contextual action: local presets only ───────────────────────
 
-describe("AssertsPanel M3: e hint (crossed out for non-local presets)", () => {
-  it("shows the e Edit preset hint (normal) for a focused local preset", () => {
+describe("AssertsPanel M3: e contextual action (local presets only)", () => {
+  it("shows e edit preset for a focused local preset", () => {
     const theme = tagTheme();
     const panel = makePanel([makePreset("bundle", [], "local")]);
     panel.setTheme(theme);
-    panel.handleInput("p", makeCtx()); // focus Presets
-    const lines = panel.render(80);
-    const hintLine = lines.find((l) => l.includes("Edit preset"))!;
-    assert.ok(hintLine, "e Edit preset hint is shown");
-    assert.ok(hintLine.includes("<accent>e</accent>"), "e key is accent (normal)");
-    assert.ok(!hintLine.includes("<s>"), "not struck through for a local preset");
+    panel.handleInput("p", makeCtx());
+    const actionLine = panel.render(160).find((l) => l.includes("edit preset"))!;
+    assert.ok(actionLine, "e edit preset action is shown");
+    assert.ok(
+      panel.render(160).some((l) => l.includes("<accent>›</accent>")),
+      "the contextual action run has an accent marker",
+    );
+    assert.ok(actionLine.includes("<accent>e</accent>"), "e key is accent");
   });
 
-  it("crosses out the e Edit preset hint for a focused non-local preset", () => {
-    const theme = tagTheme();
+  it("omits e edit preset for a focused non-local preset", () => {
     const panel = makePanel([makePreset("bundle", [], "owner/repo")]);
-    panel.setTheme(theme);
-    panel.handleInput("p", makeCtx()); // focus Presets
+    panel.handleInput("p", makeCtx());
     const lines = panel.render(80);
-    const hintLine = lines.find((l) => l.includes("Edit preset"))!;
-    assert.ok(hintLine, "e Edit preset hint is still shown (crossed)");
-    assert.ok(hintLine.includes("<s>"), "struck through (disabled)");
     assert.ok(
-      !hintLine.includes("<accent>e</accent>"),
-      "e key not accent when disabled",
+      !lines.some((l) => l.includes("edit preset")),
+      "read-only presets do not advertise an unavailable action",
     );
   });
 
-  it("does not show the e hint when a shell assert is focused", () => {
+  it("omits e edit preset when a shell assert is focused", () => {
     const panel = makePanel([makeAssert("guard")]);
     const lines = panel.render(80);
     assert.ok(
-      !lines.some((l) => l.includes("Edit preset")),
-      "no e hint when a shell assert is focused",
+      !lines.some((l) => l.includes("edit preset")),
+      "shell assertions do not advertise preset editing",
     );
   });
 });

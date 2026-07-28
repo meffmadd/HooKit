@@ -17,12 +17,17 @@
  *
  * Subclasses implement the abstract rendering hooks (`renderHeaderLines`,
  * `hintLine`, `renderSection`) and may override the optional hooks
- * (`emptyBodyLines`, `modeBodyLines`, `detailBlockFor`, `sectionHeaderKeys`).
+ * (`emptyBodyLines`, `modeBodyLines`, `detailPrefixFor`, `detailSuffixFor`,
+ * `sectionHeaderKeys`).
  * The base owns the composition: `render` → `bodyLines` → `renderSectionHeader`
  * + `renderSection` + `layoutSectionedBody` windowing.
  */
 
-import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import {
+  DynamicBorder,
+  type KeybindingsManager,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
 
 import type { CatalogEntry } from "../assertion-catalog/index.js";
@@ -144,10 +149,28 @@ export abstract class SectionedPanel {
     return null;
   }
 
-  /** The detail block under the focused row.  Default: `renderAssertDetail`. */
+  /** Optional warning/note lines before focused-row assertion metadata. */
+  protected detailPrefixFor(_a: CatalogEntry, _width: number): string[] {
+    return [];
+  }
+
+  /** Optional contextual lines after focused-row assertion metadata. */
+  protected detailSuffixFor(_a: CatalogEntry, _width: number): string[] {
+    return [];
+  }
+
+  /**
+   * Complete focused-row detail block used for viewport accounting. The same
+   * prefix → metadata → suffix order is passed to `renderDetailList` by each
+   * sectioned-panel renderer.
+   */
   protected detailBlockFor(a: CatalogEntry | undefined, width: number): string[] {
     if (!a) return [];
-    return renderAssertDetail(this.theme, width, a);
+    return [
+      ...this.detailPrefixFor(a, width),
+      ...renderAssertDetail(this.theme, width, a),
+      ...this.detailSuffixFor(a, width),
+    ];
   }
 
   /**
@@ -173,22 +196,28 @@ export abstract class SectionedPanel {
   // ── Composition (shared by every sectioned panel) ─────────────────
   /**
    * `render` is the single emission point: it always returns header + body +
-   * a blank separator + a hint line.  The individual branches in `bodyLines`
-   * never append the hint themselves, so no mode (empty / mode / bounded /
-   * unbounded) can forget it.
+   * a blank separator + the framed persistent footer. The individual branches
+   * in `bodyLines` never append footer pieces, so no mode (empty / mode /
+   * bounded / unbounded) can forget its full-width muted rules.
    */
   render(width: number, terminalHeight?: number): string[] {
     const hintLines = this.hintLine(width);
-    const body = this.bodyLines(width, terminalHeight, hintLines.length);
-    let rendered = [...body, "", ...hintLines];
+    const borderColor = (s: string) => this.theme.fg("borderMuted", s);
+    const footerLines = [
+      ...new DynamicBorder(borderColor).render(width),
+      ...hintLines,
+      ...new DynamicBorder(borderColor).render(width),
+    ];
+    const body = this.bodyLines(width, terminalHeight, footerLines.length);
+    let rendered = [...body, "", ...footerLines];
     if (terminalHeight !== undefined && rendered.length > terminalHeight) {
-      // Preserve the bottom hint instead of slicing it away when a long
-      // detail block exceeds the vertical budget.
-      const footer = ["", ...hintLines];
+      // Preserve both full-width rules and the hint instead of slicing the
+      // fixed footer away when a long detail block exceeds the budget.
+      const footer = ["", ...footerLines];
       const bodyBudget = Math.max(0, terminalHeight - footer.length);
       const compactBody = [...body];
       // Blank separators are decorative; remove them before sacrificing a
-      // section header, selected row, or the fixed bottom hint.
+      // section header, selected row, or the fixed framed footer.
       while (compactBody.length > bodyBudget) {
         const blank = compactBody.lastIndexOf("");
         if (blank < 0) break;
@@ -208,7 +237,7 @@ export abstract class SectionedPanel {
   protected bodyLines(
     width: number,
     terminalHeight: number | undefined,
-    hintLen: number,
+    footerLen: number,
   ): string[] {
     // Search filtered to zero matches must take precedence over the normal
     // empty-panel branch: a zero-match view shows "No matches", never the
@@ -230,8 +259,9 @@ export abstract class SectionedPanel {
       return this.renderUnboundedBody(width);
     }
 
-    // Header and footer (1 blank + hint line(s)) are reserved.  The active
-    // section is the anchor; adjacent section headers are always shown.
+    // Header and footer (1 blank + top rule + hint line(s) + bottom rule)
+    // are reserved. The active section is the anchor; adjacent section
+    // headers are always shown.
     // Detail lines for the selected assert are rendered inline directly
     // below the highlighted assert row, so the active section's line budget
     // includes both assert rows and the selected row's details.  The
@@ -240,7 +270,7 @@ export abstract class SectionedPanel {
     const headerLines = this.renderHeaderLines();
     const queryLine = this.searchActive ? this.renderSearchQueryLine(width) : null;
     const available =
-      terminalHeight - headerLines.length - (queryLine ? 1 : 0) - 1 - hintLen;
+      terminalHeight - headerLines.length - (queryLine ? 1 : 0) - 1 - footerLen;
     const focusedSection = this.nav.focusedSection;
     const activeGroup = this.groups[focusedSection];
     const activeLen = activeGroup.asserts.length;
