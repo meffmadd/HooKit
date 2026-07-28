@@ -1,7 +1,4 @@
-import { exec } from "node:child_process";
-import { existsSync, mkdirSync, appendFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import { existsSync } from "node:fs";
 import {
   iterSections,
   readSectionedFile,
@@ -15,238 +12,50 @@ import {
 } from "./config.js";
 import type { EntryFilter, Hook } from "./domain/entry.js";
 
-// ---------------------------------------------------------------------------
-// Types
-//
-// `Assert` is a discriminated union: a `ShellAssert` (the original
-// shell-based assert) or a `PresetAssert` (a named bundle of refs that
-// `activeList()` expands to shell asserts).  The executor only ever runs
-// shell asserts; presets expand to shell asserts in `activeList()` and
-// never reach `runAsserts`.  `isPreset` narrows the union at the seams
-// where the two shapes diverge (executor loop, panel `detailFor`, fuzzy
-// `FIELDS`).
-// ---------------------------------------------------------------------------
-
-/** Fields shared by every assert entry, shell or preset. */
+/** Fields shared by every loaded assertion or preset. */
 interface AssertBase {
-  /** Unique name of this assert (or preset). */
   name: string;
-  /** Source section: "local" or a repo key like "owner/repo". */
   source: string;
-  /** Human-readable description of what this assert (or preset) guards. */
   description: string;
-  /** Whether this entry is active by default for new sessions (default false). */
   default: boolean;
-  /**
-   * Absolute path of the asserts.json file this entry was loaded from.
-   * Populated by `loadAsserts` so the UI can write back to the correct
-   * file when toggling `default`. Optional because callers may construct
-   * `Assert` objects by hand (e.g. in tests).
-   */
+  /** Storage provenance retained until Stage 2 introduces Assertion Catalog. */
   path?: string;
 }
 
-/** A shell-based assert: `shell` (+ optional `when`/`filter`) run on a hook. */
+/** A shell assertion eligible for Hook Evaluation after activation. */
 export interface ShellAssert extends AssertBase {
-  /** Native or synthetic hook name to intercept (e.g. "tool_call"). */
   hook: Hook;
-  /**
-   * Optional key-value filter matched against the hook adapter's candidate
-   * record. Tool hooks use `{ ...event.input, toolName }`; lifecycle hooks use
-   * a bounded record containing `event` and their documented scalar metadata.
-   * Dot-separated keys resolve nested fields. String values are normally
-   * JavaScript regex sources; numbers, booleans, and null use strict equality.
-   * `assert_result.outcome` is the field-specific exception: an exact enum
-   * scalar/list. Arrays mean "any of" and an empty array matches nothing.
-   */
   filter?: EntryFilter;
-  /** Optional precondition shell command. Only runs the main `shell` if this exits 0. */
   when?: string;
-  /** Shell command string whose exit code decides pass/fail. */
   shell: string;
 }
 
-/**
- * A named bundle of asserts: `preset` is a `string[]` of qualified
- * `"source/name"` refs (`local/name`, 2 segments; `owner/repo/name`,
- * 3 segments).  `activeList()` expands a preset to its referenced shell
- * asserts (deduped); presets never reach `runAsserts`.
- */
+/** A named one-level bundle expanded by session activation state. */
 export interface PresetAssert extends AssertBase {
-  /** Qualified `"source/name"` refs expanded by `activeList()`. */
   preset: string[];
 }
 
-/** A shell assert or a preset. */
 export type Assert = ShellAssert | PresetAssert;
 
-/** Type guard: `true` for a `PresetAssert`. */
-export function isPreset(a: Assert): a is PresetAssert {
-  return "preset" in a;
+export function isPreset(assertion: Assert): assertion is PresetAssert {
+  return "preset" in assertion;
 }
-
-/** Structured environment passed to shell commands for tool_call hooks. */
-export interface AssertEnv {
-  PI_EVENT: "tool_call";
-  PI_TOOL_NAME: string;
-  PI_TOOL_CALL_ID: string;
-  PI_TOOL_INPUT: string;
-  PI_CWD: string;
-  /** Index signature lets these flow into `child_process.exec`'s `env`. */
-  [key: string]: string;
-}
-
-/** Structured environment passed to lifecycle or synthetic hook commands. */
-export interface LifecycleEnv {
-  PI_EVENT: string;
-  PI_EVENT_PAYLOAD: string;
-  PI_CWD: string;
-  /** Index signature lets these flow into `child_process.exec`'s `env`. */
-  [key: string]: string;
-}
-
-/** Backward-compatible name for the agent_end lifecycle environment. */
-export type AgentEndEnv = LifecycleEnv;
-
-/** Structured environment passed to shell commands for tool_result hooks. */
-export interface ToolResultEnv {
-  PI_EVENT: "tool_result";
-  PI_TOOL_NAME: string;
-  PI_TOOL_CALL_ID: string;
-  PI_TOOL_INPUT: string;
-  PI_TOOL_RESULT: string;
-  PI_TOOL_IS_ERROR: "true" | "false";
-  PI_CWD: string;
-  /** Index signature lets these flow into `child_process.exec`'s `env`. */
-  [key: string]: string;
-}
-
-/** Minimal shape of the tool_call event we consume. */
-export interface ToolCallEvent {
-  toolName: string;
-  toolCallId: string;
-  input: Record<string, unknown>;
-}
-
-/** Minimal shape of the agent_end event we consume. */
-// The native event also has messages, intentionally deferred to rich metadata.
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AgentEndEvent {}
-
-/** Bounded native metadata consumed by the turn_end adapter. */
-export interface TurnEndEvent {
-  turnIndex: number;
-}
-
-/** agent_settled currently carries no metadata. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface AgentSettledEvent {}
-
-/** Cancellation event emitted before /new or /resume. */
-export interface SessionBeforeSwitchEvent {
-  reason: "new" | "resume";
-  targetSessionFile?: string;
-}
-
-/** Cancellation event emitted before /fork or /clone. */
-export interface SessionBeforeForkEvent {
-  entryId: string;
-  position: "before" | "at";
-}
-
-// Content block types come from pi-ai (transitive dep of pi-coding-agent).
-
-/** Minimal shape of the tool_result event we consume. */
-export interface ToolResultEvent {
-  toolName: string;
-  toolCallId: string;
-  input: Record<string, unknown>;
-  content: (TextContent | ImageContent)[];
-  isError: boolean;
-  details?: unknown;
-}
-
-/** Patch returned from a tool_result handler. */
-export interface ToolResultPatch {
-  content?: (TextContent | ImageContent)[];
-  details?: unknown;
-  isError?: boolean;
-}
-
-/** Bounded, immutable Pi session/model/runtime metadata exposed to shells. */
-export interface PiContextMetadataSnapshot {
-  readonly PI_SESSION_ID?: string;
-  readonly PI_SESSION_FILE?: string;
-  readonly PI_SESSION_NAME?: string;
-  readonly PI_SESSION_LEAF_ID?: string;
-  readonly PI_PROVIDER?: string;
-  readonly PI_MODEL?: string;
-  readonly PI_REASONING_LEVEL?: string;
-  readonly PI_MODE?: string;
-  readonly PI_PROJECT_TRUSTED?: "true" | "false";
-  readonly PI_CONTEXT_TOKENS?: string;
-  readonly PI_CONTEXT_WINDOW?: string;
-  readonly PI_CONTEXT_PERCENT?: string;
-  readonly [key: string]: string | undefined;
-}
-
-/** Context-usage subset consumed by the metadata snapshot builder. */
-export interface PiContextUsage {
-  tokens: number | null;
-  contextWindow: number;
-  percent: number | null;
-}
-
-/**
- * Focused structural subset of Pi's ExtensionContext consumed by the engine.
- * The precomputed snapshot seam keeps synthetic handlers detached from the
- * originating rich context while lightweight tests can continue using cwd.
- */
-export interface ExtensionContext {
-  cwd: string;
-  signal?: AbortSignal;
-  sessionManager?: {
-    getSessionId?(): string;
-    getSessionFile?(): string | undefined;
-    getSessionName?(): string | undefined;
-    getLeafId?(): string | null;
-  };
-  model?: { provider: string; id: string };
-  thinkingLevel?: string;
-  /** Compatibility seam for Pi versions exposing thinking on ExtensionAPI. */
-  getThinkingLevel?(): string | undefined;
-  mode?: "tui" | "rpc" | "json" | "print";
-  isProjectTrusted?(): boolean;
-  getContextUsage?(): PiContextUsage | undefined;
-  /** Internal detached-execution seam; preferred over consulting rich state. */
-  metadataSnapshot?: PiContextMetadataSnapshot;
-}
-
-// ---------------------------------------------------------------------------
-// Config loading
-// ---------------------------------------------------------------------------
 
 /** A single per-file parse failure. */
 export interface LoadError {
-  /** Absolute path of the file that failed. */
-  path: string;
-  /** Short reason suitable for a notification (e.g. SyntaxError message). */
-  reason: string;
+  readonly path: string;
+  readonly reason: string;
 }
 
-/**
- * Thrown by `loadAsserts` when one or both asserts.json files cannot be
- * parsed.  Carries a list of per-file errors so the UI can name the
- * offending file(s) and reason(s) in a single notification.
- *
- * The caller is expected to treat any instance of this error as a
- * hard-fail: do not apply partial results.
- */
+/** Hard failure for one or more authorized configuration files. */
 export class AssertsParseError extends Error {
   readonly errors: LoadError[];
+
   constructor(errors: LoadError[]) {
     super(
-      `Failed to parse ${errors.length} asserts.json file${errors.length === 1 ? "" : "s"}`,
+      `Failed to parse ${errors.length} asserts.json file${
+        errors.length === 1 ? "" : "s"
+      }`,
     );
     this.name = "AssertsParseError";
     this.errors = errors;
@@ -254,144 +63,108 @@ export class AssertsParseError extends Error {
 }
 
 /**
- * Load asserts from `.pi/asserts.json` (project) and `~/.pi/asserts.json`
- * (global) and return the merged list.  Project-level entries override
- * global entries by source + name.
- *
- * Every returned `Assert` has `path` populated with the absolute path
- * of the asserts.json file it came from.  The UI uses this to write
- * `default` toggles back to the correct file.
- *
- * Throws `AssertsParseError` if either file fails to parse.  No asserts
- * are returned in that case — callers must treat the error as a
- * hard-fail and not apply partial results.
+ * Load global and optionally trusted project assertions. Project entries
+ * replace global entries with the same source/name identity as whole records.
  */
 export function loadAsserts(cwd: string, includeProject = true): Assert[] {
-  // The merge map is keyed by `${source}\x00${name}` and the value carries
-  // the path of the file that produced it.  Project reads come second, so
-  // `merged.set(key, …)` naturally overwrites any global entry for the
-  // same key — including its `path`.
   const merged = new Map<string, Assert>();
   const errors: LoadError[] = [];
-
-  // Read repos from project file to build known set (also applies to global)
   const projectPath = projectFilePath(cwd);
   let knownRepos: Set<string> | undefined;
+
   if (includeProject && existsSync(projectPath)) {
     try {
       const file = readSectionedFile(projectPath);
       if (Array.isArray(file.repos)) {
         knownRepos = new Set(
-          file.repos.filter((r) => typeof r === "string" && r.includes("/")),
+          file.repos.filter(
+            (repo) => typeof repo === "string" && repo.includes("/"),
+          ),
         );
         knownRepos.add("local");
       }
-    } catch (err) {
-      // Record and skip the repos pre-read; the full read below will
-      // record the same error if the file is still broken.
-      errors.push({ path: projectPath, reason: formatParseError(err) });
+    } catch (error) {
+      errors.push({ path: projectPath, reason: formatParseError(error) });
     }
   }
 
-  // 1. Global
   const globalPath = globalFilePath();
   if (existsSync(globalPath)) {
     try {
       for (const entry of readSections(globalPath, knownRepos)) {
         merged.set(keyOf(entry), entry);
       }
-    } catch (err) {
-      // Replace any pre-read error for the same path so we don't double-count
+    } catch (error) {
       upsertError(errors, {
         path: globalPath,
-        reason: formatParseError(err),
+        reason: formatParseError(error),
       });
     }
   }
 
-  // 2. Project (overrides global by source+name)
   if (includeProject && existsSync(projectPath)) {
     try {
       for (const entry of readSections(projectPath, knownRepos)) {
         merged.set(keyOf(entry), entry);
       }
-    } catch (err) {
+    } catch (error) {
       upsertError(errors, {
         path: projectPath,
-        reason: formatParseError(err),
+        reason: formatParseError(error),
       });
     }
   }
 
-  if (errors.length > 0) {
-    throw new AssertsParseError(errors);
-  }
-
+  if (errors.length > 0) throw new AssertsParseError(errors);
   return Array.from(merged.values());
 }
 
-/** Extract a short, human-readable reason from a JSON parse error. */
-function formatParseError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+function formatParseError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-/** Insert a LoadError, replacing any existing entry for the same path. */
 function upsertError(errors: LoadError[], next: LoadError): void {
-  for (let i = 0; i < errors.length; i++) {
-    if (errors[i].path === next.path) {
-      errors[i] = next;
+  for (let index = 0; index < errors.length; index++) {
+    if (errors[index]?.path === next.path) {
+      errors[index] = next;
       return;
     }
   }
   errors.push(next);
 }
 
-function keyOf(a: Assert): string {
-  return entryKey(a.source, a.name);
+function keyOf(assertion: Assert): string {
+  return entryKey(assertion.source, assertion.name);
 }
 
-/**
- * Flatten a sectioned asserts file into fully-attached `Assert` objects.
- *
- * Dispatches on the individual `validatePresetShape`/`validateEntryShape`
- * **guards** (not the `validateRuleEntry` tag) so `def` narrows in each branch
- * and `def.*` compiles.  `validateRuleEntry` returns a *tag* (`RuleEntryKind
- * | null`), not a type guard on `def`, so `def` would stay `unknown` and
- * `def.*` wouldn't compile — a single type guard narrows to one type, so it
- * can't serve both branches.  The installer uses the tag; `readSections`
- * uses the guards.
- */
-function readSections(
-  path: string,
-  knownRepos?: Set<string>,
-): Assert[] {
+/** Flatten validated source partitions into runtime entries. */
+function readSections(path: string, knownRepos?: Set<string>): Assert[] {
   const file: SectionedFile = readSectionedFile(path);
   const validationError = validateSectionedFile(file);
   if (validationError) throw new Error(validationError);
   const results: Assert[] = [];
 
   for (const { source, entries } of iterSections(file, knownRepos)) {
-    for (const [name, def] of Object.entries(entries)) {
-      if (validatePresetShape(def)) {
+    for (const [name, definition] of Object.entries(entries)) {
+      if (validatePresetShape(definition)) {
         results.push({
           name,
           source,
-          description: def.description,
-          preset: def.preset,
-          default: def.default ?? false,
+          description: definition.description,
+          preset: definition.preset,
+          default: definition.default ?? false,
           path,
         });
-      } else if (validateEntryShape(def)) {
+      } else if (validateEntryShape(definition)) {
         results.push({
           name,
           source,
-          description: def.description,
-          hook: def.hook,
-          filter: def.filter,
-          when: def.when,
-          shell: def.shell,
-          default: def.default ?? false,
+          description: definition.description,
+          hook: definition.hook,
+          filter: definition.filter,
+          when: definition.when,
+          shell: definition.shell,
+          default: definition.default ?? false,
           path,
         });
       }
@@ -399,339 +172,4 @@ function readSections(
   }
 
   return results;
-}
-
-// ---------------------------------------------------------------------------
-// Filter matching
-// ---------------------------------------------------------------------------
-
-/** Resolve a dot-separated filter key through own candidate properties. */
-function resolveFilterField(
-  candidate: Record<string, unknown>,
-  key: string,
-): unknown {
-  let current: unknown = candidate;
-  for (const segment of key.split(".")) {
-    if (typeof current !== "object" || current === null ||
-        !Object.prototype.hasOwnProperty.call(current, segment)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
-}
-
-/** Apply the one scalar matcher shared by scalar and array filter values. */
-function matchFilterScalar(expected: unknown, actual: unknown): boolean {
-  if (typeof expected === "string") {
-    return typeof actual === "string" && new RegExp(expected).test(actual);
-  }
-  return actual === expected;
-}
-
-/**
- * Check whether the optional filter matches a candidate record.
- * Every key in the filter must match; no filter always matches.
- *
- * Dot-separated keys resolve nested candidate fields. A string filter value
- * is a JavaScript regular-expression source tested against a string candidate
- * value. Numbers, booleans, and null retain strict equality. Arrays preserve
- * any-of behavior while applying those same per-element rules; an empty array
- * matches nothing.
- *
- * Invalid regex sources are rejected by config validation before an assert can
- * reach this matcher. Exact string matches therefore need anchors, such as
- * `^bash$`.
- *
- * Tool adapters use `{ ...event.input, toolName }`. Lifecycle adapters use a
- * bounded record containing `event` and documented scalar event metadata.
- */
-export function matchFilter(
-  filter: Record<string, unknown> | undefined,
-  candidate: Record<string, unknown>,
-): boolean {
-  if (!filter) return true;
-
-  for (const [key, expected] of Object.entries(filter)) {
-    const actual = resolveFilterField(candidate, key);
-    if (Array.isArray(expected)) {
-      if (!expected.some((value) => matchFilterScalar(value, actual))) return false;
-    } else if (!matchFilterScalar(expected, actual)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Env logging (debug)
-// ---------------------------------------------------------------------------
-
-/**
- * Debug helper: when `PIASSERT_LOG_ENV` is set to `"true"` (case-insensitive),
- * append a JSONL record describing an env about to be handed to a shell to
- * `~/.pi/.assert-env-log/<YYYY-MM-DD>.jsonl`.
- *
- * Called from each `build*Env` so every env creation (one per matching
- * assert per event) is logged. Records contain only the env + hook + ISO
- * timestamp — no shell results, no assert identity. File I/O failures are
- * swallowed so logging can never break an assert.
- */
-function logEnv(
-  env: Record<string, string>,
-  hook: Hook,
-): void {
-  if (process.env.PIASSERT_LOG_ENV?.toLowerCase() !== "true") return;
-
-  try {
-    const dir = join(dirname(globalFilePath()), ".assert-env-log");
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    const file = join(dir, `${today}.jsonl`);
-    const record = JSON.stringify({
-      ts: new Date().toISOString(),
-      hook,
-      env,
-    });
-    mkdirSync(dir, { recursive: true });
-    appendFileSync(file, record + "\n");
-  } catch {
-    // Never let logging break an assert.
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Environment builder
-// ---------------------------------------------------------------------------
-
-function addNonEmptyString(
-  target: Record<string, string>,
-  key: string,
-  value: string | undefined | null,
-): void {
-  if (typeof value === "string" && value.length > 0) target[key] = value;
-}
-
-function addFiniteNumber(
-  target: Record<string, string>,
-  key: string,
-  value: number | null | undefined,
-): void {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    target[key] = String(value);
-  }
-}
-
-/**
- * Resolve one bounded snapshot of Pi session, model, runtime, and context usage
- * metadata. Optional or unknown values are omitted rather than stringified.
- */
-export function buildPiContextMetadataSnapshot(
-  ctx: ExtensionContext,
-): PiContextMetadataSnapshot {
-  if (ctx.metadataSnapshot) return ctx.metadataSnapshot;
-
-  const metadata: Record<string, string> = {};
-  const session = ctx.sessionManager;
-  addNonEmptyString(metadata, "PI_SESSION_ID", session?.getSessionId?.());
-  addNonEmptyString(metadata, "PI_SESSION_FILE", session?.getSessionFile?.());
-  addNonEmptyString(metadata, "PI_SESSION_NAME", session?.getSessionName?.());
-  addNonEmptyString(metadata, "PI_SESSION_LEAF_ID", session?.getLeafId?.());
-
-  addNonEmptyString(metadata, "PI_PROVIDER", ctx.model?.provider);
-  addNonEmptyString(metadata, "PI_MODEL", ctx.model?.id);
-  addNonEmptyString(
-    metadata,
-    "PI_REASONING_LEVEL",
-    ctx.thinkingLevel ?? ctx.getThinkingLevel?.(),
-  );
-  addNonEmptyString(metadata, "PI_MODE", ctx.mode);
-  if (ctx.isProjectTrusted) {
-    metadata.PI_PROJECT_TRUSTED = ctx.isProjectTrusted() ? "true" : "false";
-  }
-
-  const usage = ctx.getContextUsage?.();
-  if (usage) {
-    addFiniteNumber(metadata, "PI_CONTEXT_TOKENS", usage.tokens);
-    addFiniteNumber(metadata, "PI_CONTEXT_WINDOW", usage.contextWindow);
-    addFiniteNumber(metadata, "PI_CONTEXT_PERCENT", usage.percent);
-  }
-
-  return Object.freeze(metadata) as PiContextMetadataSnapshot;
-}
-
-/**
- * Build the environment variables passed to shell commands for tool_call hooks.
- */
-export function buildEnv(
-  event: ToolCallEvent,
-  ctx: ExtensionContext,
-): AssertEnv {
-  const env: AssertEnv = {
-    ...buildPiContextMetadataSnapshot(ctx),
-    PI_EVENT: "tool_call",
-    PI_TOOL_NAME: event.toolName,
-    PI_TOOL_CALL_ID: event.toolCallId,
-    PI_TOOL_INPUT: JSON.stringify(event.input),
-    PI_CWD: ctx.cwd,
-  };
-  logEnv(env, "tool_call");
-  return env;
-}
-
-/**
- * Build the environment shared by non-tool native and synthetic adapters. The
- * payload is the bounded filter candidate, never the complete native event.
- */
-export function buildLifecycleEnv(
-  hook: Hook,
-  payload: Record<string, unknown>,
-  ctx: ExtensionContext,
-): LifecycleEnv {
-  const env: LifecycleEnv = {
-    ...buildPiContextMetadataSnapshot(ctx),
-    PI_EVENT: hook,
-    PI_EVENT_PAYLOAD: JSON.stringify(payload),
-    PI_CWD: ctx.cwd,
-  };
-  logEnv(env, hook);
-  return env;
-}
-
-/** Backward-compatible agent_end environment builder. */
-export function buildAgentEndEnv(
-  _event: AgentEndEvent,
-  ctx: ExtensionContext,
-): AgentEndEnv {
-  return buildLifecycleEnv("agent_end", { event: "agent_end" }, ctx);
-}
-
-/**
- * Build the environment variables passed to shell commands for tool_result hooks.
- *
- * `PI_TOOL_RESULT` is the concatenation of all text content blocks joined by
- * `\n`. Image content blocks are skipped (no textual representation to grep
- * against).
- */
-export function buildResultEnv(
-  event: ToolResultEvent,
-  ctx: ExtensionContext,
-): ToolResultEnv {
-  const textSegments = event.content
-    .filter((c): c is TextContent => c.type === "text")
-    .map((c) => c.text);
-
-  const env: ToolResultEnv = {
-    ...buildPiContextMetadataSnapshot(ctx),
-    PI_EVENT: "tool_result",
-    PI_TOOL_NAME: event.toolName,
-    PI_TOOL_CALL_ID: event.toolCallId,
-    PI_TOOL_INPUT: JSON.stringify(event.input),
-    PI_TOOL_RESULT: textSegments.join("\n"),
-    PI_TOOL_IS_ERROR: event.isError ? "true" : "false",
-    PI_CWD: ctx.cwd,
-  };
-  logEnv(env, "tool_result");
-  return env;
-}
-
-// ---------------------------------------------------------------------------
-// Shell execution
-// ---------------------------------------------------------------------------
-
-const DEFAULT_TIMEOUT_MS = 5_000;
-
-/** Every environment key owned by pi-assert rather than inherited ambiently. */
-const ASSERT_MANAGED_ENV_KEYS = [
-  "PI_SESSION_ID",
-  "PI_SESSION_FILE",
-  "PI_SESSION_NAME",
-  "PI_SESSION_LEAF_ID",
-  "PI_PROVIDER",
-  "PI_MODEL",
-  "PI_REASONING_LEVEL",
-  "PI_MODE",
-  "PI_PROJECT_TRUSTED",
-  "PI_CONTEXT_TOKENS",
-  "PI_CONTEXT_WINDOW",
-  "PI_CONTEXT_PERCENT",
-  "PI_ASSERT_REF",
-  "PI_ASSERT_HOOK",
-  "PI_ASSERT_RUN_ID",
-  "PI_EVENT",
-  "PI_EVENT_PAYLOAD",
-  "PI_TOOL_NAME",
-  "PI_TOOL_CALL_ID",
-  "PI_TOOL_INPUT",
-  "PI_TOOL_RESULT",
-  "PI_TOOL_IS_ERROR",
-  "PI_CWD",
-] as const;
-
-/**
- * Run a shell command and return `true` if it exits with code 0 (pass).
- *
- * Uses `child_process.exec` so pipes, redirects, `&&`, `||` all work via a
- * real shell — just like pi's bash tool.  `"false"` is handled as a normal
- * command: the Unix `false` binary exits 1 → blocked.
- */
-export interface ShellResult {
-  passed: boolean;
-  code: number | null;
-}
-
-export function evaluateShell(
-  shell: string,
-  env: Record<string, string>,
-  signal?: AbortSignal,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-  cwd?: string,
-): Promise<ShellResult> {
-  return new Promise<ShellResult>((resolve) => {
-    // Inherit unrelated ambient values such as PATH and PI_CODING_AGENT, but
-    // remove every key managed by pi-assert before overlaying the current
-    // invocation. This prevents nested Pi sessions from leaking stale values.
-    const inheritedEnv = { ...process.env };
-    for (const key of ASSERT_MANAGED_ENV_KEYS) delete inheritedEnv[key];
-    const mergedEnv = { ...inheritedEnv, ...env, ...(cwd ? { PWD: cwd } : {}) };
-
-    try {
-      const child = exec(shell, {
-        env: mergedEnv,
-        timeout: timeoutMs,
-        signal,
-        cwd,
-        // shell: defaults to /bin/sh on Unix, which is what we want
-      });
-
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        // If the user aborts (AbortError), treat it as a block.
-        if (err.name === "AbortError" || (signal?.aborted ?? false)) {
-          resolve({ passed: false, code: null });
-          return;
-        }
-        // `killed` is set on ChildProcess error events (timeout / signal) but
-        // not exposed on the `ErrnoException` type.  Cast through `unknown`
-        // so we don't lie about the static type while still reading the
-        // runtime property Node sets.
-        const killed = (err as unknown as { killed?: boolean }).killed;
-        if (killed) {
-          // Timeout or signal killed the process → block.
-          resolve({ passed: false, code: null });
-          return;
-        }
-        // Other errors (e.g. shell binary not found) → block.
-        resolve({ passed: false, code: null });
-      });
-
-      child.on("close", (code: number | null) => {
-        // exit 0 → pass, everything else → block
-        resolve({ passed: code === 0, code });
-      });
-    } catch {
-      // Invalid commands/options can make exec throw synchronously. They are
-      // execution failures too and must never escape a cancellable guard.
-      resolve({ passed: false, code: null });
-    }
-  });
 }

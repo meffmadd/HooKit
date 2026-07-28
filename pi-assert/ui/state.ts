@@ -5,8 +5,13 @@ import {
   loadAsserts,
   type Assert,
   type LoadError,
+  type ShellAssert,
 } from "../engine.js";
 import { AssertIndex, entryKey, parseEntryRef } from "../domain/entry.js";
+import {
+  createActiveAssertionSet,
+  type ActiveAssertionSet,
+} from "../hook-evaluation/index.js";
 
 // ---------------------------------------------------------------------------
 // Preset resolution — shared by active execution and panel coverage.
@@ -207,8 +212,9 @@ export class AssertsState {
    * `name`; `owner/repo/name` → source `owner/repo`, name `name`.
    *
    * Only ever pushes non-preset members, so the result is effectively a
-   * `ShellAssert[]` at runtime (typed `Assert[]` so `runAsserts` keeps its
-   * `isPreset` guard for narrowing — see {@link runAsserts}).
+   * shell-assertion list at runtime. UI callers retain this list view while
+   * production execution consumes the immutable set returned by
+   * `activeAssertionSet()`.
    */
   activeList(): Assert[] {
     const out: Assert[] = [];
@@ -231,5 +237,14 @@ export class AssertsState {
       }
     }
     return out;
+  }
+
+  /** Snapshot current activation and preset expansion for one evaluation. */
+  activeAssertionSet(): ActiveAssertionSet {
+    return createActiveAssertionSet(
+      this.activeList().filter(
+        (assertion): assertion is ShellAssert => !isPreset(assertion),
+      ),
+    );
   }
 }

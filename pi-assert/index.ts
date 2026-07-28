@@ -2,82 +2,109 @@ import type {
   ExtensionAPI,
   ExtensionContext as PiExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { AssertsState } from "./ui/state.js";
-import { registerAssertsCommand } from "./ui/asserts.js";
 import { clearRepoEntriesCache } from "./installer.js";
-import {
-  dispatchAssertResults,
-  executeHookAssertsWithResults,
-  formatRunReport,
-  type RunRecord,
-} from "./executor.js";
-import {
-  getHookAdapter,
-  type HookAdapterOutcome,
-  type HookEventMap,
-} from "./adapters.js";
 import type { NativeHook } from "./domain/entry.js";
-import type { ExtensionContext as AssertExtensionContext } from "./engine.js";
+import {
+  HookEvaluation,
+  type EvaluationEffect,
+  type HookEvaluationResult,
+  type HookEventMap,
+  type HookExecutionContext,
+  type RuntimeMetadataSnapshot,
+} from "./hook-evaluation/index.js";
+import { registerAssertsCommand } from "./ui/asserts.js";
+import { AssertsState } from "./ui/state.js";
 
 type ThinkingAwareContext = PiExtensionContext & {
   readonly thinkingLevel?: string;
 };
 
-function projectIsTrusted(ctx: PiExtensionContext): boolean {
-  const trustAware = ctx as PiExtensionContext & {
-    isProjectTrusted?: () => boolean;
-  };
-  // Fail closed when running against a Pi build too old to expose trust.
-  return trustAware.isProjectTrusted?.() ?? false;
+function safeRead<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
 }
 
-/** Project Pi's rich context onto the bounded assertion-engine seam. */
+function projectIsTrusted(ctx: PiExtensionContext): boolean {
+  return safeRead(() => ctx.isProjectTrusted?.() ?? false) ?? false;
+}
+
+function addString(
+  metadata: Record<string, string>,
+  key: string,
+  value: unknown,
+): void {
+  if (typeof value === "string" && value.length > 0) metadata[key] = value;
+}
+
+function addNumber(
+  metadata: Record<string, string>,
+  key: string,
+  value: unknown,
+): void {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    metadata[key] = String(value);
+  }
+}
+
+/** Snapshot Pi's rich callback context once onto the bounded module seam. */
 function assertionContext(
   pi: ExtensionAPI,
   ctx: PiExtensionContext,
-): AssertExtensionContext {
-  const thinkingAware = ctx as ThinkingAwareContext;
-  return {
+): HookExecutionContext {
+  const metadata: Record<string, string> = {};
+  const session = ctx.sessionManager;
+  addString(metadata, "PI_SESSION_ID", safeRead(() => session.getSessionId()));
+  addString(metadata, "PI_SESSION_FILE", safeRead(() => session.getSessionFile()));
+  addString(metadata, "PI_SESSION_NAME", safeRead(() => session.getSessionName()));
+  addString(metadata, "PI_SESSION_LEAF_ID", safeRead(() => session.getLeafId()));
+  addString(metadata, "PI_PROVIDER", safeRead(() => ctx.model?.provider));
+  addString(metadata, "PI_MODEL", safeRead(() => ctx.model?.id));
+
+  const thinking = safeRead(() => (ctx as ThinkingAwareContext).thinkingLevel) ??
+    safeRead(() => pi.getThinkingLevel());
+  addString(metadata, "PI_REASONING_LEVEL", thinking);
+  addString(metadata, "PI_MODE", safeRead(() => ctx.mode));
+
+  const trusted = safeRead(() => ctx.isProjectTrusted?.());
+  if (typeof trusted === "boolean") {
+    metadata.PI_PROJECT_TRUSTED = trusted ? "true" : "false";
+  }
+
+  const usage = safeRead(() => ctx.getContextUsage?.());
+  if (usage) {
+    addNumber(metadata, "PI_CONTEXT_TOKENS", usage.tokens);
+    addNumber(metadata, "PI_CONTEXT_WINDOW", usage.contextWindow);
+    addNumber(metadata, "PI_CONTEXT_PERCENT", usage.percent);
+  }
+
+  return Object.freeze({
     cwd: ctx.cwd,
     signal: ctx.signal,
-    sessionManager: ctx.sessionManager,
-    model: ctx.model,
-    getThinkingLevel: () =>
-      thinkingAware.thinkingLevel ?? pi.getThinkingLevel(),
-    mode: ctx.mode,
-    isProjectTrusted: ctx.isProjectTrusted?.bind(ctx),
-    getContextUsage: ctx.getContextUsage?.bind(ctx),
-  };
+    metadata: Object.freeze(metadata) as RuntimeMetadataSnapshot,
+  });
 }
 
-// ---------------------------------------------------------------------------
-// pi-assert extension entry point.
-//
-// This file is intentionally thin: it owns the lifecycle wiring (session
-// start, session tree, hook events) and delegates everything else to the
-// `ui/` modules.
-// ---------------------------------------------------------------------------
+/** pi-assert extension entry point and thin Pi-specific adapter. */
 export default function (pi: ExtensionAPI) {
   const state = new AssertsState(pi);
-  const correctiveFingerprints = new Map<string, string>();
-  let promptRuns: RunRecord[] = [];
+  const hookEvaluation = new HookEvaluation();
 
-  // ── Load asserts on session start ─────────────────────────────────
   pi.on("session_start", (_event, ctx) => {
-    // The repo-entry cache is intentionally scoped to a Pi session.
     clearRepoEntriesCache();
-    correctiveFingerprints.clear();
     state.load(ctx.cwd, projectIsTrusted(ctx));
 
-    // Hard-fail: if either asserts.json file failed to parse, do NOT restore
-    // any active set, do NOT install any asserts, and tell the user.
     if (state.broken) {
-      const n = state.loadErrors.length;
+      const count = state.loadErrors.length;
       const details = state.loadErrors
-        .map((e) => `  • ${e.path}: ${e.reason}`)
+        .map((error) => `  • ${error.path}: ${error.reason}`)
         .join("\n");
       ctx.ui.notify(
-        `pi-assert: failed to parse ${n} config file${n === 1 ? "" : "s"}; no asserts are active.\n${details}`,
+        `pi-assert: failed to parse ${count} config file${
+          count === 1 ? "" : "s"
+        }; no asserts are active.\n${details}`,
         "error",
       );
       state.updateStatus(ctx);
@@ -86,163 +113,100 @@ export default function (pi: ExtensionAPI) {
 
     state.restore(ctx);
     state.updateStatus(ctx);
-
     if (state.asserts.length > 0) {
       ctx.ui.notify(
-        `pi-assert: ${state.asserts.length} rule${state.asserts.length === 1 ? "" : "s"} loaded (${state.active.size} enabled)`,
+        `pi-assert: ${state.asserts.length} rule${
+          state.asserts.length === 1 ? "" : "s"
+        } loaded (${state.active.size} enabled)`,
         "info",
       );
     }
   });
 
   pi.on("agent_start", () => {
-    promptRuns = [];
+    hookEvaluation.beginPrompt();
   });
 
-  // ── Restore state when navigating the session tree ────────────────
   pi.on("session_tree", (_event, ctx) => {
     state.restore(ctx);
     state.updateStatus(ctx);
   });
 
-  // ── /asserts command ──────────────────────────────────────────────
   registerAssertsCommand(pi, state);
 
-  /** Run one registered adapter and dispatch its declared user feedback. */
+  async function deliverEffects(
+    effects: readonly EvaluationEffect[],
+    ctx: PiExtensionContext,
+  ): Promise<void> {
+    for (const effect of effects) {
+      try {
+        if (effect.type === "present") {
+          if (ctx.hasUI) ctx.ui.notify(effect.message, effect.severity);
+        } else {
+          pi.sendMessage(
+            {
+              customType: "pi-assert",
+              content: effect.message,
+              display: true,
+            },
+            { triggerTurn: true },
+          );
+        }
+      } catch {
+        // Every delivery is best-effort; continue with later ordered effects.
+      }
+    }
+  }
+
+  async function displayControlOutcome(
+    result: HookEvaluationResult,
+    ctx: PiExtensionContext,
+  ): Promise<void> {
+    if (
+      result.outcome !== "block" &&
+      result.outcome !== "patch" &&
+      result.outcome !== "cancel"
+    ) {
+      return;
+    }
+    try {
+      if (ctx.hasUI) ctx.ui.notify(result.reason, "error");
+    } catch {
+      // Native control translation below must not depend on presentation.
+    }
+  }
+
   async function runHook<H extends NativeHook>(
     hook: H,
     event: HookEventMap[H],
     ctx: PiExtensionContext,
-  ): Promise<HookAdapterOutcome | undefined> {
-    const adapter = getHookAdapter(hook);
-    const activeAsserts = state.activeList();
-    const assertCtx = assertionContext(pi, ctx);
-    const execution = await executeHookAssertsWithResults(
-      activeAsserts,
-      adapter,
-      event,
-      assertCtx,
-      (record) => promptRuns.push(record),
-    );
-
-    // The originating decision is computed before handlers run and is never
-    // passed to them. Synthetic feedback and infrastructure failures are
-    // best-effort so they cannot replace that decision.
-    const outcome = execution.outcome;
-    try {
-      await dispatchAssertResults(
-        activeAsserts,
-        execution.results,
-        assertCtx,
-        (message) => {
-          if (ctx.hasUI) ctx.ui.notify(message, "error");
-        },
-      );
-    } catch (error) {
-      // The dispatcher isolates each handler; this outer boundary also covers
-      // unexpected setup failures without leaking into Pi's native callback.
-      try {
-        const detail = error instanceof Error ? error.message : String(error);
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `pi-assert: assert_result dispatch failed — ${detail}`,
-            "error",
-          );
-        }
-      } catch {
-        // Reporting synthetic-dispatch infrastructure is best-effort.
-      }
-    }
-
-    // Preserve the existing quiet summary boundary at agent_end. turn_end runs
-    // are included; agent_settled and session guards have their own feedback.
-    if (hook === "agent_end" && promptRuns.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(formatRunReport(promptRuns), "info");
-    }
-
-    if (!outcome) {
-      if (adapter.feedback === "corrective-turn") {
-        correctiveFingerprints.delete(hook);
-      }
-      return undefined;
-    }
-
-    if (adapter.feedback === "notify-error") {
-      if (ctx.hasUI) ctx.ui.notify(outcome.feedbackMessage, "error");
-      return outcome;
-    }
-
-    // Corrective feedback is adapter-declared but dispatched centrally. This
-    // keeps identical-failure retry suppression out of the execution core.
-    if (outcome.action !== "report") return outcome;
-    const fingerprint = outcome.fingerprint ?? outcome.messages.join("\n");
-    if (correctiveFingerprints.get(hook) === fingerprint) {
-      if (ctx.hasUI) {
-        ctx.ui.notify(
-          outcome.repeatedFeedbackMessage ??
-            "pi-assert: assertions still fail; automatic retry stopped.",
-          "error",
-        );
-      }
-      return outcome;
-    }
-    correctiveFingerprints.set(hook, fingerprint);
-    pi.sendMessage(
-      {
-        customType: "pi-assert",
-        content: outcome.feedbackMessage,
-        display: true,
-      },
-      { triggerTurn: true },
-    );
-    return outcome;
+  ): Promise<HookEvaluationResult<H>> {
+    // Both values are captured synchronously at callback entry. Activation or
+    // rich Pi-context changes during awaits apply only to the next evaluation.
+    const activeSet = state.activeAssertionSet();
+    const context = assertionContext(pi, ctx);
+    const result = await hookEvaluation.evaluate(hook, event, context, activeSet);
+    await deliverEffects(result.effects, ctx);
+    await displayControlOutcome(result, ctx);
+    return result;
   }
 
-  /** Pi treats exceptions from session guards as no cancellation, so fail closed. */
-  async function runSessionGuard<
-    H extends "session_before_switch" | "session_before_fork",
-  >(
-    hook: H,
-    event: HookEventMap[H],
-    ctx: PiExtensionContext,
-  ): Promise<{ cancel: true } | undefined> {
-    try {
-      const outcome = await runHook(hook, event, ctx);
-      return outcome?.action === "cancel" ? { cancel: true } : undefined;
-    } catch (error) {
-      const label = hook === "session_before_switch" ? "session switch" : "session fork";
-      let detail = "unknown error";
-      try {
-        detail = error instanceof Error ? error.message : String(error);
-      } catch {
-        // Error formatting is best-effort; cancellation is not.
-      }
-      // Feedback must not be able to turn a guard failure into fail-open.
-      try {
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            `pi-assert: ${label} guard failed to execute; action cancelled — ${detail}`,
-            "error",
-          );
-        }
-      } catch {
-        // The cancellation result below is the security boundary.
-      }
-      return { cancel: true };
-    }
-  }
-
-  // Every supported Pi event is a thin binding to the same adapter executor.
   pi.on("tool_call", async (event, ctx) => {
-    const outcome = await runHook("tool_call", event, ctx);
-    if (outcome?.action === "block") {
-      return { block: true, reason: outcome.reason };
+    const result = await runHook("tool_call", event, ctx);
+    if (result.outcome === "block") {
+      return { block: true, reason: result.reason };
     }
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    const outcome = await runHook("tool_result", event, ctx);
-    if (outcome?.action === "patch") return outcome.patch;
+    const result = await runHook("tool_result", event, ctx);
+    if (result.outcome === "patch") {
+      return {
+        content: result.patch.content?.map((block) => ({ ...block })),
+        details: result.patch.details,
+        isError: result.patch.isError,
+      };
+    }
   });
 
   pi.on("turn_end", async (event, ctx) => {
@@ -257,9 +221,13 @@ export default function (pi: ExtensionAPI) {
     await runHook("agent_settled", event, ctx);
   });
 
-  pi.on("session_before_switch", (event, ctx) =>
-    runSessionGuard("session_before_switch", event, ctx));
+  pi.on("session_before_switch", async (event, ctx) => {
+    const result = await runHook("session_before_switch", event, ctx);
+    if (result.outcome === "cancel") return { cancel: true };
+  });
 
-  pi.on("session_before_fork", (event, ctx) =>
-    runSessionGuard("session_before_fork", event, ctx));
+  pi.on("session_before_fork", async (event, ctx) => {
+    const result = await runHook("session_before_fork", event, ctx);
+    if (result.outcome === "cancel") return { cancel: true };
+  });
 }

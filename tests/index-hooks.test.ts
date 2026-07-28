@@ -26,6 +26,7 @@ function extensionHarness(): {
     },
     registerCommand() {},
     appendEntry() {},
+    sendMessage() {},
     getThinkingLevel: () => "high",
   } as unknown as ExtensionAPI;
 
@@ -125,6 +126,147 @@ describe("index synthetic result dispatch", () => {
         { assertionRef: "local/passes", outcome: "pass" },
         { assertionRef: "local/blocks", outcome: "block" },
       ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("index effect and outcome translation", () => {
+  it("delivers ordered effects best-effort before corrective feedback", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-effects-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          "end-check": {
+            description: "request a correction",
+            hook: "agent_end",
+            shell: "false",
+            default: true,
+          },
+          "failing-handler": {
+            description: "present before the summary",
+            hook: "assert_result",
+            shell: "false",
+            default: true,
+          },
+        },
+      }));
+
+      const deliveries: string[] = [];
+      let notificationCount = 0;
+      let checkingEffects = false;
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => {
+            deliveries.push(`present:${message}`);
+            notificationCount++;
+            if (checkingEffects && notificationCount === 1) {
+              throw new Error("first delivery failed");
+            }
+          },
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      (harness.pi as unknown as {
+        sendMessage: (message: { content: string }) => void;
+      }).sendMessage = (message) => {
+        deliveries.push(`corrective:${message.content}`);
+      };
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      deliveries.length = 0;
+      notificationCount = 0;
+      checkingEffects = true;
+
+      await harness.handler("agent_start")({}, ctx);
+      await harness.handler("agent_end")({ messages: [] }, ctx);
+
+      assert.equal(deliveries.length, 3);
+      assert.match(deliveries[0]!, /assert_result assertion failed/);
+      assert.match(deliveries[1]!, /pi-assert ran 1 command/);
+      assert.match(deliveries[2]!, /^corrective:1 assertion failed/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("translates a patch in headless mode without relying on UI delivery", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-patch-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          redact: {
+            description: "suppress results",
+            hook: "tool_result",
+            shell: "false",
+            default: true,
+          },
+        },
+      }));
+
+      const ctx = {
+        cwd: root,
+        hasUI: false,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      ctx.ui.notify = () => {
+        throw new Error("headless notification should not run");
+      };
+
+      const details = { duration: 4 };
+      const patch = await harness.handler("tool_result")(
+        {
+          toolName: "read",
+          toolCallId: "result-1",
+          input: { path: "secret" },
+          content: [{ type: "text", text: "secret" }],
+          isError: false,
+          details,
+        },
+        ctx,
+      ) as { content: Array<{ type: string; text: string }>; details: unknown; isError: boolean };
+
+      assert.equal(patch.isError, true);
+      assert.strictEqual(patch.details, details);
+      assert.match(patch.content[0]!.text, /original tool result was suppressed/);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
