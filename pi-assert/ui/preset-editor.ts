@@ -23,7 +23,11 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 
-import { isPreset, type Assert, type PresetAssert } from "../engine.js";
+import {
+  isCatalogPreset,
+  type CatalogEntry,
+  type CatalogPreset,
+} from "../assertion-catalog/index.js";
 import {
   HINT_ENTER_TOGGLE,
   HINT_ESC_SAVE_BACK,
@@ -62,12 +66,12 @@ export class PresetEditorPanel extends SectionedPanel {
   private selected: Set<string>;
   private _theme!: Theme;
 
-  private shellAsserts: Assert[];
+  private shellAssertions: CatalogEntry[];
   /** Original order preserves dangling/nested refs on an otherwise no-op edit. */
   private initialOrder: string[];
 
   constructor(
-    shellAsserts: Assert[],
+    shellAssertions: CatalogEntry[],
     private presetName: string,
     private description: string,
     selected: Iterable<string>,
@@ -75,8 +79,8 @@ export class PresetEditorPanel extends SectionedPanel {
     super();
     // Self-filter presets: the picker offers only shell asserts, so even if a
     // caller passes the full assert list, presets never appear as pickable rows.
-    this.shellAsserts = shellAsserts.filter((a) => !isPreset(a));
-    this.groups = groupShellBySource(this.shellAsserts);
+    this.shellAssertions = shellAssertions.filter((entry) => !isCatalogPreset(entry));
+    this.groups = groupShellBySource(this.shellAssertions);
     this.nav = new SectionNavigator(
       this.groups.map((g) => ({ items: g.asserts })),
     );
@@ -88,7 +92,7 @@ export class PresetEditorPanel extends SectionedPanel {
   }
 
   protected canSearch(): boolean {
-    return this.shellAsserts.length > 0;
+    return this.shellAssertions.length > 0;
   }
 
   protected get theme(): Theme {
@@ -99,9 +103,9 @@ export class PresetEditorPanel extends SectionedPanel {
     this._theme = theme;
   }
 
-  /** The `"source/name"` ref for an assert (matches `activeList()`'s split). */
-  private refOf(a: Assert): string {
-    return `${a.source}/${a.name}`;
+  /** The `"source/name"` ref used by session preset expansion. */
+  private refOf(entry: CatalogEntry): string {
+    return `${entry.source}/${entry.name}`;
   }
 
   /** The committed selection, retaining refs that have no selectable row. */
@@ -110,7 +114,7 @@ export class PresetEditorPanel extends SectionedPanel {
     const originalSet = new Set(this.initialOrder);
     // Newly selected visible asserts append in picker order. Existing refs
     // retain their exact order, including dangling and nested-preset refs.
-    const added = this.shellAsserts
+    const added = this.shellAssertions
       .map((a) => this.refOf(a))
       .filter((ref) => this.selected.has(ref) && !originalSet.has(ref));
     return [...original, ...added];
@@ -207,7 +211,7 @@ export class PresetEditorPanel extends SectionedPanel {
         return `${badge} ${nameText}  ${descText}`;
       },
       detailFor: (a) =>
-        isPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
+        isCatalogPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
     });
   }
 
@@ -217,7 +221,7 @@ export class PresetEditorPanel extends SectionedPanel {
    * highlighting is consistent between the two views.
    */
   private renderName(
-    a: Assert,
+    a: CatalogEntry,
     base: (s: string) => string,
     highlight: (s: string) => string,
     padding: string,
@@ -266,14 +270,19 @@ export class PresetEditorPanel extends SectionedPanel {
 export async function runPresetEditor(
   ctx: ExtensionContext,
   state: AssertsState,
-  preset: PresetAssert,
+  preset: CatalogPreset,
   description: string,
 ): Promise<PresetEditorResult> {
-  const shellAsserts = state.asserts.filter((a) => !isPreset(a));
+  const shellAssertions = state.entries.filter((entry) => !isCatalogPreset(entry));
   const initial = new Set(preset.preset);
 
   return ctx.ui.custom<PresetEditorResult>((tui, theme, kb, done) => {
-    const panel = new PresetEditorPanel(shellAsserts, preset.name, description, initial);
+    const panel = new PresetEditorPanel(
+      shellAssertions,
+      preset.name,
+      description,
+      initial,
+    );
     panel.setTheme(theme);
     panel.setKeybindings(kb);
 

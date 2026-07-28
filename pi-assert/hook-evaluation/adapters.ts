@@ -1,5 +1,5 @@
-import type { EntryFilter, Hook } from "../domain/entry.js";
-import type { ShellAssert } from "../engine.js";
+import type { Hook, ReadonlyEntryFilter } from "../domain/entry.js";
+import type { ActiveAssertion } from "./assertions.js";
 import {
   buildLifecycleEnvironment,
   buildToolCallEnvironment,
@@ -20,7 +20,7 @@ type FailureAggregation = "first" | "all";
 type FeedbackPolicy = "present-error" | "corrective-turn";
 
 export interface AssertionFailure {
-  readonly assertion: ShellAssert;
+  readonly assertion: ActiveAssertion;
   readonly phase: "when" | "shell";
   readonly command: string;
   readonly result: ShellResult;
@@ -70,7 +70,7 @@ export interface HookAdapter<E> {
   readonly skipIfAborted?: boolean;
   candidate(event: E): Record<string, unknown>;
   matchesFilter?(
-    filter: EntryFilter | undefined,
+    filter: ReadonlyEntryFilter | undefined,
     candidate: Record<string, unknown>,
   ): boolean;
   buildEnvironment(
@@ -164,7 +164,7 @@ const assertResultCandidate = (
 });
 
 function matchAssertResultFilter(
-  filter: EntryFilter | undefined,
+  filter: ReadonlyEntryFilter | undefined,
   candidate: Record<string, unknown>,
 ): boolean {
   if (!filter) return true;

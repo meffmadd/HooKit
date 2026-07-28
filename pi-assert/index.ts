@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext as PiExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { catalogStorageLocations } from "./config.js";
 import { clearRepoEntriesCache } from "./installer.js";
 import type { NativeHook } from "./domain/entry.js";
 import {
@@ -94,12 +95,15 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     clearRepoEntriesCache();
-    state.load(ctx.cwd, projectIsTrusted(ctx));
+    const trusted = projectIsTrusted(ctx);
+    state.load(catalogStorageLocations(ctx.cwd, trusted), trusted);
 
     if (state.broken) {
       const count = state.loadErrors.length;
       const details = state.loadErrors
-        .map((error) => `  • ${error.path}: ${error.reason}`)
+        .map((error) =>
+          `  • ${error.storage ? `${error.storage} storage` : "catalog"}: ${error.reason}`
+        )
         .join("\n");
       ctx.ui.notify(
         `pi-assert: failed to parse ${count} config file${
@@ -113,10 +117,10 @@ export default function (pi: ExtensionAPI) {
 
     state.restore(ctx);
     state.updateStatus(ctx);
-    if (state.asserts.length > 0) {
+    if (state.entries.length > 0) {
       ctx.ui.notify(
-        `pi-assert: ${state.asserts.length} rule${
-          state.asserts.length === 1 ? "" : "s"
+        `pi-assert: ${state.entries.length} rule${
+          state.entries.length === 1 ? "" : "s"
         } loaded (${state.active.size} enabled)`,
         "info",
       );

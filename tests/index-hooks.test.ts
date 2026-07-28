@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import registerExtension from "../pi-assert/index.js";
-import { projectFilePath } from "../pi-assert/config.js";
+import {
+  globalFilePath,
+  projectFilePath,
+} from "../pi-assert/config.js";
 
 type EventHandler = (
   event: Record<string, unknown>,
@@ -39,6 +42,68 @@ function extensionHarness(): {
     },
   };
 }
+
+describe("index catalog authorization", () => {
+  it("omits untrusted project storage before catalog creation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-untrusted-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const cwd = join(root, "workspace");
+      const globalPath = globalFilePath();
+      mkdirSync(dirname(globalPath), { recursive: true });
+      writeFileSync(globalPath, JSON.stringify({
+        local: {
+          global: {
+            description: "trusted global guard",
+            hook: "tool_call",
+            shell: "false",
+            default: true,
+          },
+        },
+      }));
+      const projectPath = projectFilePath(cwd);
+      mkdirSync(dirname(projectPath), { recursive: true });
+      writeFileSync(projectPath, "{ malformed and untrusted");
+
+      const notifications: string[] = [];
+      const ctx = {
+        cwd,
+        hasUI: true,
+        isProjectTrusted: () => false,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => notifications.push(message),
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      const result = await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "global", input: {} },
+        ctx,
+      );
+
+      assert.deepStrictEqual(result, {
+        block: true,
+        reason: 'pi-assert: assertion "global" rejected bash — `false`',
+      });
+      assert.ok(!notifications.some((message) => message.includes("failed to parse")));
+      assert.equal(readFileSync(projectPath, "utf8"), "{ malformed and untrusted");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("index synthetic result dispatch", () => {
   it("awaits detached handlers without changing the originating block", async () => {

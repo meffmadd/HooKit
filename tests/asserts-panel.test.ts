@@ -6,10 +6,14 @@ import { describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { AssertsPanel } from "../pi-assert/ui/asserts.js";
-import type { AssertsState } from "../pi-assert/ui/state.js";
-import type { Assert } from "../pi-assert/engine.js";
+import { AssertsState } from "../pi-assert/ui/state.js";
+import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
 import { clearRepoEntriesCache } from "../pi-assert/installer.js";
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -29,22 +33,33 @@ function makeAssert(
   source = "local",
   isDefault = false,
   opts: { shell?: string; when?: string } = {},
-): Assert {
+): CatalogEntry {
   return {
     name,
     source,
+    description: "d",
     hook: "tool_call",
     shell: opts.shell ?? "true",
     when: opts.when,
     default: isDefault,
-    path: `/tmp/${name}.json`,
   };
 }
 
-function makePanel(asserts: Assert[], active: Set<string> = new Set()): AssertsPanel {
+function makePanel(
+  entries: CatalogEntry[],
+  active: Set<string> = new Set(),
+): AssertsPanel {
   const state = {
-    asserts,
+    entries,
     active,
+    isActive(entry: CatalogEntry) {
+      return active.has(entry.name) || active.has(`${entry.source}\x00${entry.name}`);
+    },
+    enable(entry: CatalogEntry) { active.add(entry.name); },
+    disable(entry: CatalogEntry) { active.delete(entry.name); },
+    disableAll() { active.clear(); },
+    persist() {},
+    updateStatus() {},
   } as unknown as AssertsState;
 
   const panel = new AssertsPanel(state);
@@ -58,14 +73,13 @@ function makePreset(
   refs: string[],
   source = "local",
   isDefault = false,
-): Assert {
+): CatalogEntry {
   return {
     name,
     source,
     description: "d",
     preset: refs,
     default: isDefault,
-    path: `/tmp/${name}.json`,
   };
 }
 
@@ -449,7 +463,7 @@ describe("AssertsPanel", () => {
     let persisted = false;
     let statusUpdated = false;
     const state = {
-      asserts: [makeAssert("alpha"), makeAssert("beta")],
+      entries: [makeAssert("alpha"), makeAssert("beta")],
       active,
       disableAll() { active.clear(); },
       persist() { persisted = true; },
@@ -469,7 +483,7 @@ describe("AssertsPanel", () => {
   it("d is a no-op when nothing is active (no persist)", () => {
     let persisted = false;
     const state = {
-      asserts: [makeAssert("alpha")],
+      entries: [makeAssert("alpha")],
       active: new Set<string>(),
       disableAll() { /* should not run */ },
       persist() { persisted = true; },
@@ -803,7 +817,7 @@ describe("AssertsPanel orphaned detection", () => {
     mock.method(globalThis, "fetch", () => { fetchCalled = true; return mockJsonResponse({}); });
 
     const state = {
-      asserts: [makeAssert("rule-a", "some/repo")],
+      entries: [makeAssert("rule-a", "some/repo")],
       active: new Set<string>(),
       broken: true,
     } as unknown as AssertsState;
@@ -1093,16 +1107,10 @@ describe("AssertsPanel fuzzy search", () => {
 
   it("Enter toggles the focused match", () => {
     const active = new Set<string>();
-    const state = {
-      asserts: [makeAssert("no-env"), makeAssert("write-guard")],
+    const panel = makePanel(
+      [makeAssert("no-env"), makeAssert("write-guard")],
       active,
-      enable(n: string) { active.add(n); },
-      disable(n: string) { active.delete(n); },
-      persist() {},
-      updateStatus() {},
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
-    panel.setTheme(mockTheme());
+    );
 
     panel.handleInput("/", makeCtx());
     panel.handleInput("e", makeCtx());
@@ -1246,16 +1254,7 @@ describe("AssertsPanel fuzzy search", () => {
 
   it("normal mode: Space no longer toggles (no-op); Enter toggles", () => {
     const active = new Set<string>();
-    const state = {
-      asserts: [makeAssert("alpha")],
-      active,
-      enable(n: string) { active.add(n); },
-      disable(n: string) { active.delete(n); },
-      persist() {},
-      updateStatus() {},
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
-    panel.setTheme(mockTheme());
+    const panel = makePanel([makeAssert("alpha")], active);
 
     panel.handleInput(" ", makeCtx()); // Space — should NOT toggle
     assert.equal(active.size, 0, "Space does not toggle in normal mode");
@@ -1325,11 +1324,7 @@ describe("AssertsPanel fuzzy search", () => {
       underline: (text: string) => `<u>${text}</u>`,
       strikethrough: (text: string) => text,
     } as unknown as Theme;
-    const state = {
-      asserts: [makeAssert("no-env"), makeAssert("write-guard")],
-      active: new Set<string>(),
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
+    const panel = makePanel([makeAssert("no-env"), makeAssert("write-guard")]);
     panel.setTheme(theme);
 
     panel.handleInput("/", makeCtx());
@@ -1349,11 +1344,9 @@ describe("AssertsPanel fuzzy search", () => {
       underline: (text: string) => `<u>${text}</u>`,
       strikethrough: (text: string) => text,
     } as unknown as Theme;
-    const state = {
-      asserts: [makeAssert("alpha", "local", false, { shell: "run env-check" })],
-      active: new Set<string>(),
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
+    const panel = makePanel([
+      makeAssert("alpha", "local", false, { shell: "run env-check" }),
+    ]);
     panel.setTheme(theme);
     panel.handleInput("/", makeCtx());
     for (const ch of "env") panel.handleInput(ch, makeCtx());
@@ -1424,16 +1417,10 @@ describe("AssertsPanel presets", () => {
 
   it("toggles a preset's active state like a shell assert", () => {
     const active = new Set<string>();
-    const state = {
-      asserts: [makePreset("bundle", ["local/guard"])],
+    const panel = makePanel(
+      [makePreset("bundle", ["local/guard"])],
       active,
-      enable(n: string) { active.add(n); },
-      disable(n: string) { active.delete(n); },
-      persist() {},
-      updateStatus() {},
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
-    panel.setTheme(mockTheme());
+    );
     const ctx = makeCtx();
     // Enter toggles active on, regardless of assert kind.
     panel.handleInput("\r", ctx);
@@ -1544,16 +1531,10 @@ describe("AssertsPanel preset coverage status", () => {
 
   it("updates coverage status after toggling the preset off", () => {
     const active = new Set<string>(["safety"]);
-    const state = {
-      asserts: [makeAssert("guard"), makePreset("safety", ["local/guard"])],
+    const panel = makePanel(
+      [makeAssert("guard"), makePreset("safety", ["local/guard"])],
       active,
-      enable(n: string) { active.add(n); },
-      disable(n: string) { active.delete(n); },
-      persist() {},
-      updateStatus() {},
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
-    panel.setTheme(mockTheme());
+    );
     const ctx = makeCtx();
 
     // Initially: guard shows 'active · via safety'.
@@ -1581,16 +1562,18 @@ describe("AssertsPanel preset coverage status", () => {
 
 // ═══════════════════════════════════════════════════════════════════
 // M3 — Presets section, p/n keys, badges, dangling-ref (§) detection,
-//      and write-back via selected.source/selected.path.
+//      and source-qualified catalog mutations.
 // ═══════════════════════════════════════════════════════════════════
 
-import { loadAsserts } from "../pi-assert/engine.js";
 import { createLocalPreset } from "../pi-assert/ui/asserts.js";
+import { projectFilePath } from "../pi-assert/config.js";
 import {
-  projectFilePath,
-  readSectionedFile,
-} from "../pi-assert/config.js";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1604,20 +1587,28 @@ function tagTheme(): Theme {
   } as unknown as Theme;
 }
 
-/** Build a panel from a real on-disk config so `path`/`source` are populated. */
+function stateFromDir(
+  cwd: string,
+  active: Set<string> = new Set(),
+): AssertsState {
+  const state = new AssertsState({ appendEntry() {} } as unknown as ExtensionAPI);
+  state.load({
+    global: join(cwd, ".global-asserts.json"),
+    project: projectFilePath(cwd),
+  });
+  state.active = active;
+  return state;
+}
+
+/** Build a panel backed by a real Assertion Catalog and temporary files. */
 function panelFromDir(cwd: string, active: Set<string> = new Set()): AssertsPanel {
-  const asserts = loadAsserts(cwd);
-  const state = {
-    asserts,
-    active,
-    enable(n: string) { active.add(n); },
-    disable(n: string) { active.delete(n); },
-    persist() {},
-    updateStatus() {},
-  } as unknown as AssertsState;
-  const panel = new AssertsPanel(state);
+  const panel = new AssertsPanel(stateFromDir(cwd, active));
   panel.setTheme(mockTheme());
   return panel;
+}
+
+function readConfig(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
 // ── Presets section: always present, ordered first ───────────────
@@ -1775,11 +1766,7 @@ describe("AssertsPanel M3: e key (edit preset, local only)", () => {
 describe("AssertsPanel M3: e hint (crossed out for non-local presets)", () => {
   it("shows the e Edit preset hint (normal) for a focused local preset", () => {
     const theme = tagTheme();
-    const state = {
-      asserts: [makePreset("bundle", [], "local")],
-      active: new Set<string>(),
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
+    const panel = makePanel([makePreset("bundle", [], "local")]);
     panel.setTheme(theme);
     panel.handleInput("p", makeCtx()); // focus Presets
     const lines = panel.render(80);
@@ -1791,11 +1778,7 @@ describe("AssertsPanel M3: e hint (crossed out for non-local presets)", () => {
 
   it("crosses out the e Edit preset hint for a focused non-local preset", () => {
     const theme = tagTheme();
-    const state = {
-      asserts: [makePreset("bundle", [], "owner/repo")],
-      active: new Set<string>(),
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
+    const panel = makePanel([makePreset("bundle", [], "owner/repo")]);
     panel.setTheme(theme);
     panel.handleInput("p", makeCtx()); // focus Presets
     const lines = panel.render(80);
@@ -1823,14 +1806,10 @@ describe("AssertsPanel M3: e hint (crossed out for non-local presets)", () => {
 describe("AssertsPanel M3: badges", () => {
   it("renders a ❄ badge on non-local presets (read-only), none on local", () => {
     const theme = tagTheme();
-    const state = {
-      asserts: [
-        makePreset("local-p", [], "local"),
-        makePreset("repo-p", [], "owner/repo"),
-      ],
-      active: new Set<string>(),
-    } as unknown as AssertsState;
-    const panel = new AssertsPanel(state);
+    const panel = makePanel([
+      makePreset("local-p", [], "local"),
+      makePreset("repo-p", [], "owner/repo"),
+    ]);
     panel.setTheme(theme);
     panel.handleInput("p", makeCtx()); // focus Presets
     const lines = panel.render(80);
@@ -1990,13 +1969,12 @@ describe("AssertsPanel M3: ❄ non-editable detail", () => {
   });
 });
 
-// ── Write-back uses selected.source / selected.path ────────────────
+// ── Mutations use selected source/name identity ───────────────────
 //
-// The Presets group is synthetic (label "Presets"), so `r`/`t` must write
-// through the preset's real source/path on the Assert object — not the
-// group label.  These use a real on-disk config so the write actually lands.
+// The Presets group is synthetic, so `r`/`t` must use the entry's real
+// Assertion Source rather than the display group label.
 
-describe("AssertsPanel M3: write-back via selected.source/path", () => {
+describe("AssertsPanel M3: source-qualified catalog mutations", () => {
   let tmpRoot: string;
   before(() => {
     tmpRoot = join(tmpdir(), `pi-assert-m3-test-${Date.now()}`);
@@ -2031,9 +2009,8 @@ describe("AssertsPanel M3: write-back via selected.source/path", () => {
     const result = panel.handleInput("y", ctx); // confirm → reload
     assert.equal(result, "reload");
 
-    // The preset must be gone from the `local` section — proving removeRule
-    // was called with selected.source ("local"), not the "Presets" group label.
-    const after = readSectionedFile(projectFilePath(cwd));
+    // The preset is gone from `local`, not a synthetic Presets source.
+    const after = readConfig(projectFilePath(cwd));
     assert.ok(
       !(after.local as Record<string, unknown> | undefined)?.bundle,
       "preset removed from its real source section",
@@ -2046,7 +2023,7 @@ describe("AssertsPanel M3: write-back via selected.source/path", () => {
     assert.ok(after.Presets === undefined, "no Presets section on disk");
   });
 
-  it("t toggles default through the preset's real source/path", () => {
+  it("t toggles default through the preset's source/name identity", () => {
     const cwd = join(tmpRoot, "toggle-preset");
     writeConfig(cwd, {
       local: {
@@ -2059,7 +2036,7 @@ describe("AssertsPanel M3: write-back via selected.source/path", () => {
 
     panel.handleInput("t", makeCtx());
 
-    const after = readSectionedFile(projectFilePath(cwd));
+    const after = readConfig(projectFilePath(cwd));
     const bundle = (after.local as Record<string, unknown>).bundle as Record<string, unknown>;
     assert.equal(bundle.default, true, "default toggled to true on the preset");
     assert.deepEqual(
@@ -2135,15 +2112,14 @@ describe("createLocalPreset", () => {
   it("creates an empty local preset (description '', preset [], no default)", async () => {
     const cwd = join(tmpRoot, "create");
     mkdirSync(cwd, { recursive: true });
-    const asserts = loadAsserts(cwd); // empty
-    const state = { asserts, active: new Set<string>() } as unknown as AssertsState;
+    const state = stateFromDir(cwd);
 
     const { ctx, notifications, drive } = makeCreateCtx(cwd);
     const p = createLocalPreset(ctx, state);
     drive("my-preset");
     await p;
 
-    const after = readSectionedFile(projectFilePath(cwd));
+    const after = readConfig(projectFilePath(cwd));
     const entry = (after.local as Record<string, unknown>)["my-preset"] as Record<string, unknown>;
     assert.deepEqual(entry, { description: "", preset: [] }, "empty preset written");
     assert.ok(
@@ -2158,10 +2134,7 @@ describe("createLocalPreset", () => {
     writeFileSync(projectFilePath(cwd), JSON.stringify({
       local: { "my-preset": { description: "keep me", hook: "tool_call", shell: "false" } },
     }));
-    const state = {
-      asserts: loadAsserts(cwd),
-      active: new Set<string>(),
-    } as unknown as AssertsState;
+    const state = stateFromDir(cwd);
 
     const { ctx, notifications, drive } = makeCreateCtx(cwd);
     const p = createLocalPreset(ctx, state);
@@ -2169,7 +2142,7 @@ describe("createLocalPreset", () => {
     await p;
 
     // The existing assert is untouched (not overwritten with an empty preset).
-    const after = readSectionedFile(projectFilePath(cwd));
+    const after = readConfig(projectFilePath(cwd));
     const entry = (after.local as Record<string, unknown>)["my-preset"] as Record<string, unknown>;
     assert.equal(entry.description, "keep me", "existing entry not clobbered");
     assert.equal(entry.shell, "false", "existing shell preserved");
@@ -2182,10 +2155,7 @@ describe("createLocalPreset", () => {
   it("Esc (null name) creates nothing", async () => {
     const cwd = join(tmpRoot, "cancel");
     mkdirSync(cwd, { recursive: true });
-    const state = {
-      asserts: loadAsserts(cwd),
-      active: new Set<string>(),
-    } as unknown as AssertsState;
+    const state = stateFromDir(cwd);
 
     const { ctx, driveCancel } = makeCreateCtx(cwd);
     const p = createLocalPreset(ctx, state);

@@ -1,164 +1,207 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  AssertsParseError,
-  isPreset,
-  loadAsserts,
-  type Assert,
-  type LoadError,
-  type ShellAssert,
-} from "../engine.js";
+  AssertionCatalog,
+  isCatalogPreset,
+  type CatalogDiagnostic,
+  type CatalogEntry,
+  type CatalogMutation,
+  type CatalogResult,
+  type CatalogShellAssertion,
+  type CatalogStorageLocations,
+} from "../assertion-catalog/index.js";
 import { AssertIndex, entryKey, parseEntryRef } from "../domain/entry.js";
 import {
   createActiveAssertionSet,
   type ActiveAssertionSet,
 } from "../hook-evaluation/index.js";
 
-// ---------------------------------------------------------------------------
-// Preset resolution — shared by active execution and panel coverage.
-// ---------------------------------------------------------------------------
-/** Resolve one level of a preset to installed shell asserts, in ref order. */
-export function resolvePresetMembers(asserts: Assert[], preset: Assert): Assert[] {
-  if (!isPreset(preset)) return [];
-  const index = new AssertIndex(asserts);
-  const members: Assert[] = [];
+/** Resolve one preset level to available shell assertions, in ref order. */
+export function formatCatalogFailure(
+  result: Extract<CatalogResult, { ok: false }>,
+): string {
+  return result.diagnostics
+    .map((diagnostic) =>
+      `${diagnostic.storage ? `${diagnostic.storage} storage: ` : ""}${diagnostic.reason}`
+    )
+    .join("; ");
+}
+
+export function resolvePresetMembers(
+  entries: readonly CatalogEntry[],
+  preset: CatalogEntry,
+): CatalogEntry[] {
+  if (!isCatalogPreset(preset)) return [];
+  const index = new AssertIndex(entries);
+  const members: CatalogEntry[] = [];
   for (const ref of preset.preset) {
     const parsed = parseEntryRef(ref);
     const member = parsed ? index.get(parsed.source, parsed.name) : undefined;
-    if (member && !isPreset(member)) members.push(member);
+    if (member && !isCatalogPreset(member)) members.push(member);
   }
   return members;
 }
 
-// ---------------------------------------------------------------------------
-// AssertsState — owns the model: loaded asserts, active set, persistence,
-// and the status bar entry.
-// ---------------------------------------------------------------------------
+/** Session activation state between Assertion Catalog and Hook Evaluation. */
 export class AssertsState {
-  asserts: Assert[] = [];
+  entries: CatalogEntry[] = [];
   active: Set<string> = new Set();
-
-  /**
-   * `true` when the most recent `load()` failed to parse one or more
-   * asserts.json files.  In that state, `asserts` is always empty and the
-   * status bar shows an error indicator.
-   */
   broken = false;
-
-  /** Per-file parse errors from the most recent `load()`. Empty when healthy. */
-  loadErrors: LoadError[] = [];
-
-  /** Whether project-local config and writes are allowed in this session. */
+  loadErrors: readonly CatalogDiagnostic[] = [];
   projectTrusted = true;
+
+  private catalog?: AssertionCatalog;
+  private locations?: CatalogStorageLocations;
+  private activationMode: "saved" | "defaults" | undefined;
 
   constructor(private pi: ExtensionAPI) {}
 
-  // ── Loading ────────────────────────────────────────────────────────
-  /**
-   * Reload asserts from disk for the given cwd.
-   *
-   * If parsing fails, swallows the `AssertsParseError`, sets `broken = true`,
-   * clears `asserts`, and stores the per-file errors in `loadErrors`.  The
-   * extension must not apply any asserts in that state.  Non-parse errors
-   * (e.g. unexpected runtime issues) are re-thrown.
-   */
-  load(cwd: string, projectTrusted = true): void {
+  /** Create a new session catalog from exactly the authorized locations. */
+  load(
+    locations: CatalogStorageLocations,
+    projectTrusted = locations.project !== undefined,
+  ): void {
+    this.locations = locations;
     this.projectTrusted = projectTrusted;
-    try {
-      this.asserts = loadAsserts(cwd, projectTrusted);
-      this.broken = false;
-      this.loadErrors = [];
-    } catch (err) {
-      if (err instanceof AssertsParseError) {
-        this.asserts = [];
-        this.active = new Set();
-        this.broken = true;
-        this.loadErrors = err.errors;
-        return;
-      }
-      throw err;
+    const result = AssertionCatalog.open(locations);
+    if (!result.ok) {
+      this.catalog = undefined;
+      this.entries = [];
+      this.active = new Set();
+      this.broken = true;
+      this.loadErrors = result.diagnostics;
+      return;
     }
+    this.broken = false;
+    this.loadErrors = [];
+    this.replaceCatalog(result.catalog);
   }
 
-  // ── Status bar ─────────────────────────────────────────────────────
-  /** Update the "pi-assert" status bar entry. */
-  updateStatus(ctx: ExtensionContext): void {
-    const theme = ctx.ui.theme;
+  /** Re-read authorized storage; invalid storage makes the catalog unavailable. */
+  refresh(): CatalogResult {
+    const result = this.catalog?.refresh() ??
+      (this.locations
+        ? AssertionCatalog.open(this.locations)
+        : {
+            ok: false as const,
+            diagnostics: [{ reason: "catalog storage is not configured" }],
+          });
+    if (!result.ok) {
+      this.catalog = undefined;
+      this.entries = [];
+      this.active = new Set();
+      this.broken = true;
+      this.loadErrors = result.diagnostics;
+      return result;
+    }
+    this.broken = false;
+    this.loadErrors = [];
+    this.replaceCatalog(result.catalog);
+    return result;
+  }
 
-    if (this.broken) {
-      const n = this.loadErrors.length;
-      ctx.ui.setStatus(
-        "pi-assert",
-        theme.fg("error", `pi-assert: config error (${n} file${n === 1 ? "" : "s"})`),
+  /**
+   * Replace the immutable catalog snapshot and reconcile activation. Saved
+   * identities survive when still present; default-derived activation is
+   * recomputed from the fresh entries.
+   */
+  replaceCatalog(catalog: AssertionCatalog): void {
+    this.catalog = catalog;
+    this.entries = Array.from(catalog.entries);
+    const valid = new Set(this.entries.map((entry) => this.keyOf(entry)));
+    if (this.activationMode === "defaults") {
+      this.active = new Set(
+        this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
       );
       return;
     }
+    this.active = new Set(Array.from(this.active).filter((key) => valid.has(key)));
+  }
 
-    if (this.asserts.length === 0) {
+  /** Apply catalog intent and accept only a successful fresh snapshot. */
+  mutate(intent: CatalogMutation): CatalogResult {
+    if (!this.catalog) {
+      return {
+        ok: false,
+        diagnostics: this.loadErrors.length > 0
+          ? this.loadErrors
+          : [{ reason: "assertion catalog is unavailable" }],
+      };
+    }
+    const result = this.catalog.mutate(intent);
+    if (result.ok) this.replaceCatalog(result.catalog);
+    return result;
+  }
+
+  get repositories(): readonly string[] {
+    return this.catalog?.repositories ?? [];
+  }
+
+  /** Update the pi-assert status bar entry. */
+  updateStatus(ctx: ExtensionContext): void {
+    const theme = ctx.ui.theme;
+    if (this.broken) {
+      const count = this.loadErrors.length;
+      ctx.ui.setStatus(
+        "pi-assert",
+        theme.fg(
+          "error",
+          `pi-assert: config error (${count} file${count === 1 ? "" : "s"})`,
+        ),
+      );
+      return;
+    }
+    if (this.entries.length === 0) {
       ctx.ui.setStatus("pi-assert", undefined);
       return;
     }
     const color = this.active.size > 0 ? "accent" : "dim";
     ctx.ui.setStatus(
       "pi-assert",
-      theme.fg(color, `asserts: ${this.active.size}/${this.asserts.length}`),
+      theme.fg(color, `asserts: ${this.active.size}/${this.entries.length}`),
     );
   }
 
-  // ── Persistence ────────────────────────────────────────────────────
-  /** Canonical, source-qualified key for an entry. */
-  keyOf(a: Assert): string {
-    return entryKey(a.source, a.name);
+  /** Canonical persisted key used only by session activation storage. */
+  keyOf(entry: CatalogEntry): string {
+    return entryKey(entry.source, entry.name);
   }
 
-  /** Whether this entry is enabled. Legacy bare names only match uniquely. */
-  isActive(a: Assert): boolean {
-    const key = this.keyOf(a);
+  /** Whether this entry is enabled. Legacy bare names match only uniquely. */
+  isActive(entry: CatalogEntry): boolean {
+    const key = this.keyOf(entry);
     if (this.active.has(key)) return true;
-    // Backward compatibility for old session entries and hand-built state in
-    // extensions/tests. Never let a bare name enable colliding entries.
-    return this.active.has(a.name) &&
-      this.asserts.filter((other) => other.name === a.name).length === 1;
+    return this.active.has(entry.name) &&
+      this.entries.filter((other) => other.name === entry.name).length === 1;
   }
 
-  private resolveKey(value: Assert | string): string {
+  private resolveKey(value: CatalogEntry | string): string {
     if (typeof value !== "string") return this.keyOf(value);
     if (value.includes("\x00")) return value;
-    const match = new AssertIndex(this.asserts).resolveLegacyName(value);
+    const match = new AssertIndex(this.entries).resolveLegacyName(value);
     return match ? this.keyOf(match) : value;
   }
 
-  /** Persist the current active set to the session branch. */
+  /** Persist activation to the current session branch. */
   persist(): void {
+    this.activationMode = "saved";
     this.pi.appendEntry("pi-assert-config", {
       activeAsserts: Array.from(this.active),
     });
   }
 
-  /**
-   * Restore the active set from the current session branch.
-   * Falls back to asserts flagged `default: true` if no saved state exists.
-   */
+  /** Restore saved activation, or initialize it from current defaults. */
   restore(ctx: ExtensionContext): void {
     const branchEntries = ctx.sessionManager.getBranch();
     let saved: string[] | undefined;
-
     for (const entry of branchEntries) {
-      if (
-        entry.type === "custom" &&
-        entry.customType === "pi-assert-config"
-      ) {
+      if (entry.type === "custom" && entry.customType === "pi-assert-config") {
         const data = entry.data as { activeAsserts?: string[] } | undefined;
-        if (data?.activeAsserts) {
-          saved = data.activeAsserts;
-        }
+        if (data?.activeAsserts) saved = data.activeAsserts;
       }
     }
 
     if (saved) {
-      // Saved v2 entries are source-qualified. Explicitly migrate old bare
-      // names only when they identify exactly one loaded entry; ambiguous old
-      // entries are dropped rather than enabling every collision.
-      const index = new AssertIndex(this.asserts);
+      const index = new AssertIndex(this.entries);
       const valid = new Set(index.byKey.keys());
       const migrated = saved.flatMap((value) => {
         if (value.includes("\x00")) return valid.has(value) ? [value] : [];
@@ -166,85 +209,58 @@ export class AssertsState {
         return match ? [this.keyOf(match)] : [];
       });
       this.active = new Set(migrated);
+      this.activationMode = "saved";
     } else {
-      // No saved state — enable only asserts with default: true
       this.active = new Set(
-        this.asserts.filter((a) => a.default).map((a) => this.keyOf(a)),
+        this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
       );
+      this.activationMode = "defaults";
     }
   }
 
-  // ── Mutators ───────────────────────────────────────────────────────
-  /** Add a named assert to the active set. */
-  enable(assert: Assert | string): void {
-    this.active.add(this.resolveKey(assert));
+  enable(entry: CatalogEntry | string): void {
+    this.active.add(this.resolveKey(entry));
   }
 
-  /** Remove an assert from the active set. */
-  disable(assert: Assert | string): void {
-    this.active.delete(this.resolveKey(assert));
+  disable(entry: CatalogEntry | string): void {
+    this.active.delete(this.resolveKey(entry));
   }
 
-  /** Remove every assert from the active set. */
   disableAll(): void {
     this.active.clear();
   }
 
-  /** Toggle a named assert's active state. */
-  toggle(assert: Assert | string): void {
-    const key = this.resolveKey(assert);
+  toggle(entry: CatalogEntry | string): void {
+    const key = this.resolveKey(entry);
     if (this.active.has(key)) this.active.delete(key);
     else this.active.add(key);
   }
 
-  /**
-   * Return the asserts that should actually run: active shell asserts, plus
-   * the shell-assert members of active presets (expanded, deduped).
-   *
-   * Single flat pass — no recursion, no cycles.  A preset referencing another
-   * preset is a dangling ref to a preset and is skipped (no nested presets for
-   * v1).  Dangling refs (a `source/name` that isn't installed) are silent at
-   * runtime — they contribute nothing (same as empty); the `§` badge surfaces
-   * it in the UI.  Dedup is by `source\x00name`, so an assert active both
-   * individually and via a preset runs once.
-   *
-   * Refs split on the **last** `/`: `local/name` → source `local`, name
-   * `name`; `owner/repo/name` → source `owner/repo`, name `name`.
-   *
-   * Only ever pushes non-preset members, so the result is effectively a
-   * shell-assertion list at runtime. UI callers retain this list view while
-   * production execution consumes the immutable set returned by
-   * `activeAssertionSet()`.
-   */
-  activeList(): Assert[] {
-    const out: Assert[] = [];
+  private activeAssertions(): CatalogShellAssertion[] {
+    const assertions: CatalogShellAssertion[] = [];
     const seen = new Set<string>();
-    for (const a of this.asserts) {
-      if (!this.isActive(a)) continue;
-      if (isPreset(a)) {
-        for (const member of resolvePresetMembers(this.asserts, a)) {
+    for (const entry of this.entries) {
+      if (!this.isActive(entry)) continue;
+      if (isCatalogPreset(entry)) {
+        for (const member of resolvePresetMembers(this.entries, entry)) {
+          if (isCatalogPreset(member)) continue;
           const key = this.keyOf(member);
           if (seen.has(key)) continue;
           seen.add(key);
-          out.push(member);
+          assertions.push(member);
         }
       } else {
-        const key = this.keyOf(a);
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push(a);
-        }
+        const key = this.keyOf(entry);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        assertions.push(entry);
       }
     }
-    return out;
+    return assertions;
   }
 
-  /** Snapshot current activation and preset expansion for one evaluation. */
+  /** Snapshot current activation and one-level preset expansion. */
   activeAssertionSet(): ActiveAssertionSet {
-    return createActiveAssertionSet(
-      this.activeList().filter(
-        (assertion): assertion is ShellAssert => !isPreset(assertion),
-      ),
-    );
+    return createActiveAssertionSet(this.activeAssertions());
   }
 }

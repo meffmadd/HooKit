@@ -1,5 +1,5 @@
 import { entryRef, type AssertResultEvent, type NativeHook } from "../domain/entry.js";
-import type { ShellAssert } from "../engine.js";
+import type { ActiveAssertion } from "./assertions.js";
 import {
   assertionsIn,
   type ActiveAssertionSet,
@@ -26,6 +26,7 @@ import type {
 
 export { createActiveAssertionSet } from "./active-set.js";
 export type { ActiveAssertionSet } from "./active-set.js";
+export type { ActiveAssertion } from "./assertions.js";
 export type {
   AgentEndEvent,
   AgentSettledEvent,
@@ -108,7 +109,7 @@ function formatExecutionReport(records: readonly ExecutionRecord[]): string {
   } in ${totalMs}ms`;
 }
 
-function handlerErrorMessage(assertion: ShellAssert, error: unknown): string {
+function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string {
   return `pi-assert: assert_result handler "${
     entryRef(assertion.source, assertion.name)
   }" failed to execute — ${formatErrorDetail(error)}`;
@@ -194,7 +195,7 @@ export class HookEvaluation {
     hook: H,
     event: EvaluationEventMap[H],
     context: HookExecutionContext,
-    assertions: readonly ShellAssert[],
+    assertions: readonly ActiveAssertion[],
     adapter: HookAdapter<EvaluationEventMap[H]>,
   ): Promise<HookEvaluationResult<H>> {
     const invocation = await invokeAssertions(
@@ -236,7 +237,7 @@ export class HookEvaluation {
   }
 
   private async dispatchSyntheticResults(
-    assertions: readonly ShellAssert[],
+    assertions: readonly ActiveAssertion[],
     results: readonly AssertResultEvent[],
     context: HookExecutionContext,
   ): Promise<EvaluationEffect[]> {

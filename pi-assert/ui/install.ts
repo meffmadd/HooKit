@@ -1,23 +1,21 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
+import type {
+  CatalogEntry,
+  CatalogInstallation,
+} from "../assertion-catalog/index.js";
 import {
-  addRepo,
   buildRepoPickerItems,
   classifyEntry,
   fetchRuleFile,
   fetchRuleFiles,
   fetchRepoEntries,
-  getInstalledRepos,
-  installRule,
-  removeRuleAt,
-  updateRule,
   REPO_ADD_ACTION,
   type EntryState,
   type RuleEntries,
   type RuleEntry,
   type RuleFile,
 } from "../installer.js";
-import { type ShellAssert, type PresetAssert } from "../engine.js";
 import { entryKey, parseEntryRef } from "../domain/entry.js";
 import {
   HINT_ENTER_CONFIRM,
@@ -32,7 +30,10 @@ import {
   textInputDialog,
   type SelectDialogResult,
 } from "./components.js";
-import type { AssertsState } from "./state.js";
+import {
+  formatCatalogFailure,
+  type AssertsState,
+} from "./state.js";
 
 // ---------------------------------------------------------------------------
 // Step 1: pick (or add) a repo
@@ -67,6 +68,7 @@ async function promptNewRepo(
  */
 async function resolveRepo(
   ctx: ExtensionContext,
+  state: AssertsState,
   choice: string,
 ): Promise<string | null> {
   if (choice !== REPO_ADD_ACTION) return choice;
@@ -74,13 +76,12 @@ async function resolveRepo(
   const newRepo = await promptNewRepo(ctx);
   if (!newRepo) return null;
 
-  try {
-    addRepo(ctx.cwd, newRepo);
-    return newRepo;
-  } catch (err) {
-    ctx.ui.notify(`pi-assert: ${String(err)}`, "error");
+  const result = state.mutate({ type: "add-repository", source: newRepo });
+  if (!result.ok) {
+    ctx.ui.notify(`pi-assert: ${formatCatalogFailure(result)}`, "error");
     return null;
   }
+  return newRepo;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,14 +146,14 @@ async function fetchAndPromptFile(
  *
  * Presets also show a `P` badge. `Enter` is a unified tri-state; the `r` Remove
  * binding is gone (Enter on an installed entry uninstalls, so `r` is redundant).
- * The installed map is caller-supplied (built from `state.asserts`, refreshed
- * by `reload` after each action) so marks/hints reflect the latest install state.
+ * The installed map is caller-supplied from the latest catalog snapshot, so
+ * marks and hints immediately reflect each successful mutation.
  */
 async function promptAssertEntry(
   ctx: ExtensionContext,
   file: RuleFile,
   entries: RuleEntries,
-  installedMap: Map<string, ShellAssert | PresetAssert>,
+  installedMap: Map<string, CatalogEntry>,
   initialIndex?: number,
 ): Promise<SelectDialogResult<string>> {
   const fileName = file.path.replace(/^rules\//, "").replace(/\.json$/, "");
@@ -243,30 +244,16 @@ async function fetchEntries(
 }
 
 // ---------------------------------------------------------------------------
-// Install + state reload
+// Catalog mutations
 // ---------------------------------------------------------------------------
 
-/** Shared install/remove reload tail. */
-function reload(ctx: ExtensionContext, state: AssertsState): void {
-  state.load(ctx.cwd);
-  state.restore(ctx);
-  state.updateStatus(ctx);
-}
-
-/**
- * Install a preset's members (cascade). For each ref in the preset:
- * - `local/*` → skip (local asserts aren't in a repo; missing = dangling §)
- * - `owner/repo/*` → fetch the repo's entries and install the named member if not installed
- *
- * Dedup by `source\x00name`; a missing member is skipped (preset installs anyway, shows §).
- */
-async function installPresetMembers(
+/** Fetch every available, not-yet-installed repository member of a preset. */
+async function preparePresetMembers(
   ctx: ExtensionContext,
   state: AssertsState,
-  refs: string[],
-): Promise<void> {
-  // Deduplicate before starting requests. fetchRepoEntries also shares a
-  // promise per repo, so duplicate refs and same-repo members are one round.
+  refs: readonly string[],
+  reserved: readonly string[] = [],
+): Promise<CatalogInstallation[]> {
   const members = new Map<string, { source: string; name: string }>();
   for (const ref of refs) {
     const parsed = parseEntryRef(ref);
@@ -274,133 +261,139 @@ async function installPresetMembers(
       members.set(entryKey(parsed.source, parsed.name), parsed);
     }
   }
-  const installed = new Set(state.asserts.map((a) => entryKey(a.source, a.name)));
-  // Writes are sequential because every install is a read-modify-write of the
-  // same project file. Repo fetches remain session-cached by fetchRepoEntries.
-  for (const { source, name } of members.values()) {
-    if (installed.has(entryKey(source, name))) continue;
+  const installed = new Set([
+    ...state.entries.map((entry) => entryKey(entry.source, entry.name)),
+    ...reserved,
+  ]);
+  const prepared: CatalogInstallation[] = [];
+  for (const identity of members.values()) {
+    const key = entryKey(identity.source, identity.name);
+    if (installed.has(key)) continue;
     try {
-      const entries = await fetchRepoEntries(source);
-      const entry = entries.get(name);
+      const entries = await fetchRepoEntries(identity.source);
+      const entry = entries.get(identity.name);
       if (!entry) {
-        ctx.ui.notify(`pi-assert: member "${name}" not found in ${source}.`, "warning");
+        ctx.ui.notify(
+          `pi-assert: member "${identity.name}" not found in ${identity.source}.`,
+          "warning",
+        );
         continue;
       }
-      installRule(ctx.cwd, source, name, entry);
-      installed.add(entryKey(source, name));
-      ctx.ui.notify(`pi-assert: installed member "${name}" (via preset).`, "info");
-    } catch (err) {
-      ctx.ui.notify(`pi-assert: failed to fetch member "${name}" — ${String(err)}`, "error");
+      prepared.push({ identity, entry });
+      installed.add(key);
+    } catch (error) {
+      ctx.ui.notify(
+        `pi-assert: failed to fetch member "${identity.name}" — ${String(error)}`,
+        "error",
+      );
     }
   }
+  return prepared;
 }
 
-async function installAndReload(
+export async function installRepositoryEntry(
   ctx: ExtensionContext,
   state: AssertsState,
   repo: string,
   name: string,
   entry: RuleEntry,
 ): Promise<void> {
-  let overwritten: boolean;
-  try {
-    overwritten = installRule(ctx.cwd, repo, name, entry);
-  } catch (err) {
+  const identity = { source: repo, name };
+  const primary: CatalogInstallation = { identity, entry };
+  const members = "preset" in entry
+    ? await preparePresetMembers(
+        ctx,
+        state,
+        entry.preset,
+        [entryKey(repo, name)],
+      )
+    : [];
+  const result = state.mutate({
+    type: "install",
+    entries: [primary, ...members],
+  });
+  if (!result.ok) {
     ctx.ui.notify(
-      `pi-assert: failed to install "${name}" — ${String(err)}`,
+      `pi-assert: failed to install "${name}" — ${formatCatalogFailure(result)}`,
       "error",
     );
     return;
   }
-
-  // Cascade: if installing a preset, install its members
-  if ("preset" in entry) {
-    await installPresetMembers(ctx, state, entry.preset);
+  state.updateStatus(ctx);
+  for (const member of members) {
+    ctx.ui.notify(
+      `pi-assert: installed member "${member.identity.name}" (via preset).`,
+      "info",
+    );
   }
-
-  // Reload only after the complete cascade settles so newly enabled presets
-  // immediately resolve their installed members.
-  reload(ctx, state);
   ctx.ui.notify(
     `pi-assert: installed "${name}". Use /asserts to enable it.`,
     "info",
   );
-  if (overwritten) {
-    ctx.ui.notify(
-      `pi-assert: overwrote existing ${"preset" in entry ? "preset" : "assert"} "${name}" in "${repo}".`,
-      "warning",
-    );
-  }
 }
 
-function removeAndReload(
+function removeEntry(
   ctx: ExtensionContext,
   state: AssertsState,
   repo: string,
   name: string,
-  installed: ShellAssert | PresetAssert,
 ): void {
-  let removed: boolean;
-  try {
-    if (!installed.path) throw new Error(`entry "${name}" has no owning file`);
-    removed = removeRuleAt(installed.path, repo, name);
-  } catch (err) {
+  const result = state.mutate({
+    type: "remove",
+    identity: { source: repo, name },
+  });
+  if (!result.ok) {
     ctx.ui.notify(
-      `pi-assert: failed to remove "${name}" — ${String(err)}`,
+      `pi-assert: failed to remove "${name}" — ${formatCatalogFailure(result)}`,
       "error",
     );
     return;
   }
-  reload(ctx, state);
-  ctx.ui.notify(
-    removed
-      ? `pi-assert: removed "${name}".`
-      : `pi-assert: "${name}" was not installed.`,
-    "info",
-  );
+  state.persist();
+  state.updateStatus(ctx);
+  ctx.ui.notify(`pi-assert: removed "${name}".`, "info");
 }
 
-async function updateAndReload(
+async function updateEntry(
   ctx: ExtensionContext,
   state: AssertsState,
   name: string,
   entry: RuleEntry,
-  installed: ShellAssert | PresetAssert,
+  installed: CatalogEntry,
 ): Promise<void> {
-  // `installed.path` is set for repo-sourced entries (the only kind the
-  // wizard reaches this branch for).  Guard explicitly instead of asserting
-  // via `!` so a future caller with a local entry degrades gracefully.
-  if (!installed.path) {
+  const members = "preset" in entry
+    ? await preparePresetMembers(ctx, state, entry.preset)
+    : [];
+  const updated = state.mutate({
+    type: "update",
+    identity: { source: installed.source, name },
+    entry,
+  });
+  if (!updated.ok) {
     ctx.ui.notify(
-      `pi-assert: cannot update "${name}" — entry has no owning file.`,
+      `pi-assert: failed to update "${name}" — ${formatCatalogFailure(updated)}`,
       "error",
     );
     return;
   }
-  let updated: boolean;
-  try {
-    updated = updateRule(installed.path, installed.source, name, entry);
-  } catch (err) {
-    ctx.ui.notify(
-      `pi-assert: failed to update "${name}" — ${String(err)}`,
-      "error",
-    );
-    return;
+  state.updateStatus(ctx);
+  if (members.length > 0) {
+    const installedMembers = state.mutate({ type: "install", entries: members });
+    if (!installedMembers.ok) {
+      ctx.ui.notify(
+        `pi-assert: updated "${name}" but failed to install preset members — ${formatCatalogFailure(installedMembers)}`,
+        "error",
+      );
+      return;
+    }
+    for (const member of members) {
+      ctx.ui.notify(
+        `pi-assert: installed member "${member.identity.name}" (via preset).`,
+        "info",
+      );
+    }
   }
-  if (!updated) {
-    ctx.ui.notify(
-      `pi-assert: "${name}" was not found on disk; install instead.`,
-      "info",
-    );
-    return;
-  }
-
-  // Installation and update share the same preset-member synchronization:
-  // newly added refs must not leave an updated preset immediately dangling.
-  if ("preset" in entry) {
-    await installPresetMembers(ctx, state, entry.preset);
-  }
-  reload(ctx, state);
+  state.updateStatus(ctx);
   ctx.ui.notify(`pi-assert: updated "${name}".`, "info");
 }
 
@@ -423,11 +416,10 @@ export async function runInstallWizard(
   }
 
   // Step 1: pick (or add) a repo
-  const repos = getInstalledRepos(ctx.cwd);
-  const choice = await promptRepoChoice(ctx, repos);
+  const choice = await promptRepoChoice(ctx, Array.from(state.repositories));
   if (choice.value === null) return;
 
-  const repo = await resolveRepo(ctx, choice.value);
+  const repo = await resolveRepo(ctx, state, choice.value);
   if (!repo) return;
 
   // Step 2: pick a rule file.  Loop over files until the user escapes.
@@ -444,11 +436,10 @@ export async function runInstallWizard(
     // Loop the entry picker for this file; Esc drops back to the file picker.
     let index: number | undefined;
     for (;;) {
-      // Build the installed map from the freshly-loaded state (refreshed by
-      // `reload` after each action) so badges/hints reflect the latest install.
-      // Include both shell asserts and presets for classification.
-      const installedMap = new Map<string, ShellAssert | PresetAssert>();
-      for (const a of state.asserts) {
+      // Build the installed map from the fresh catalog returned by the last
+      // mutation. Include both shell assertions and presets for classification.
+      const installedMap = new Map<string, CatalogEntry>();
+      for (const a of state.entries) {
         if (a.source === repo) installedMap.set(a.name, a);
       }
 
@@ -473,12 +464,12 @@ export async function runInstallWizard(
       const entryState = classifyEntry(repoEntry, installed);
 
       if (entryState === "not-installed") {
-        await installAndReload(ctx, state, repo, name, repoEntry);
+        await installRepositoryEntry(ctx, state, repo, name, repoEntry);
       } else if (entryState === "outdated") {
-        await updateAndReload(ctx, state, name, repoEntry, installed!);
+        await updateEntry(ctx, state, name, repoEntry, installed!);
       } else {
         // "installed" → uninstall
-        removeAndReload(ctx, state, repo, name, installed!);
+        removeEntry(ctx, state, repo, name);
       }
 
       index = result.index;

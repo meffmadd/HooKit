@@ -5,11 +5,20 @@ fail user-defined shell checks.
 
 ## Architecture
 
-- **`pi-assert/index.ts`** — thin Pi adapter. Loads session state, snapshots
-  Pi's rich callback context onto bounded scalar metadata (including the
-  reasoning-level compatibility fallback), captures one Active Assertion Set,
+- **`pi-assert/index.ts`** — thin Pi adapter. Authorizes catalog storage after
+  checking project trust, loads session state, snapshots Pi's rich callback
+  context onto bounded scalar metadata, captures one Active Assertion Set,
   translates explicit Hook Evaluation outcomes into Pi callbacks, and delivers
-  ordered semantic effects best-effort. It owns no hook policy.
+  ordered semantic effects best-effort. It owns no catalog or hook policy.
+- **`pi-assert/assertion-catalog/`** — the session-scoped deep Assertion Catalog
+  module. Its facade exposes immutable `AssertionCatalog` snapshots, entries
+  without storage paths, explicit `{ source, name }` identities, structured
+  load/mutation results, and one domain-intent mutation union. Private format
+  machinery owns authorized global/optional-project reads, complete validation,
+  repository eligibility, whole-record source-preserving merge, provenance,
+  canonical persisted records, re-read-before-write mutations, local-default
+  preservation, and best-effort atomic replacement. Every successful mutation
+  returns a fresh catalog; failures leave the caller's prior snapshot intact.
 - **`pi-assert/hook-evaluation/`** — the session-scoped deep Hook Evaluation
   module. Its facade exposes `HookEvaluation`, `createActiveAssertionSet`, the
   typed native event map, bounded execution context, explicit outcomes, and
@@ -18,22 +27,17 @@ fail user-defined shell checks.
   Assertion Invocations, frozen synthetic `assert_result` dispatch, fail-closed
   policy, execution accounting, and corrective retry deduplication. Shells run
   via real `child_process.exec`; no shell port exists solely for tests.
-- **`pi-assert/engine.ts`** — Stage-1 compatibility owner for loaded assertion
-  and preset shapes plus `loadAsserts`. Execution policy and shell mechanics do
-  not cross this interface; Stage 2 replaces its catalog responsibilities.
-- **`pi-assert/domain/entry.ts`** — shared persisted entry types, canonical
-  source/name identity and ref parsing, plus `AssertIndex` lookups.
-- **`pi-assert/config.ts`** — single owner of the on-disk `asserts.json`
-  format: `readSectionedFile`/`writeSectionedFile`, section identification
-  (`iterSections`), and entry-shape validation (`validateEntryShape`). Shared
-  by `engine.ts` (runtime loading) and `installer.ts` (install/remove/default
-  writes) so neither re-derives the format.
-- **`pi-assert/installer.ts`** — GitHub API fetching (`fetchRuleFiles`/
-  `fetchRuleFile`, session-cached `fetchRepoEntries`), install/remove/update
-  writers (`installRule`/`removeRule`/`updateRule`), and pure outdated-detection
-  helpers (`cleanEntry`, `entryContentSignature`, `entryNeedsUpdate`,
-  `classifyEntry`). `cleanEntry` is the single owner of the on-disk record
-  shape, shared by `installRule` and `updateRule`.
+- **`pi-assert/domain/entry.ts` / `domain/validation.ts`** — shared persisted
+  entry types, canonical source/name key/ref parsing, `AssertIndex` lookups,
+  and persisted-entry validation reused by catalog storage and the external
+  repository adapter.
+- **`pi-assert/config.ts`** — Pi-specific global/project storage-location
+  resolution only. Project trust is decided by callers before the optional
+  project location is included.
+- **`pi-assert/installer.ts`** — external GitHub repository adapter
+  (`fetchRuleFiles`/`fetchRuleFile`, session-cached `fetchRepoEntries`) plus
+  pure outdated classification and picker helpers. It performs no local
+  persistence; fetched entries are submitted to Assertion Catalog mutations.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail, used
@@ -41,11 +45,16 @@ fail user-defined shell checks.
   `textInputDialog` (built on a shared `dialogShell`), and
   `renderAssertDetail`. `selectDialog` supports a focus-aware dynamic hint
   (`hintFor`) and a confirm-on-select guard (`confirmOnSelect`).
+- **`pi-assert/ui/state.ts`** — session activation between Assertion Catalog
+  and Hook Evaluation. It accepts fresh catalogs, reconciles source-qualified
+  saved/default activation, expands one preset level with deduplication, and
+  produces immutable Active Assertion Sets. Failed catalog mutations retain
+  the known-good catalog and activation.
 - **`pi-assert/ui/install.ts`** — the install wizard (repo picker → file
   picker → entry picker). The entry picker is a tri-state `Enter`: not
   installed → install, outdated → update, installed → confirm → uninstall.
-  Classification uses the pure `classifyEntry` against the in-memory installed
-  map; `updateRule` writes to the owning file and preserves on-disk `default`.
+  It fetches repository content externally, then expresses catalog intent;
+  preset plus available missing members are installed as one batch mutation.
 - **`pi-assert/ui/asserts.ts`** — the `/asserts` panel. Detects orphaned
   asserts (installed names removed from their source repo) via an async,
   session-cached `fetchRepoEntries` on panel open, marking them with `⚠` and
@@ -83,7 +92,8 @@ fail user-defined shell checks.
   originating outcome; handler assertion/run identity remains separate.
 - `session_before_switch` and `session_before_fork` can cancel. `session_shutdown`
   is not a supported assertion hook because Pi exposes no cancellation result.
-- Project `.pi/asserts.json` overrides global `~/.pi/asserts.json` by key name.
+- Trusted project entries replace global entries only when Assertion Source and
+  name both match; whole records replace rather than merging fields.
 - No special handling for `"false"` — it's just the Unix `false` command
   (always exits 1).
 - **Search swaps `groups`/`nav`, not the renderer.** The `/asserts` panel's
@@ -96,17 +106,17 @@ fail user-defined shell checks.
 - **Outdated detection excludes `default`.** The content signature
   (`entryContentSignature`) compares only repo-driven fields
   (`description`, `hook`, `shell`, `filter`, `when`); `default` is a local
-  toggle, never a repo-driven change. `updateRule` preserves the on-disk
-  `default` so an update never clobbers a user's preference.
+  toggle, never a repo-driven change. Catalog update intent preserves the
+  current persisted preference.
 - **Outdated is per-file; orphaned is panel-wide.** The install wizard entry
   picker detects outdated asserts (installed name, content differs) using the
   file already being browsed — no extra fetch. The `/asserts` panel detects
   orphaned asserts (installed name missing from the repo) via a session-cached
   `fetchRepoEntries`. Both degrade silently on network failure.
-- **Prefer one shared implementation over two.** Format parsing, entry
+- **Prefer one shared implementation over two.** Catalog persistence and
   validation, Hook Evaluation, list/dialog rendering, sectioned-panel
   composition + input, and text measuring/wrapping each live in a single
-  module (`config.ts`, `hook-evaluation/`, `ui/sectioned-panel.ts`,
+  module (`assertion-catalog/`, `hook-evaluation/`, `ui/sectioned-panel.ts`,
   `ui/components.ts`, and pi-tui's `visibleWidth`/`wrapTextWithAnsi`
   respectively) that every caller builds on. When adding a new view or hook,
   extend the shared core instead of copying the logic — two copies will
@@ -144,8 +154,8 @@ fail user-defined shell checks.
   `e Edit preset` **crossed out** (dim + `strikethrough` via the shared
   `HintItem` disabled flag), the detail block shows a `❄ non-editable — copy
   via n to customize` note (`readonlyDetailLines`), and pressing `e` anyway
-  notifies (defensive). `editPresetRule` is local-only (writes in place via
-  `updateRule`, preserving the on-disk `default`). Forking a repo preset to
+  notifies (defensive). Catalog `edit-local-preset` intent enforces local-only
+  ownership and preserves the on-disk `default`. Forking a repo preset to
   local on edit was removed — to customize a repo preset, copy its content
   into a new local preset via `n`. The `❄`/`§`/`⚠` badges are all
   text-presentation BMP glyphs (reliable single-width in monospace terminals),

@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { PresetEditorPanel } from "../pi-assert/ui/preset-editor.js";
-import type { Assert } from "../pi-assert/engine.js";
+import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ function makeAssert(
   name: string,
   source = "local",
   opts: { shell?: string; when?: string; description?: string } = {},
-): Assert {
+): CatalogEntry {
   return {
     name,
     source,
@@ -49,7 +49,7 @@ function makeAssert(
 }
 
 function makePanel(
-  shellAsserts: Assert[],
+  shellAsserts: CatalogEntry[],
   selected: Set<string> = new Set(),
   opts: { name?: string; description?: string } = {},
 ): PresetEditorPanel {
@@ -152,7 +152,7 @@ describe("PresetEditorPanel rendering", () => {
       preset: ["local/guard"],
       default: false,
       path: "/tmp/p.json",
-    } as unknown as Assert;
+    } as unknown as CatalogEntry;
     const shell = makeAssert("guard");
     const panel = makePanel([shell, preset]);
     const lines = panel.render(80);

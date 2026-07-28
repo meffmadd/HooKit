@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Hook, NativeHook } from "../pi-assert/domain/entry.js";
-import type { ShellAssert } from "../pi-assert/engine.js";
+import type { ActiveAssertion } from "../pi-assert/hook-evaluation/index.js";
 import {
   HookEvaluation,
   createActiveAssertionSet,
@@ -43,15 +43,14 @@ function assertion(
   name: string,
   hook: Hook,
   shell = "true",
-  extra: Partial<ShellAssert> = {},
-): ShellAssert {
+  extra: Partial<ActiveAssertion> = {},
+): ActiveAssertion {
   return {
     name,
     source: "local",
     description: "test assertion",
     hook,
     shell,
-    default: false,
     ...extra,
   };
 }

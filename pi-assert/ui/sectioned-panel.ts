@@ -10,7 +10,7 @@
  * over two").
  *
  * The search swaps `groups`/`nav` (not the renderer): during search they point
- * at filtered subsets of the same `Assert` object references; `bodyLines`,
+ * at filtered subsets of the same catalog-entry object references; `bodyLines`,
  * `renderSection`, and windowing run unchanged against the filtered model.
  * Ranking is per-section (`filterSection`) so section grouping and order stay
  * stable while matches rank inside each section; empty sections drop out.
@@ -25,7 +25,7 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, type KeyId } from "@earendil-works/pi-tui";
 
-import type { Assert } from "../engine.js";
+import type { CatalogEntry } from "../assertion-catalog/index.js";
 import {
   SectionNavigator,
   filterPrintable,
@@ -38,7 +38,7 @@ import { filterSection } from "./fuzzy.js";
 /** An ordered list of asserts sharing a `source` (a display section). */
 export interface Group {
   source: string;
-  asserts: Assert[];
+  asserts: CatalogEntry[];
 }
 
 /**
@@ -59,9 +59,9 @@ function sortSources(sources: string[]): string[] {
  * themselves (the `/asserts` panel does; the preset editor's assert picker
  * offers only shell asserts).  Shared so the two views agree on section order.
  */
-export function groupShellBySource(asserts: Assert[]): Group[] {
-  const bySource = new Map<string, Assert[]>();
-  for (const a of asserts) {
+export function groupShellBySource(entries: readonly CatalogEntry[]): Group[] {
+  const bySource = new Map<string, CatalogEntry[]>();
+  for (const a of entries) {
     const list = bySource.get(a.source) ?? [];
     list.push(a);
     bySource.set(a.source, list);
@@ -72,19 +72,19 @@ export function groupShellBySource(asserts: Assert[]): Group[] {
 }
 
 /**
- * Abstract base for a sectioned panel over `Assert` items with search.
+ * Abstract base for a sectioned panel over catalog entries with search.
  * Owns the search lifecycle, the query render line, and the sectioned-body
  * composition (`render`/`bodyLines`/windowing/headers/`moveFocus`).
  * Subclasses implement the abstract hooks and may override the optional ones.
  */
 export abstract class SectionedPanel {
   groups!: Group[];
-  nav!: SectionNavigator<Assert>;
+  nav!: SectionNavigator<CatalogEntry>;
 
   protected searchActive = false;
   protected query = "";
   protected savedGroups: Group[] | null = null;
-  protected savedNav: SectionNavigator<Assert> | null = null;
+  protected savedNav: SectionNavigator<CatalogEntry> | null = null;
   protected keybindings?: KeybindingsManager;
 
   setKeybindings(keybindings: KeybindingsManager): void {
@@ -145,7 +145,7 @@ export abstract class SectionedPanel {
   }
 
   /** The detail block under the focused row.  Default: `renderAssertDetail`. */
-  protected detailBlockFor(a: Assert | undefined, width: number): string[] {
+  protected detailBlockFor(a: CatalogEntry | undefined, width: number): string[] {
     if (!a) return [];
     return renderAssertDetail(this.theme, width, a);
   }
@@ -433,7 +433,7 @@ export abstract class SectionedPanel {
    * Rebuild filtered `groups` / `nav` from `savedGroups` + the current
    * query, then restore focus to the previously-highlighted assert
    * (best-effort). Empty/whitespace-only query reproduces every section
-   * unchanged (scores 0). Filtering keeps the same `Assert` references, so
+   * unchanged (scores 0). Filtering keeps the same catalog-entry references, so
    * `restoreFocus` can use identity (`indexOf`) lookup.
    */
   protected applyFilter(): void {
@@ -450,7 +450,7 @@ export abstract class SectionedPanel {
   }
 
   /** Point `nav` at `a`'s section/index in the current (filtered) groups. */
-  protected restoreFocus(a: Assert | undefined): void {
+  protected restoreFocus(a: CatalogEntry | undefined): void {
     if (!a) {
       if (this.groups.length) { this.nav.focus = 0; this.nav.selection[0] = 0; }
       return;

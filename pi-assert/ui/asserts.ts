@@ -4,16 +4,14 @@ import {
   matchesKey,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { isPreset, type Assert, type PresetAssert } from "../engine.js";
-import { entryKey, entryRef } from "../domain/entry.js";
 import {
-  fetchRepoEntries,
-  installRule,
-  removeRuleAt,
-  setAssertDefault,
-  editPresetRule,
-} from "../installer.js";
-import { projectFilePath } from "../config.js";
+  isCatalogPreset,
+  type CatalogEntry,
+  type CatalogPreset,
+} from "../assertion-catalog/index.js";
+import { entryKey, entryRef } from "../domain/entry.js";
+import { catalogStorageLocations } from "../config.js";
+import { fetchRepoEntries } from "../installer.js";
 import {
   HINT_D_DISABLE_ALL,
   HINT_E_EDIT_PRESET,
@@ -36,39 +34,43 @@ import {
 } from "./components.js";
 import { highlightSegments } from "./fuzzy.js";
 import { SectionedPanel, type Group, groupShellBySource } from "./sectioned-panel.js";
-import { resolvePresetMembers, type AssertsState } from "./state.js";
+import {
+  formatCatalogFailure,
+  resolvePresetMembers,
+  type AssertsState,
+} from "./state.js";
 import { runInstallWizard } from "./install.js";
 import { runPresetEditor } from "./preset-editor.js";
 
 // Order: always-present **Presets** section first (header shown even when
 // empty, so `p`/`n` always have a home), then `local`, then repos alpha.
 // Presets are hoisted out of their real source into the synthetic Presets
-// group for display; write-back (`r`/`t`) uses `selected.source`/
-// `selected.path` (the preset's real section), not the group label.
+// group for display; mutations use the selected entry's canonical source/name
+// identity, never the synthetic group label.
 const PRESETS_SOURCE = "Presets";
-function groupBySource(asserts: Assert[]): Group[] {
-  const presets = asserts.filter(isPreset);
-  const shell = asserts.filter((a) => !isPreset(a));
+function groupBySource(asserts: CatalogEntry[]): Group[] {
+  const presets = asserts.filter(isCatalogPreset);
+  const shell = asserts.filter((a) => !isCatalogPreset(a));
   return [{ source: PRESETS_SOURCE, asserts: presets }, ...groupShellBySource(shell)];
 }
 
 // ---------------------------------------------------------------------------
-// Preset coverage — the reverse of `activeList()`'s expansion.
+// Preset coverage — the reverse of session activation's preset expansion.
 //
 // For each shell assert that is a member of an **active** preset, this maps
 // `source\x00name` → the names of the active presets that reference it.
-// Mirrors `activeList()` exactly: only active presets contribute, dangling
+// Mirrors session activation exactly: only active presets contribute, dangling
 // and nested-preset refs are skipped, refs split on the last `/`.  Used by
 // `renderStatus` to show `active · via {preset}` on a member that isn't
 // individually active but runs because an active preset expanded to it.
 // ---------------------------------------------------------------------------
 function buildPresetCoverage(
-  asserts: Assert[],
-  isActive: (assert: Assert) => boolean,
+  asserts: CatalogEntry[],
+  isActive: (assert: CatalogEntry) => boolean,
 ): Map<string, string[]> {
   const coverage = new Map<string, string[]>();
   for (const a of asserts) {
-    if (!isActive(a) || !isPreset(a)) continue;
+    if (!isActive(a) || !isCatalogPreset(a)) continue;
     for (const member of resolvePresetMembers(asserts, a)) {
       const key = entryKey(member.source, member.name);
       const list = coverage.get(key) ?? [];
@@ -87,10 +89,10 @@ type PanelAction =
   | "install"
   | "reload"
   | "create-preset"
-  | { type: "edit-preset"; preset: PresetAssert };
+  | { type: "edit-preset"; preset: CatalogPreset };
 
 export class AssertsPanel extends SectionedPanel {
-  private confirm: { name: string; source: string; path?: string } | null = null;
+  private confirm: { name: string; source: string } | null = null;
 
   /**
    * Composite keys (`${source}\0${name}`) of installed asserts that no longer
@@ -110,7 +112,7 @@ export class AssertsPanel extends SectionedPanel {
   private _coverage: Map<string, string[]> | null = null;
   private get coverage(): Map<string, string[]> {
     if (this._coverage === null) {
-      this._coverage = buildPresetCoverage(this.state.asserts, (a) => this.activeFor(a));
+      this._coverage = buildPresetCoverage(this.state.entries, (a) => this.activeFor(a));
     }
     return this._coverage;
   }
@@ -120,16 +122,16 @@ export class AssertsPanel extends SectionedPanel {
    * shell assert at that ref (presets excluded — a ref to a preset is a
    * nested-preset ref, always dangling for v1).  Lazy-computed once: the
    * panel is recreated after every reload (install/remove/create), and within
-   * a panel instance `state.asserts` (which asserts exist) never changes —
+   * a panel instance `state.entries` (which asserts exist) never changes —
    * only `active` and `default` flags do — so the map is stable for the
    * panel's lifetime.  Synchronous, unlike the async orphaned fetch.
    */
-  private _byRef: Map<string, Assert> | null = null;
-  private get byRef(): Map<string, Assert> {
+  private _byRef: Map<string, CatalogEntry> | null = null;
+  private get byRef(): Map<string, CatalogEntry> {
     if (this._byRef === null) {
       this._byRef = new Map(
-        this.state.asserts
-          .filter((a) => !isPreset(a))
+        this.state.entries
+          .filter((a) => !isCatalogPreset(a))
           .map((a) => [entryRef(a.source, a.name), a]),
       );
     }
@@ -140,11 +142,11 @@ export class AssertsPanel extends SectionedPanel {
    * The refs of preset `a` that don't resolve to an installed shell assert.
    * Empty for non-presets and for presets whose every ref resolves.  A preset
    * is `§` (dangling) iff this is non-empty.  Refs split on the last `/`
-   * (matches `activeList()`), but the lookup key is the full `"source/name"`
+   * (matches session expansion), but the lookup key is the full `"source/name"`
    * ref string, so a malformed ref (no `/`) simply won't be in the map.
    */
-  private danglingRefs(a: Assert): string[] {
-    if (!isPreset(a)) return [];
+  private danglingRefs(a: CatalogEntry): string[] {
+    if (!isCatalogPreset(a)) return [];
     const out: string[] = [];
     for (const ref of a.preset) {
       if (!this.byRef.has(ref)) out.push(ref);
@@ -153,12 +155,12 @@ export class AssertsPanel extends SectionedPanel {
   }
 
   /** `true` iff `a` is a preset with at least one dangling ref (`§` badge). */
-  private isDangling(a: Assert): boolean {
+  private isDangling(a: CatalogEntry): boolean {
     return this.danglingRefs(a).length > 0;
   }
 
   /** `true` iff `a` was removed from its source repo (`⚠` badge, async). */
-  private isOrphaned(a: Assert): boolean {
+  private isOrphaned(a: CatalogEntry): boolean {
     return this.orphaned.has(entryKey(a.source, a.name));
   }
 
@@ -167,13 +169,13 @@ export class AssertsPanel extends SectionedPanel {
 
   /** Search guard: nothing to search when the config is broken or empty. */
   protected canSearch(): boolean {
-    return !this.state.broken && this.state.asserts.length > 0;
+    return !this.state.broken && this.state.entries.length > 0;
   }
 
   constructor(private state: AssertsState) {
     super();
-    this.groups = groupBySource(state.asserts);
-    this.nav = new SectionNavigator<Assert>(
+    this.groups = groupBySource(state.entries);
+    this.nav = new SectionNavigator<CatalogEntry>(
       this.groups.map((g) => ({ items: g.asserts })),
     );
     // Open on the first non-empty section so the user lands on a real row.
@@ -202,7 +204,7 @@ export class AssertsPanel extends SectionedPanel {
     if (this.state.broken) return;
 
     const repos = new Set<string>();
-    for (const a of this.state.asserts) {
+    for (const a of this.state.entries) {
       if (a.source !== "local") repos.add(a.source);
     }
     if (repos.size === 0) return;
@@ -221,7 +223,7 @@ export class AssertsPanel extends SectionedPanel {
       for (const result of results) {
         if (!result) continue;
         const [repo, entries] = result;
-        for (const a of this.state.asserts) {
+        for (const a of this.state.entries) {
           if (a.source === repo && !entries.has(a.name)) {
             orphaned.add(entryKey(a.source, a.name));
           }
@@ -260,7 +262,7 @@ export class AssertsPanel extends SectionedPanel {
     return [...this.renderHeaderLines(), "", `  Remove "${this.confirm.name}"?`];
   }
 
-  protected detailBlockFor(a: Assert | undefined, width: number): string[] {
+  protected detailBlockFor(a: CatalogEntry | undefined, width: number): string[] {
     if (!a) return [];
     return [
       ...this.readonlyDetailLines(a),
@@ -275,21 +277,19 @@ export class AssertsPanel extends SectionedPanel {
       this.theme.fg("accent", this.theme.bold("Asserts")),
       this.theme.fg(
         "muted",
-        `${this.state.active.size}/${this.state.asserts.length} enabled`,
+        `${this.state.active.size}/${this.state.entries.length} enabled`,
       ),
       "",
     ];
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
-  /** Compatibility fallback keeps lightweight panel consumers working. */
-  private activeFor(a: Assert): boolean {
-    const modern = this.state as AssertsState & { isActive?: (entry: Assert) => boolean };
-    return modern.isActive ? modern.isActive(a) : this.state.active.has(a.name);
+  private activeFor(entry: CatalogEntry): boolean {
+    return this.state.isActive(entry);
   }
 
   /** The plain row label: `name` plus the optional ` (default)` tag. */
-  private plainLabel(a: Assert): string {
+  private plainLabel(a: CatalogEntry): string {
     return a.default ? `${a.name} (default)` : a.name;
   }
 
@@ -306,7 +306,7 @@ export class AssertsPanel extends SectionedPanel {
    * (the `via` is redundant — it runs either way).  Multiple covering presets
    * collapse to `via {n} presets`.
    */
-  private renderStatus(a: Assert): string {
+  private renderStatus(a: CatalogEntry): string {
     if (this.activeFor(a)) {
       return this.theme.fg("accent", "enabled");
     }
@@ -336,7 +336,7 @@ export class AssertsPanel extends SectionedPanel {
    * width, so highlighting never disturbs the padding math.
    */
   private renderLabel(
-    a: Assert,
+    a: CatalogEntry,
     base: (s: string) => string,
     highlight: (s: string) => string,
     padding: string,
@@ -428,7 +428,7 @@ export class AssertsPanel extends SectionedPanel {
         return `${badge}${labelText}  ${valueText}`;
       },
       detailFor: (a) =>
-        isPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
+        isCatalogPreset(a) ? { preset: a.preset } : { shell: a.shell, when: a.when },
       detailPrefix: (a) => [
         ...this.readonlyDetailLines(a),
         ...this.orphanedDetailLines(a),
@@ -445,8 +445,8 @@ export class AssertsPanel extends SectionedPanel {
    * otherwise re-measure the ANSI-wrapped string per row.
    */
   private badgeLayout(group: Group): {
-    badgeFor: (a: Assert) => string;
-    badgeWidth: (a: Assert) => number;
+    badgeFor: (a: CatalogEntry) => string;
+    badgeWidth: (a: CatalogEntry) => number;
     maxLabelWidth: number;
   } {
     const theme = this.theme;
@@ -459,15 +459,15 @@ export class AssertsPanel extends SectionedPanel {
     const LOCK_W = visibleWidth(LOCK_BADGE);
     const DANGLE_W = visibleWidth(DANGLE_BADGE);
     const ORPHAN_W = visibleWidth(ORPHAN_BADGE);
-    const isLocked = (a: Assert): boolean => isPreset(a) && a.source !== "local";
-    const badgeFor = (a: Assert): string => {
+    const isLocked = (a: CatalogEntry): boolean => isCatalogPreset(a) && a.source !== "local";
+    const badgeFor = (a: CatalogEntry): string => {
       let b = "";
       if (isLocked(a)) b += LOCK_BADGE;
       if (this.isDangling(a)) b += DANGLE_BADGE;
       if (this.isOrphaned(a)) b += ORPHAN_BADGE;
       return b;
     };
-    const badgeWidth = (a: Assert): number =>
+    const badgeWidth = (a: CatalogEntry): number =>
       (isLocked(a) ? LOCK_W : 0) +
       (this.isDangling(a) ? DANGLE_W : 0) +
       (this.isOrphaned(a) ? ORPHAN_W : 0);
@@ -484,7 +484,7 @@ export class AssertsPanel extends SectionedPanel {
    * it.  Returns `[]` for non-orphaned asserts so the detail block is
    * unchanged.
    */
-  private orphanedDetailLines(a: Assert): string[] {
+  private orphanedDetailLines(a: CatalogEntry): string[] {
     if (!this.isOrphaned(a)) return [];
     return [
       "    " +
@@ -500,8 +500,8 @@ export class AssertsPanel extends SectionedPanel {
    * workaround (copy via `n`) since fork-on-edit was removed.  Returns `[]`
    * for local presets and non-presets so the detail block is unchanged.
    */
-  private readonlyDetailLines(a: Assert): string[] {
-    if (!isPreset(a) || a.source === "local") return [];
+  private readonlyDetailLines(a: CatalogEntry): string[] {
+    if (!isCatalogPreset(a) || a.source === "local") return [];
     return [
       "    " +
         this.theme.fg("dim", "❄ ") +
@@ -515,7 +515,7 @@ export class AssertsPanel extends SectionedPanel {
    * resolve to an installed shell assert.  Returns `[]` for non-presets and
    * for presets whose every ref resolves, so the detail block is unchanged.
    */
-  private danglingDetailLines(a: Assert): string[] {
+  private danglingDetailLines(a: CatalogEntry): string[] {
     const refs = this.danglingRefs(a);
     if (refs.length === 0) return [];
     const label = refs.length === 1 ? "dangling ref" : "dangling refs";
@@ -559,7 +559,7 @@ export class AssertsPanel extends SectionedPanel {
     // apply here, and the detail line explains why.  Pressing `e` anyway
     // still notifies (defensive).
     const focused = this.groups[this.nav.focusedSection]?.asserts[this.nav.focusedIndex];
-    if (focused && isPreset(focused)) {
+    if (focused && isCatalogPreset(focused)) {
       items.push(
         focused.source === "local"
           ? HINT_E_EDIT_PRESET
@@ -605,35 +605,21 @@ export class AssertsPanel extends SectionedPanel {
     // ── Confirmation mode ──
     if (this.confirm) {
       if (matchesKey(data, "y")) {
-        const { name, source, path } = this.confirm;
-        if (!path) {
-          ctx.ui.notify(`pi-assert: cannot locate "${name}" on disk`, "error");
-          this.confirm = null;
-          return undefined;
-        }
-        let removed: boolean;
-        try {
-          removed = removeRuleAt(path, source, name);
-        } catch (err) {
+        const { name, source } = this.confirm;
+        const result = this.state.mutate({
+          type: "remove",
+          identity: { source, name },
+        });
+        this.confirm = null;
+        if (!result.ok) {
           ctx.ui.notify(
-            `pi-assert: failed to remove "${name}" — ${String(err)}`,
+            `pi-assert: failed to remove "${name}" — ${formatCatalogFailure(result)}`,
             "error",
           );
-          this.confirm = null;
           return undefined;
         }
-        if (!removed) {
-          ctx.ui.notify(`pi-assert: "${name}" was not found on disk.`, "warning");
-          this.confirm = null;
-          return undefined;
-        }
-        const selected = this.state.asserts.find((a) =>
-          a.source === source && a.name === name && a.path === path,
-        );
-        if (selected) this.state.disable(selected);
         this._coverage = null;
         this.state.persist();
-        this.confirm = null;
         return "reload";
       }
       if (matchesKey(data, "n") || this.matchesCancel(data)) {
@@ -700,61 +686,39 @@ export class AssertsPanel extends SectionedPanel {
       return undefined;
     }
 
-    // ── r: remove selected assert ──
-    // Write-back uses `selected.source`/`selected.path`, not `focused.source`:
-    // the Presets group is synthetic (label "Presets"), so `focused.source` is
-    // the group label, not the preset's real section.  This is a one-time M3
-    // switch that applies to all entry types (hoisting makes `focused.source`
-    // wrong in general).
+    // ── r: remove selected catalog identity ──
     if (matchesKey(data, "r")) {
       const selected = focused.asserts[this.nav.focusedIndex];
       if (selected) {
-        this.confirm = { name: selected.name, source: selected.source, path: selected.path };
+        this.confirm = { name: selected.name, source: selected.source };
       }
       return undefined;
     }
 
-    // ── t: toggle on-disk `default` flag (per-session active set untouched) ──
+    // ── t: toggle the selected entry's persisted default preference ──
     if (matchesKey(data, "t")) {
       const selected = focused.asserts[this.nav.focusedIndex];
       if (!selected) return undefined;
-
-      if (!selected.path) {
+      const result = this.state.mutate({
+        type: "set-default",
+        identity: { source: selected.source, name: selected.name },
+        value: !selected.default,
+      });
+      if (!result.ok) {
         ctx.ui.notify(
-          `pi-assert: cannot locate "${selected.name}" on disk`,
+          `pi-assert: failed to toggle default — ${formatCatalogFailure(result)}`,
           "error",
         );
         return undefined;
       }
-
-      try {
-        const next = !selected.default;
-        setAssertDefault(selected.path, selected.source, selected.name, next);
-
-        // Mirror the new value to the in-memory `Assert` so the next render
-        // shows the (default) tag.  The panel's `group.asserts` array shares
-        // object references with `state.asserts` (both were built from the
-        // same `loadAsserts` result), so mutating the live entry mutates
-        // both views.  Reloading here would create new objects and break
-        // that link.
-        const live = this.state.asserts.find(
-          (a) => a.source === selected.source && a.name === selected.name,
-        );
-        if (live) live.default = next;
-      } catch (err) {
-        ctx.ui.notify(
-          `pi-assert: failed to toggle default — ${String(err)}`,
-          "error",
-        );
-      }
-      return undefined;
+      return "reload";
     }
 
     // ── e: edit focused preset (local presets only) ──
     // Returns an `edit-preset` action carrying the focused preset; the command
     // loop runs the two-step editor (`description` → `asserts` panel, the same
     // sectioned panel as `/asserts`: Tab/Shift+Tab, `Enter` toggles membership,
-    // `Esc` commits + back) and writes the edit in place via `editPresetRule`.
+    // `Esc` commits + back) and submits local-preset edit intent to the catalog.
     // Only local presets are editable.  A non-local preset is read-only (`❄`):
     // the hint line shows `e Edit preset` crossed out and the detail block
     // shows `❄ non-editable — copy via n to customize`, so the state is
@@ -764,7 +728,7 @@ export class AssertsPanel extends SectionedPanel {
     if (matchesKey(data, "e")) {
       const selected = focused.asserts[this.nav.focusedIndex];
       if (!selected) return undefined;
-      if (!isPreset(selected)) {
+      if (!isCatalogPreset(selected)) {
         ctx.ui.notify(
           "pi-assert: e edits presets only — select a preset first.",
           "info",
@@ -794,11 +758,8 @@ export class AssertsPanel extends SectionedPanel {
     const focused = this.groups[this.nav.focusedSection];
     const selected = focused?.asserts[this.nav.focusedIndex];
     if (!selected) return;
-    const isModern = typeof (this.state as { isActive?: unknown }).isActive === "function";
-    // Older lightweight consumers expose name-based mutators; production
-    // state exposes isActive and stores canonical source-qualified keys.
-    if (this.activeFor(selected)) this.state.disable(isModern ? selected : selected.name);
-    else this.state.enable(isModern ? selected : selected.name);
+    if (this.activeFor(selected)) this.state.disable(selected);
+    else this.state.enable(selected);
     this._coverage = null;
     this.state.persist();
     this.state.updateStatus(this._ctx);
@@ -808,9 +769,7 @@ export class AssertsPanel extends SectionedPanel {
 // ---------------------------------------------------------------------------
 // createLocalPreset — `n` new local preset.  Prompts for a name, warns (does
 // not silently overwrite) if the name already exists in the local section,
-// then installs an empty preset and lets the command loop reload.  `default`
-// is dropped (passed as `undefined` so `cleanEntry` omits it, matching
-// "omit when false" / `setAssertDefault` deleting the key).
+// then submits an empty local preset installation to the catalog.
 // ---------------------------------------------------------------------------
 export async function createLocalPreset(
   ctx: ExtensionContext,
@@ -823,10 +782,8 @@ export async function createLocalPreset(
   });
   if (!name) return; // cancelled
 
-  // Warn (don't silently overwrite) if the name already exists locally —
-  // mirrors `installRule`'s `overwritten` return, but for a *create* we abort
-  // rather than clobber so the user removes the existing entry first.
-  if (state.asserts.some((a) => a.source === "local" && a.name === name)) {
+  // Creating is intentionally not an upsert: preserve an existing local entry.
+  if (state.entries.some((a) => a.source === "local" && a.name === name)) {
     ctx.ui.notify(
       `pi-assert: "${name}" already exists locally — remove it first.`,
       "warning",
@@ -834,14 +791,18 @@ export async function createLocalPreset(
     return;
   }
 
-  try {
-    installRule(ctx.cwd, "local", name, {
-      description: "",
-      preset: [],
-      default: undefined,
-    });
-  } catch (err) {
-    ctx.ui.notify(`pi-assert: failed to create preset — ${String(err)}`, "error");
+  const mutation = state.mutate({
+    type: "install",
+    entries: [{
+      identity: { source: "local", name },
+      entry: { description: "", preset: [] },
+    }],
+  });
+  if (!mutation.ok) {
+    ctx.ui.notify(
+      `pi-assert: failed to create preset — ${formatCatalogFailure(mutation)}`,
+      "error",
+    );
     return;
   }
   ctx.ui.notify(`pi-assert: created preset "${name}".`, "info");
@@ -854,15 +815,15 @@ export async function createLocalPreset(
 // `Enter` to toggle membership, `Esc` to commit + go back).
 //
 // Local-only (the `e` handler gates on `source === "local"`; non-local
-// presets are read-only `❄` and never reach here).  Writes `preset` +
-// `description` (+ preserved `default`) in place via `editPresetRule`.
+// presets are read-only `❄` and never reach here). Catalog policy preserves
+// the entry's local default preference.
 // Forking a repo preset to local on edit was removed — to customize a repo
 // preset, copy its content into a new local preset via `n`.
 // ---------------------------------------------------------------------------
 async function editPreset(
   ctx: ExtensionContext,
   state: AssertsState,
-  preset: PresetAssert,
+  preset: CatalogPreset,
 ): Promise<void> {
   // Step 1: description (text), seeded with the current description.
   const description = await textInputDialog(ctx, {
@@ -891,17 +852,17 @@ async function editPreset(
     result.value.every((r) => preset.preset.includes(r));
   if (sameDesc && sameMembers) return;
 
-  // Write preset + description (+ preserved default) in place to the owning
-  // file's `local` section.
-  try {
-    editPresetRule(
-      preset.path ?? projectFilePath(ctx.cwd),
-      preset.name,
-      description,
-      result.value,
+  const mutation = state.mutate({
+    type: "edit-local-preset",
+    identity: { source: preset.source, name: preset.name },
+    description,
+    preset: result.value,
+  });
+  if (!mutation.ok) {
+    ctx.ui.notify(
+      `pi-assert: failed to edit preset — ${formatCatalogFailure(mutation)}`,
+      "error",
     );
-  } catch (err) {
-    ctx.ui.notify(`pi-assert: failed to edit preset — ${String(err)}`, "error");
     return;
   }
   ctx.ui.notify(`pi-assert: edited preset "${preset.name}".`, "info");
@@ -918,24 +879,26 @@ export function registerAssertsCommand(
   pi.registerCommand("asserts", {
     description: "Activate / deactivate asserts",
     handler: async (_args, ctx) => {
-      // The `while (true)` loop is intentional: it re-enters the panel
-      // after `install` and `reload` actions so freshly installed /
-      // removed asserts are immediately toggleable.
-      while (true) {
-        const trustAware = ctx as ExtensionContext & {
-          isProjectTrusted?: () => boolean;
-        };
+      const trustAware = ctx as ExtensionContext & {
+        isProjectTrusted?: () => boolean;
+      };
+      const projectTrusted =
+        trustAware.isProjectTrusted?.() ?? state.projectTrusted;
+      if (projectTrusted === state.projectTrusted) {
+        state.refresh();
+      } else {
+        // A trust transition changes which storage is authorized, so it starts
+        // a new catalog lineage rather than refreshing the old one.
         state.load(
-          ctx.cwd,
-          trustAware.isProjectTrusted?.() ?? state.projectTrusted,
+          catalogStorageLocations(ctx.cwd, projectTrusted),
+          projectTrusted,
         );
-        // Prune stale active entries that no longer exist
-        const validKeys = new Set(state.asserts.map((a) => state.keyOf(a)));
-        for (const key of Array.from(state.active)) {
-          if (!validKeys.has(key)) state.disable(key);
-        }
-        state.updateStatus(ctx);
+      }
+      state.updateStatus(ctx);
 
+      // Each successful action already installs a fresh catalog snapshot.
+      // Re-enter only to rebuild the panel around that snapshot.
+      while (true) {
         const action = await ctx.ui.custom<PanelAction | null>(
           (tui, theme, kb, done) => {
             const panel = new AssertsPanel(state);

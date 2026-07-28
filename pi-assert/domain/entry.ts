@@ -49,6 +49,9 @@ export function isLifecycleHook(value: unknown): value is Hook {
 
 export type FilterScalar = string | number | boolean | null;
 export type EntryFilter = Record<string, FilterScalar | FilterScalar[]>;
+export type ReadonlyEntryFilter = Readonly<
+  Record<string, FilterScalar | readonly FilterScalar[]>
+>;
 
 export interface PersistedAssert {
   description: string;

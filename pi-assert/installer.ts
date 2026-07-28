@@ -1,13 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type { PersistedEntry } from "./domain/entry.js";
-import {
-  projectFilePath,
-  readSectionedFile,
-  writeSectionedFile,
-  validateRuleEntry,
-  type SectionedFile,
-} from "./config.js";
+import { validateRuleEntry } from "./domain/validation.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -236,110 +230,13 @@ export function clearRepoEntriesCache(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Install / remove
-// ---------------------------------------------------------------------------
-
-/**
- * Read a mutable config. Missing files are empty; existing malformed or
- * unreadable files throw so a UI action can report the problem without ever
- * replacing the user's bytes.
- */
-function readProjectFile(cwd: string): SectionedFile {
-  return readSectionedFile(projectFilePath(cwd));
-}
-
-function readProjectFileAt(path: string): SectionedFile {
-  return readSectionedFile(path);
-}
-
-function writeProjectFile(cwd: string, data: SectionedFile): void {
-  writeSectionedFile(projectFilePath(cwd), data);
-}
-
-/**
- * Install a single assert into the project's `.pi/asserts.json`
- * under the given `repo` key (e.g. "meffmadd/pi-assert-rules").
- *
- * Only schema-valid fields are persisted (including `description`,
- * which is required on disk).
- *
- * Returns `true` if an existing assert with the same `name` was
- * overwritten, `false` for a fresh install.  Callers with UI access
- * can surface the overwrite as a warning notification.
- */
-export function installRule(
-  cwd: string,
-  repo: string,
-  name: string,
-  entry: RuleEntry,
-): boolean {
-  const current = readProjectFile(cwd);
-
-  // Ensure repo is in the repos array (skip for "local" — it's implicit)
-  if (repo !== "local") {
-    if (!current.repos) current.repos = [];
-    if (!current.repos.includes(repo)) {
-      current.repos.push(repo);
-    }
-  }
-
-  // Ensure the repo section exists
-  if (!current[repo]) {
-    current[repo] = {};
-  }
-  const section = current[repo] as Record<string, unknown>;
-
-  // Warn if overwriting — surfaced by callers via a TUI notification
-  // (console.warn is invisible in the TUI).
-  const overwritten = section[name] !== undefined;
-
-  section[name] = cleanEntry(entry);
-  writeProjectFile(cwd, current);
-  return overwritten;
-}
-
-/**
- * Build the canonical record written to disk: only schema-valid fields.
- *
- * The single owner of the on-disk record shape — both `installRule` and
- * `updateRule` build on it so an install and an update produce byte-identical
- * output for the same entry (per the project's "prefer one shared
- * implementation" rule).  Omitted optional fields are dropped entirely,
- * matching the installer's "omit when absent" convention.
- *
- * Branches on the entry kind: assert → `{description, hook, shell, filter?,
- * when?, default?}`; preset → `{description, preset, default?}`.
- */
-export function cleanEntry(entry: RuleEntry): Record<string, unknown> {
-  if ("preset" in entry) {
-    // Preset branch
-    const clean: Record<string, unknown> = {
-      description: entry.description,
-      preset: entry.preset,
-    };
-    if (entry.default !== undefined) clean.default = entry.default;
-    return clean;
-  }
-  // Assert branch
-  const clean: Record<string, unknown> = {
-    description: entry.description,
-    hook: entry.hook,
-    shell: entry.shell,
-  };
-  if (entry.filter !== undefined) clean.filter = entry.filter;
-  if (entry.when !== undefined) clean.when = entry.when;
-  if (entry.default !== undefined) clean.default = entry.default;
-  return clean;
-}
-
-// ---------------------------------------------------------------------------
 // Outdated detection (pure: no I/O)
 // ---------------------------------------------------------------------------
 
 /**
  * Minimal shape needed to compute an assert's content signature.  Both
- * {@link RuleEntry} (repo side) and the runtime `Assert` (installed side)
- * satisfy it, so the comparison functions stay decoupled from `engine.ts`.
+ * {@link RuleEntry} and catalog shell assertions both satisfy it, so
+ * outdated detection stays independent of persistence.
  */
 interface SignableAssert {
   description: string;
@@ -352,7 +249,7 @@ interface SignableAssert {
 /** Minimal shape needed to compute a preset's content signature. */
 interface SignablePreset {
   description: string;
-  preset: string[];
+  preset: readonly string[];
 }
 
 /** Union type for content signature computation (assert or preset). */
@@ -438,231 +335,6 @@ export function classifyEntry(
 ): EntryState {
   if (installed === undefined) return "not-installed";
   return entryNeedsUpdate(installed, repoEntry) ? "outdated" : "installed";
-}
-
-/**
- * Remove a named entry from a specific source section of the file at `path`.
- * Prunes the section key entirely if it becomes empty.  Returns true if the
- * entry was found and removed.
- *
- * Path-aware core: {@link removeRule} delegates here on the project file
- * (`projectFilePath(cwd)`).
- */
-export function removeRuleAt(
-  path: string,
-  source: string,
-  name: string,
-): boolean {
-  const current = readProjectFileAt(path);
-
-  const section = current[source] as Record<string, unknown> | undefined;
-  if (!section || typeof section !== "object" || !(name in section)) {
-    return false;
-  }
-
-  delete section[name];
-
-  // Prune empty section
-  if (Object.keys(section).length === 0) {
-    delete current[source];
-  }
-
-  writeSectionedFile(path, current);
-  return true;
-}
-
-/**
- * Remove a named assert from a specific repo section of the project file.
- * Prunes the section key entirely if it becomes empty.
- * Returns true if the assert was found and removed.
- *
- * Delegates to {@link removeRuleAt} on the project file
- * (`projectFilePath(cwd)`).
- */
-export function removeRule(
-  cwd: string,
-  repo: string,
-  name: string,
-): boolean {
-  return removeRuleAt(projectFilePath(cwd), repo, name);
-}
-
-/**
- * Update an installed entry in place to match a repo entry's content.
- *
- * Path-aware: writes to the file the entry was loaded from (`path`, which
- * may be the project or the global file), so a project override isn't
- * silently rewritten into the global file (or vice versa).  This is the key
- * difference from {@link installRule}, which always writes the project file.
- *
- * Preserves the on-disk `default` flag: `default` is a local-only preference
- * (excluded from the content signature), so an update never clobbers a user's
- * toggle.  The repo entry's own `default` (if any) is ignored in favour of
- * the installed value.
- *
- * Returns `true` when the entry was found and updated, `false` when the
- * section or name is missing from the file (stale — the caller should treat
- * it as a fresh install instead).
- *
- * Works for both asserts and presets via `cleanEntry`'s branching.
- */
-export function updateRule(
-  path: string,
-  source: string,
-  name: string,
-  entry: RuleEntry,
-): boolean {
-  const current = readProjectFileAt(path);
-
-  const section = current[source] as Record<string, unknown> | undefined;
-  if (!section || typeof section !== "object" || !(name in section)) {
-    return false;
-  }
-
-  const existing = section[name];
-  const existingDefault =
-    typeof existing === "object" && existing !== null
-      ? (existing as Record<string, unknown>).default
-      : undefined;
-
-  // Preserve the installed `default` (a local toggle), ignoring the repo
-  // entry's own `default`.  `cleanEntry` omits `default` when `undefined`,
-  // so passing `true` only when the install actually had it keeps the
-  // on-disk shape stable across an update.
-  const updateEntry: RuleEntry = "preset" in entry
-    ? {
-        description: entry.description,
-        preset: entry.preset,
-        default: existingDefault === true ? true : undefined,
-      }
-    : {
-        description: entry.description,
-        hook: entry.hook,
-        shell: entry.shell,
-        filter: entry.filter,
-        when: entry.when,
-        default: existingDefault === true ? true : undefined,
-      };
-
-  section[name] = cleanEntry(updateEntry);
-
-  writeSectionedFile(path, current);
-  return true;
-}
-
-/**
- * Edit a **local** preset's `description` and `preset` refs in place.
- *
- * Writes the edited preset to the `local` section of the file at `path` (the
- * project or global file — wherever the preset lives), preserving the on-disk
- * `default` via {@link updateRule} (which reads and re-applies it — like an
- * update).
- *
- * Only local presets are editable: the `/asserts` panel's `e` action is gated
- * on `source === "local"`, and non-local presets render a `❄` (read-only)
- * badge.  Repo presets are never edited in place — forking a repo preset to
- * local on edit was removed; to customize a repo preset, copy its content into
- * a new local preset via `n`.
- *
- * Preserves the on-disk `default` through the write (like `updateRule`):
- * `cleanEntry`'s preset branch runs with the existing `default`, so a
- * `t`-enabled preset `e`-edited doesn't silently lose its default.
- *
- * Throws when the entry is missing from disk (stale state).
- */
-export function editPresetRule(
-  path: string,
-  name: string,
-  description: string,
-  preset: string[],
-): void {
-  // Edit in place: write to the owning file's `local` section.  `updateRule`
-  // preserves the on-disk `default` (it reads + re-applies it), so the
-  // passed `default: undefined` is ignored on purpose.
-  const ok = updateRule(path, "local", name, {
-    description,
-    preset,
-    default: undefined,
-  });
-  if (!ok) {
-    throw new Error(
-      `preset "${name}" not found in section "local" of ${path}`,
-    );
-  }
-}
-
-/**
- * Set the `default` flag of a single assert in the on-disk file.
- *
- * Writes the file in place (path can be project or global; the caller
- * picks the right one via the source-map cache).  When `value` is
- * `true` the entry gains a `"default": true` key; when `value` is
- * `false` the key is **deleted** (cleaner than writing `false`, since
- * `false` is the schema default and matches the installer's
- * "omit when false" pattern).
- *
- * Throws when the file does not exist, the section is missing, or the
- * assert entry is missing — these are bugs or stale external edits
- * that the UI surfaces via a notification.
- */
-export function setAssertDefault(
-  path: string,
-  source: string,
-  name: string,
-  value: boolean,
-): void {
-  const current = readProjectFileAt(path);
-
-  const section = current[source] as Record<string, unknown> | undefined;
-  if (!section || typeof section !== "object" || !(name in section)) {
-    throw new Error(
-      `assert "${name}" not found in section "${source}" of ${path}`,
-    );
-  }
-
-  const entry = section[name];
-  if (typeof entry !== "object" || entry === null) {
-    throw new Error(
-      `assert "${name}" in section "${source}" of ${path} is not an object`,
-    );
-  }
-  const obj = entry as Record<string, unknown>;
-
-  if (value) {
-    obj.default = true;
-  } else {
-    delete obj.default;
-  }
-
-  writeSectionedFile(path, current);
-}
-
-/**
- * Return the list of repos declared in the config.
- * These are the repos the user has configured for installing asserts.
- */
-export function getInstalledRepos(cwd: string): string[] {
-  const current = readProjectFile(cwd);
-  return current.repos ?? [];
-}
-
-/**
- * Add a repo to the `repos` array in the project config.
- * No-op if the repo is already present.
- *
- * Validates the owner/repo format.
- */
-export function addRepo(cwd: string, repo: string): void {
-  if (!/^[^/]+\/[^/]+$/.test(repo)) {
-    throw new Error(`Invalid repo format: "${repo}". Expected owner/repo.`);
-  }
-
-  const current = readProjectFile(cwd);
-  if (!current.repos) current.repos = [];
-  if (current.repos.includes(repo)) return; // already present
-
-  current.repos.push(repo);
-  writeProjectFile(cwd, current);
 }
 
 // ---------------------------------------------------------------------------

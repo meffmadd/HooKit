@@ -1,7 +1,6 @@
 /**
  * Tests for the pure outdated-detection functions in installer.ts:
- * `entryContentSignature`, `entryNeedsUpdate`, `classifyEntry`, and the
- * shared `cleanEntry` record builder.
+ * `entryContentSignature`, `entryNeedsUpdate`, `classifyEntry`.
  *
  * These are pure (no I/O), so the tests are plain value comparisons.
  */
@@ -10,7 +9,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  cleanEntry,
   classifyEntry,
   entryContentSignature,
   entryNeedsUpdate,
@@ -34,12 +32,6 @@ function with_(
 ): SignableEntry {
   return { ...baseEntry, ...overrides };
 }
-
-const ruleEntry: RuleEntry = {
-  description: "Blocks writes.",
-  hook: "tool_call",
-  shell: "false",
-};
 
 // ═══════════════════════════════════════════════════════════════════
 // entryContentSignature
@@ -262,54 +254,5 @@ describe("classifyEntry", () => {
       classifyEntry(base, with_({ description: "New description." })),
       "outdated" as EntryState,
     );
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════
-// cleanEntry (shared by installRule + updateRule)
-// ═══════════════════════════════════════════════════════════════════
-
-describe("cleanEntry", () => {
-  it("emits description, hook, shell in a stable key order", () => {
-    const clean = cleanEntry(ruleEntry);
-    assert.deepStrictEqual(
-      Object.keys(clean),
-      ["description", "hook", "shell"],
-    );
-  });
-
-  it("omits optional fields when absent", () => {
-    assert.deepStrictEqual(cleanEntry(ruleEntry), {
-      description: "Blocks writes.",
-      hook: "tool_call",
-      shell: "false",
-    });
-  });
-
-  it("includes filter, when, default in that order when present", () => {
-    const clean = cleanEntry({
-      description: "d",
-      hook: "h",
-      shell: "s",
-      filter: { toolName: "bash" },
-      when: "true",
-      default: true,
-    });
-    assert.deepStrictEqual(Object.keys(clean), [
-      "description",
-      "hook",
-      "shell",
-      "filter",
-      "when",
-      "default",
-    ]);
-    assert.deepStrictEqual(clean, {
-      description: "d",
-      hook: "h",
-      shell: "s",
-      filter: { toolName: "bash" },
-      when: "true",
-      default: true,
-    });
   });
 });

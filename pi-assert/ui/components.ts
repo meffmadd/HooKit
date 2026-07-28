@@ -43,13 +43,13 @@ function bindingMatches(
 /**
  * Detail-block source for {@link renderAssertDetail}: either a shell assert
  * (`shell`, optional `when`) or a preset (`preset` refs).  Both fields are
- * optional so a `ShellAssert | PresetAssert` (the `Assert` union) is assignable
- * directly; {@link renderAssertDetail} dispatches on `preset` first.
+ * optional so a catalog shell assertion or preset is assignable directly;
+ * {@link renderAssertDetail} dispatches on `preset` first.
  */
 export interface AssertDetailEntry {
   shell?: string;
   when?: string;
-  preset?: string[];
+  preset?: readonly string[];
 }
 
 /**

@@ -1,0 +1,582 @@
+import { afterEach, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import {
+  AssertionCatalog,
+  type AssertionIdentity,
+  type CatalogResult,
+  type CatalogStorageLocations,
+} from "../pi-assert/assertion-catalog/index.js";
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function locations(name: string): CatalogStorageLocations {
+  const root = mkdtempSync(join(tmpdir(), `pi-assert-catalog-${name}-`));
+  roots.push(root);
+  return {
+    global: join(root, "home", "asserts.json"),
+    project: join(root, "project", ".pi", "asserts.json"),
+  };
+}
+
+function writeJson(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
+}
+
+function readJson(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+}
+
+function catalog(result: CatalogResult): AssertionCatalog {
+  assert.equal(result.ok, true, result.ok ? undefined : JSON.stringify(result.diagnostics));
+  return result.catalog;
+}
+
+function find(
+  catalog: AssertionCatalog,
+  identity: AssertionIdentity,
+) {
+  return catalog.entries.find(
+    (entry) => entry.source === identity.source && entry.name === identity.name,
+  );
+}
+
+function localShell(shell = "true", extra: Record<string, unknown> = {}) {
+  return {
+    description: "Local guard",
+    hook: "tool_call",
+    shell,
+    ...extra,
+  };
+}
+
+const remoteShell = {
+  description: "Remote guard",
+  hook: "tool_call" as const,
+  shell: "false",
+};
+
+const id = (source: string, name: string): AssertionIdentity => ({ source, name });
+
+describe("Assertion Catalog creation", () => {
+  it("treats missing authorized files as empty and keeps project authorization", () => {
+    const paths = locations("missing");
+    const loaded = catalog(AssertionCatalog.open(paths));
+
+    assert.deepEqual(loaded.entries, []);
+    assert.deepEqual(loaded.repositories, []);
+    assert.equal(existsSync(paths.global), false);
+    assert.equal(existsSync(paths.project!), false);
+  });
+
+  it("does not read or write omitted untrusted project storage", () => {
+    const paths = locations("untrusted");
+    writeJson(paths.global, { local: { safe: localShell() } });
+    mkdirSync(dirname(paths.project!), { recursive: true });
+    const malformed = "{ keep these malformed bytes";
+    writeFileSync(paths.project!, malformed);
+
+    const loaded = catalog(AssertionCatalog.open({ global: paths.global }));
+    assert.deepEqual(loaded.entries.map((entry) => entry.name), ["safe"]);
+
+    const result = loaded.mutate({
+      type: "install",
+      entries: [{ identity: id("owner/repo", "new"), entry: remoteShell }],
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /not authorized/);
+    assert.equal(readFileSync(paths.project!, "utf8"), malformed);
+  });
+
+  it("partitions by source and replaces matching global entries as whole records", () => {
+    const paths = locations("merge");
+    writeJson(paths.global, {
+      repos: ["ignored/global-metadata"],
+      local: {
+        shared: localShell("global", { when: "global-when" }),
+        globalOnly: localShell("global-only"),
+      },
+      "owner/repo": { sameName: remoteShell },
+    });
+    writeJson(paths.project!, {
+      repos: ["owner/repo"],
+      local: { shared: localShell("project") },
+      "owner/repo": { sameName: { ...remoteShell, shell: "project-repo" } },
+      "hidden/repo": { hidden: remoteShell },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.deepEqual(
+      loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
+      ["local/shared", "local/globalOnly", "owner/repo/sameName"],
+    );
+    const shared = find(loaded, id("local", "shared"));
+    assert.ok(shared && "shell" in shared);
+    assert.equal(shared.shell, "project");
+    assert.equal(shared.when, undefined, "the project record replaces rather than merges");
+    assert.equal(find(loaded, id("hidden/repo", "hidden")), undefined);
+    assert.deepEqual(loaded.repositories, ["owner/repo"]);
+    assert.equal("path" in shared, false, "storage provenance is not exposed");
+  });
+
+  it("retains legacy all-object-section eligibility when project repos is absent", () => {
+    const paths = locations("legacy");
+    writeJson(paths.global, {
+      arbitrary: { global: localShell("global") },
+    });
+    writeJson(paths.project!, {
+      arbitrary: { project: localShell("project") },
+      another: { entry: localShell("another") },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.deepEqual(
+      loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
+      ["arbitrary/global", "arbitrary/project", "another/entry"],
+    );
+  });
+
+  it("reports the first failure for every invalid authorized storage", () => {
+    const paths = locations("diagnostics");
+    mkdirSync(dirname(paths.global), { recursive: true });
+    writeFileSync(paths.global, "not json");
+    writeJson(paths.project!, {
+      local: {
+        bad: { description: "missing shell", hook: "tool_call" },
+        alsoBad: 42,
+      },
+    });
+
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.deepEqual(result.diagnostics.map((item) => item.storage), ["global", "project"]);
+    assert.match(result.diagnostics[0]!.reason, /Unexpected token|JSON/);
+    assert.match(result.diagnostics[1]!.reason, /local\/bad/);
+    assert.equal(result.diagnostics.length, 2);
+    assert.equal("path" in result.diagnostics[0]!, false);
+  });
+
+  it("rejects a non-object storage root", () => {
+    const paths = locations("invalid-root");
+    mkdirSync(dirname(paths.global), { recursive: true });
+    writeFileSync(paths.global, "[]");
+
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "global");
+      assert.match(result.diagnostics[0]!.reason, /JSON object/);
+    }
+  });
+
+  it("rejects invalid file metadata without a partial catalog", () => {
+    const paths = locations("invalid-shape");
+    writeJson(paths.global, { local: { valid: localShell() } });
+    writeJson(paths.project!, {
+      repos: ["not-qualified"],
+      local: {
+        invalid: { description: "x", hook: "made_up", shell: "true" },
+      },
+    });
+
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics.length, 1);
+      assert.equal(result.diagnostics[0]!.storage, "project");
+      assert.match(result.diagnostics[0]!.reason, /repos/);
+    }
+  });
+
+  it("returns source-qualified diagnostics for invalid filter regexes", () => {
+    const paths = locations("invalid-regex");
+    writeJson(paths.project!, {
+      local: {
+        bad: {
+          description: "x",
+          hook: "tool_call",
+          shell: "true",
+          filter: { toolName: "[" },
+        },
+      },
+    });
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "project");
+      assert.match(result.diagnostics[0]!.reason, /local\/bad/);
+      assert.match(result.diagnostics[0]!.reason, /invalid regex/);
+    }
+  });
+
+  it("returns source-qualified diagnostics for invalid entries", () => {
+    const paths = locations("invalid-entry");
+    writeJson(paths.project!, {
+      local: {
+        bad: { description: "x", hook: "made_up", shell: "true" },
+      },
+    });
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "project");
+      assert.match(result.diagnostics[0]!.reason, /local\/bad/);
+      assert.match(result.diagnostics[0]!.reason, /unknown lifecycle hook/);
+    }
+  });
+});
+
+describe("Assertion Catalog mutations", () => {
+  it("installs a validated batch with repository allowlist updates in one replacement", () => {
+    const paths = locations("batch-install");
+    writeJson(paths.project!, {
+      $schema: "https://example.test/schema.json",
+      local: { existing: localShell("keep") },
+    });
+    const initial = catalog(AssertionCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [
+        {
+          identity: id("owner/rules", "guard"),
+          entry: { ...remoteShell, filter: { toolName: "^bash$" } },
+        },
+        {
+          identity: id("owner/rules", "bundle"),
+          entry: {
+            description: "Bundle",
+            preset: ["owner/rules/guard", "owner/rules/unavailable"],
+          },
+        },
+      ],
+    });
+    const fresh = catalog(result);
+
+    assert.notStrictEqual(fresh, initial);
+    assert.deepEqual(initial.entries.map((entry) => entry.name), ["existing"]);
+    assert.deepEqual(fresh.repositories, ["owner/rules"]);
+    assert.ok(find(fresh, id("owner/rules", "guard")));
+    assert.ok(find(fresh, id("owner/rules", "bundle")));
+    const persisted = readJson(paths.project!);
+    assert.equal(persisted.$schema, "https://example.test/schema.json");
+    assert.deepEqual(persisted.repos, ["owner/rules"]);
+    assert.ok((persisted.local as Record<string, unknown>).existing);
+    assert.deepEqual(
+      (persisted["owner/rules"] as Record<string, unknown>).guard,
+      {
+        description: "Remote guard",
+        hook: "tool_call",
+        shell: "false",
+        filter: { toolName: "^bash$" },
+      },
+    );
+    assert.deepEqual(
+      readdirSync(dirname(paths.project!)).filter((name) => name.includes(".tmp")),
+      [],
+    );
+  });
+
+  it("independently validates mutation inputs and leaves disk unchanged on failure", () => {
+    const paths = locations("input-validation");
+    writeJson(paths.project!, { local: { keep: localShell() } });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(AssertionCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [{
+        identity: id("owner/rules", "bad"),
+        entry: { description: "bad", hook: "unknown", shell: "true" } as never,
+      }],
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    assert.equal(find(initial, id("owner/rules", "bad")), undefined);
+  });
+
+  it("rejects duplicate batch identities without writing", () => {
+    const paths = locations("duplicate-batch");
+    const initial = catalog(AssertionCatalog.open(paths));
+    const result = initial.mutate({
+      type: "install",
+      entries: [
+        { identity: id("owner/rules", "same"), entry: remoteShell },
+        { identity: id("owner/rules", "same"), entry: remoteShell },
+      ],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(paths.project!), false);
+  });
+
+  it("re-reads before install so unrelated external edits survive", () => {
+    const paths = locations("reread");
+    writeJson(paths.project!, { local: { original: localShell("one") } });
+    const initial = catalog(AssertionCatalog.open(paths));
+    writeJson(paths.project!, {
+      local: {
+        original: localShell("externally-changed"),
+        external: localShell("added-outside"),
+      },
+    });
+
+    const fresh = catalog(initial.mutate({
+      type: "install",
+      entries: [{ identity: id("owner/rules", "new"), entry: remoteShell }],
+    }));
+
+    const original = find(fresh, id("local", "original"));
+    assert.ok(original && "shell" in original);
+    assert.equal(original.shell, "externally-changed");
+    assert.ok(find(fresh, id("local", "external")));
+  });
+
+  it("preserves malformed external bytes and the previous snapshot on mutation failure", () => {
+    const paths = locations("malformed-reread");
+    writeJson(paths.project!, { local: { keep: localShell() } });
+    const initial = catalog(AssertionCatalog.open(paths));
+    const malformed = "{ definitely malformed";
+    writeFileSync(paths.project!, malformed);
+
+    const result = initial.mutate({
+      type: "set-default",
+      identity: id("local", "keep"),
+      value: true,
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.diagnostics[0]!.storage, "project");
+    assert.equal(readFileSync(paths.project!, "utf8"), malformed);
+    assert.ok(find(initial, id("local", "keep")));
+  });
+
+  it("validates every authorized storage before mutating the target storage", () => {
+    const paths = locations("validate-all-before-write");
+    writeJson(paths.global, { local: { global: localShell() } });
+    writeJson(paths.project!, { local: { project: localShell() } });
+    const initial = catalog(AssertionCatalog.open(paths));
+    const projectBefore = readFileSync(paths.project!, "utf8");
+    writeFileSync(paths.global, "{ malformed unrelated global storage");
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [{ identity: id("owner/rules", "new"), entry: remoteShell }],
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.diagnostics[0]!.storage, "global");
+    assert.equal(readFileSync(paths.project!, "utf8"), projectBefore);
+  });
+
+  it("updates whichever storage supplies the visible entry and preserves local default", () => {
+    const paths = locations("update-provenance");
+    writeJson(paths.global, {
+      local: {
+        globalEntry: localShell("old", { default: true }),
+        shadowed: localShell("global-shadow"),
+      },
+    });
+    writeJson(paths.project!, {
+      local: { shadowed: localShell("project-shadow", { default: true }) },
+    });
+    let current = catalog(AssertionCatalog.open(paths));
+
+    current = catalog(current.mutate({
+      type: "update",
+      identity: id("local", "globalEntry"),
+      entry: localShell("new-global", { default: false }),
+    }));
+    current = catalog(current.mutate({
+      type: "update",
+      identity: id("local", "shadowed"),
+      entry: localShell("new-project"),
+    }));
+
+    const global = readJson(paths.global);
+    const project = readJson(paths.project!);
+    assert.deepEqual((global.local as Record<string, unknown>).globalEntry, {
+      description: "Local guard",
+      hook: "tool_call",
+      shell: "new-global",
+      default: true,
+    });
+    assert.equal(
+      ((global.local as Record<string, unknown>).shadowed as Record<string, unknown>).shell,
+      "global-shadow",
+    );
+    assert.deepEqual((project.local as Record<string, unknown>).shadowed, {
+      description: "Local guard",
+      hook: "tool_call",
+      shell: "new-project",
+      default: true,
+    });
+    assert.equal(find(current, id("local", "shadowed"))?.default, true);
+  });
+
+  it("uses provenance from the mandatory re-read rather than the old snapshot", () => {
+    const paths = locations("fresh-provenance");
+    writeJson(paths.global, { local: { moving: localShell("global-old") } });
+    writeJson(paths.project!, { local: { moving: localShell("project-old") } });
+    const initial = catalog(AssertionCatalog.open(paths));
+    writeJson(paths.project!, { local: { unrelated: localShell("keep") } });
+
+    const fresh = catalog(initial.mutate({
+      type: "update",
+      identity: id("local", "moving"),
+      entry: localShell("global-new"),
+    }));
+
+    assert.deepEqual((readJson(paths.global).local as Record<string, unknown>).moving, {
+      description: "Local guard",
+      hook: "tool_call",
+      shell: "global-new",
+    });
+    assert.ok((readJson(paths.project!).local as Record<string, unknown>).unrelated);
+    const moving = find(fresh, id("local", "moving"));
+    assert.ok(moving && "shell" in moving);
+    assert.equal(moving.shell, "global-new");
+  });
+
+  it("removes only the owning source and reveals a matching global entry", () => {
+    const paths = locations("remove");
+    writeJson(paths.global, {
+      local: { same: localShell("global") },
+      "owner/other": { same: remoteShell },
+    });
+    writeJson(paths.project!, {
+      local: {
+        same: localShell("project"),
+        sibling: localShell("keep"),
+      },
+      "owner/other": { same: { ...remoteShell, shell: "other-project" } },
+    });
+    const initial = catalog(AssertionCatalog.open(paths));
+
+    const fresh = catalog(initial.mutate({
+      type: "remove",
+      identity: id("local", "same"),
+    }));
+
+    const revealed = find(fresh, id("local", "same"));
+    assert.ok(revealed && "shell" in revealed);
+    assert.equal(revealed.shell, "global");
+    assert.ok(find(fresh, id("local", "sibling")));
+    assert.ok(find(fresh, id("owner/other", "same")));
+  });
+
+  it("fails a stale mutation when the identity disappeared after re-read", () => {
+    const paths = locations("stale-missing");
+    writeJson(paths.project!, { local: { stale: localShell() } });
+    const initial = catalog(AssertionCatalog.open(paths));
+    writeJson(paths.project!, { local: { other: localShell() } });
+
+    const result = initial.mutate({
+      type: "remove",
+      identity: id("local", "stale"),
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /was not found/);
+    assert.ok((readJson(paths.project!).local as Record<string, unknown>).other);
+  });
+
+  it("edits only local presets and preserves the effective default preference", () => {
+    const paths = locations("edit-preset");
+    writeJson(paths.global, {
+      local: {
+        editable: { description: "Old", preset: [], default: true },
+      },
+      "owner/rules": {
+        locked: { description: "Locked", preset: [] },
+      },
+    });
+    const initial = catalog(AssertionCatalog.open(paths));
+
+    const fresh = catalog(initial.mutate({
+      type: "edit-local-preset",
+      identity: id("local", "editable"),
+      description: "New",
+      preset: ["local/missing"],
+    }));
+    assert.deepEqual((readJson(paths.global).local as Record<string, unknown>).editable, {
+      description: "New",
+      preset: ["local/missing"],
+      default: true,
+    });
+    assert.equal(find(fresh, id("local", "editable"))?.description, "New");
+
+    const locked = fresh.mutate({
+      type: "edit-local-preset",
+      identity: id("owner/rules", "locked"),
+      description: "No",
+      preset: [],
+    });
+    assert.equal(locked.ok, false);
+    if (!locked.ok) assert.match(locked.diagnostics[0]!.reason, /only local/);
+  });
+
+  it("toggles default on the current owner without changing entry content", () => {
+    const paths = locations("default");
+    writeJson(paths.project!, {
+      local: {
+        guard: localShell("check", { filter: { toolName: "^bash$" } }),
+      },
+    });
+    let current = catalog(AssertionCatalog.open(paths));
+    current = catalog(current.mutate({
+      type: "set-default",
+      identity: id("local", "guard"),
+      value: true,
+    }));
+    assert.equal(find(current, id("local", "guard"))?.default, true);
+    current = catalog(current.mutate({
+      type: "set-default",
+      identity: id("local", "guard"),
+      value: false,
+    }));
+
+    assert.equal(find(current, id("local", "guard"))?.default, false);
+    assert.deepEqual((readJson(paths.project!).local as Record<string, unknown>).guard, {
+      description: "Local guard",
+      hook: "tool_call",
+      shell: "check",
+      filter: { toolName: "^bash$" },
+    });
+  });
+
+  it("adds a repository through project storage and returns the fresh allowlist", () => {
+    const paths = locations("add-repo");
+    const initial = catalog(AssertionCatalog.open(paths));
+    const fresh = catalog(initial.mutate({
+      type: "add-repository",
+      source: "owner/rules",
+    }));
+
+    assert.deepEqual(initial.repositories, []);
+    assert.deepEqual(fresh.repositories, ["owner/rules"]);
+    assert.deepEqual(readJson(paths.project!).repos, ["owner/rules"]);
+
+    const invalid = fresh.mutate({ type: "add-repository", source: "invalid" });
+    assert.equal(invalid.ok, false);
+  });
+});

@@ -9,7 +9,11 @@
  * See `fuzzy-search.md` for the full design.
  */
 
-import type { Assert, ShellAssert, PresetAssert } from "../engine.js";
+import type {
+  CatalogEntry,
+  CatalogPreset,
+  CatalogShellAssertion,
+} from "../assertion-catalog/index.js";
 
 export interface FuzzyResult {
   /** Higher is better. Includes the per-field tier in `filterSection`. */
@@ -192,7 +196,7 @@ export function highlightSegments(query: string, target: string): Segment[] | nu
 }
 
 /**
- * Per-field scorer config: which `Assert` field, its dominance tier, and an
+ * Per-field scorer config: which catalog-entry field, its dominance tier, and an
  * optional `coerce` that turns a non-string field value into the string
  * `matchQuery` ranks on.  Without `coerce` the value is used only when it's
  * already a non-empty string.  `coerce`'s output must match the string the
@@ -200,7 +204,7 @@ export function highlightSegments(query: string, target: string): Segment[] | nu
  * `renderAssertDetail` joins a preset's refs with the same `", "`.
  */
 const FIELDS: {
-  field: keyof ShellAssert | keyof PresetAssert;
+  field: keyof CatalogShellAssertion | keyof CatalogPreset;
   tier: number;
   coerce?: (v: unknown) => string;
 }[] = [
@@ -217,7 +221,7 @@ const FIELDS: {
 ];
 
 export interface SectionMatch {
-  assert: Assert;
+  assert: CatalogEntry;
   result: FuzzyResult;
 }
 
@@ -240,18 +244,21 @@ export interface SectionMatch {
  * ranks on — the same `", "` join `renderAssertDetail` highlights — so a
  * search for a ref name surfaces the preset referencing it.
  */
-export function filterSection(query: string, asserts: Assert[]): SectionMatch[] {
+export function filterSection(
+  query: string,
+  entries: readonly CatalogEntry[],
+): SectionMatch[] {
   const stripped = query.replace(/\s+/g, "");
   if (!stripped) {
-    return asserts.map((assert) => ({
+    return entries.map((assert) => ({
       assert,
       result: { score: 0, positions: [] } as FuzzyResult,
     }));
   }
 
   const ranked: SectionMatch[] = [];
-  for (let i = 0; i < asserts.length; i++) {
-    const a = asserts[i]!;
+  for (let i = 0; i < entries.length; i++) {
+    const a = entries[i]!;
     let best: { score: number; positions: number[] } | null = null;
     for (const { field, tier, coerce } of FIELDS) {
       const raw = (a as unknown as Record<string, unknown>)[field];

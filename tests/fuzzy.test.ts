@@ -15,7 +15,7 @@ import {
   filterSection,
   highlightSegments,
 } from "../pi-assert/ui/fuzzy.js";
-import type { Assert } from "../pi-assert/engine.js";
+import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
 
 function makeAssert(
   name: string,
@@ -25,7 +25,7 @@ function makeAssert(
     shell?: string;
     when?: string;
   } = {},
-): Assert {
+): CatalogEntry {
   return {
     name,
     source: opts.source ?? "local",
@@ -43,7 +43,7 @@ function makePreset(
   name: string,
   refs: string[] = [],
   opts: { source?: string; description?: string } = {},
-): Assert {
+): CatalogEntry {
   return {
     name,
     source: opts.source ?? "local",
@@ -299,14 +299,14 @@ describe("filterSection", () => {
     // makeAssert sets description:"" by default here; verify an assert
     // built with the panel-test helper shape (description omitted entirely
     // on the type but present as undefined) still ranks.
-    const a: Assert = {
+    const a: CatalogEntry = {
       name: "no-env",
       source: "local",
       hook: "tool_call",
       shell: "true",
       default: false,
       // description intentionally omitted
-    } as unknown as Assert;
+    } as unknown as CatalogEntry;
     const out = filterSection("env", [a]);
     assert.equal(out.length, 1);
     assert.equal(out[0]!.assert, a);

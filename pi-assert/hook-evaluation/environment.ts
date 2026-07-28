@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TextContent } from "@earendil-works/pi-ai";
 import { globalFilePath } from "../config.js";
-import type { EntryFilter, Hook } from "../domain/entry.js";
+import type { Hook, ReadonlyEntryFilter } from "../domain/entry.js";
 import type {
   HookExecutionContext,
   ToolCallEvent,
@@ -37,7 +37,7 @@ function matchScalar(expected: unknown, actual: unknown): boolean {
 
 /** Shared filter semantics for native and synthetic assertion candidates. */
 export function matchFilter(
-  filter: EntryFilter | undefined,
+  filter: ReadonlyEntryFilter | undefined,
   candidate: Record<string, unknown>,
 ): boolean {
   if (!filter) return true;

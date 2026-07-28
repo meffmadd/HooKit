@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { entryRef, type AssertResultEvent } from "../domain/entry.js";
-import type { ShellAssert } from "../engine.js";
+import type { ActiveAssertion } from "./assertions.js";
 import type {
   AssertionFailure,
   HookAdapter,
@@ -25,13 +25,13 @@ export interface InvocationBatch {
 interface InvocationOptions {
   readonly onExecution?: (record: ExecutionRecord) => void;
   readonly continueAfterUnexpected?: (
-    assertion: ShellAssert,
+    assertion: ActiveAssertion,
     error: unknown,
   ) => void | Promise<void>;
 }
 
 function assertionResult(
-  assertion: ShellAssert,
+  assertion: ActiveAssertion,
   runId: string,
   outcome: AssertResultEvent["outcome"],
   code: number | null,
@@ -47,7 +47,7 @@ function assertionResult(
 
 /** Execute configured Assertion Invocations in deterministic assertion order. */
 export async function invokeAssertions<E>(
-  assertions: readonly ShellAssert[],
+  assertions: readonly ActiveAssertion[],
   adapter: HookAdapter<E>,
   event: E,
   context: HookExecutionContext,
