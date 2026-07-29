@@ -2181,14 +2181,27 @@ describe("AssertsPanel M3: source-qualified catalog mutations", () => {
     assert.ok(after.Presets === undefined, "no Presets section on disk");
   });
 
-  it("t keeps focus on the highlighted assert after setting it as default", async () => {
-    const cwd = join(tmpRoot, "toggle-default-focus");
-    writeConfig(cwd, {
-      local: {
-        alpha: { description: "A", hook: "tool_call", shell: "true" },
-        gamma: { description: "G", hook: "tool_call", shell: "true" },
-      },
-    });
+  type DrivenComponent = {
+    handleInput(data: string): void;
+    render(width: number): string[];
+  };
+
+  function assertComponentFocus(
+    component: DrivenComponent,
+    name: string,
+    detail = "",
+  ): void {
+    const focused = component.render(100).find((line) => line.includes("[> ]"));
+    assert.ok(
+      focused?.includes(`[${name}`) && focused.includes(detail),
+      `expected ${name}${detail ? ` ${detail}` : ""} to be highlighted, got ${focused}`,
+    );
+  }
+
+  async function driveCommand(
+    cwd: string,
+    steps: Array<(component: DrivenComponent) => void>,
+  ): Promise<void> {
     const state = stateFromDir(cwd);
     let handler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
     const pi = {
@@ -2198,7 +2211,7 @@ describe("AssertsPanel M3: source-qualified catalog mutations", () => {
     } as unknown as ExtensionAPI;
     registerAssertsCommand(pi, state);
 
-    let panelCount = 0;
+    let stepIndex = 0;
     const ctx = {
       cwd,
       isProjectTrusted: () => state.projectTrusted,
@@ -2212,9 +2225,10 @@ describe("AssertsPanel M3: source-qualified catalog mutations", () => {
             theme: Theme,
             keybindings: object,
             done: (value: U) => void,
-          ) => { handleInput(data: string): void; render(width: number): string[] },
+          ) => DrivenComponent,
         ): Promise<U> {
-          panelCount += 1;
+          const step = steps[stepIndex++];
+          assert.ok(step, `unexpected custom UI call ${stepIndex}`);
           return new Promise<U>((resolve) => {
             const component = factory(
               { terminal: { rows: 30 }, requestRender() {} },
@@ -2222,27 +2236,225 @@ describe("AssertsPanel M3: source-qualified catalog mutations", () => {
               {},
               resolve,
             );
-            if (panelCount === 1) {
-              component.handleInput("\x1b[B");
-              assert.ok(
-                component.render(100).some((line) => line.includes("[> ][gamma")),
-                "gamma is highlighted before toggle",
-              );
-              component.handleInput("t");
-              return;
-            }
-            assert.ok(
-              component.render(100).some((line) => line.includes("[> ][gamma") && line.includes("(default)")),
-              "the reopened panel preserves the highlighted assert",
-            );
-            component.handleInput("\x1b");
+            step(component);
           });
         },
       },
     } as unknown as ExtensionContext;
 
     await handler!("", ctx);
-    assert.equal(panelCount, 2, "the default mutation reloads the panel once");
+    assert.equal(stepIndex, steps.length, "all expected UI steps ran");
+  }
+
+  it("t keeps focus on the highlighted assert after setting it as default", async () => {
+    const cwd = join(tmpRoot, "toggle-default-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        assertComponentFocus(component, "gamma");
+        component.handleInput("t");
+      },
+      (component) => {
+        assertComponentFocus(component, "gamma", "(default)");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("i restores focus after the install picker is cancelled", async () => {
+    const cwd = join(tmpRoot, "install-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        component.handleInput("i");
+      },
+      (component) => component.handleInput("\x1b"),
+      (component) => {
+        assertComponentFocus(component, "gamma");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("n restores focus after preset creation is cancelled", async () => {
+    const cwd = join(tmpRoot, "cancel-create-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        component.handleInput("n");
+      },
+      (component) => component.handleInput("\x1b"),
+      (component) => {
+        assertComponentFocus(component, "gamma");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("n focuses the newly created preset", async () => {
+    const cwd = join(tmpRoot, "created-preset-focus");
+    writeConfig(cwd, {
+      local: {
+        existing: { description: "E", preset: [] },
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\t");
+        component.handleInput("\x1b[B");
+        component.handleInput("n");
+      },
+      (component) => {
+        for (const char of "fresh") component.handleInput(char);
+        component.handleInput("\r");
+      },
+      (component) => {
+        assertComponentFocus(component, "fresh");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("e returns focus to the edited preset", async () => {
+    const cwd = join(tmpRoot, "edit-preset-focus");
+    writeConfig(cwd, {
+      local: {
+        bundleA: { description: "A", preset: [] },
+        bundleB: { description: "B", preset: [] },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        component.handleInput("e");
+      },
+      (component) => {
+        component.handleInput("x");
+        component.handleInput("\r");
+      },
+      (component) => component.handleInput("\x1b"),
+      (component) => {
+        assertComponentFocus(component, "bundleB");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("r focuses the next assert after removing a middle row", async () => {
+    const cwd = join(tmpRoot, "remove-middle-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        beta: { description: "B", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        component.handleInput("r");
+        component.handleInput("y");
+      },
+      (component) => {
+        assertComponentFocus(component, "gamma");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("r focuses the previous assert after removing the last row", async () => {
+    const cwd = join(tmpRoot, "remove-last-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        beta: { description: "B", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\x1b[B");
+        component.handleInput("r");
+        component.handleInput("y");
+      },
+      (component) => {
+        assertComponentFocus(component, "alpha");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("r moves to the next section after removing its only preset", async () => {
+    const cwd = join(tmpRoot, "remove-only-preset-focus");
+    writeConfig(cwd, {
+      local: {
+        bundle: { description: "B", preset: [] },
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("r");
+        component.handleInput("y");
+      },
+      (component) => {
+        assertComponentFocus(component, "alpha");
+        component.handleInput("\x1b");
+      },
+    ]);
+  });
+
+  it("r moves to the previous section's last row when the final section disappears", async () => {
+    const cwd = join(tmpRoot, "remove-final-section-focus");
+    writeConfig(cwd, {
+      repos: ["repo/z"],
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        beta: { description: "B", hook: "tool_call", shell: "true" },
+      },
+      "repo/z": {
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+
+    await driveCommand(cwd, [
+      (component) => {
+        component.handleInput("\t");
+        component.handleInput("r");
+        component.handleInput("y");
+      },
+      (component) => {
+        assertComponentFocus(component, "beta");
+        component.handleInput("\x1b");
+      },
+    ]);
   });
 
   it("t toggles default through the preset's source/name identity", () => {

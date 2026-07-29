@@ -89,8 +89,19 @@ type PanelAction =
   | "install"
   | "reload"
   | "create-preset"
-  | { type: "reload"; focus: AssertionIdentity }
   | { type: "edit-preset"; preset: CatalogPreset };
+
+interface PanelFocusBookmark {
+  readonly identity?: AssertionIdentity;
+  readonly sectionSource: string;
+  readonly sectionIndex: number;
+  readonly rowIndex: number;
+}
+
+interface PanelExit {
+  readonly action: Exclude<PanelAction, "cancel">;
+  readonly focus: PanelFocusBookmark;
+}
 
 export class AssertsPanel extends SectionedPanel {
   private confirm: { name: string; source: string } | null = null;
@@ -175,7 +186,7 @@ export class AssertsPanel extends SectionedPanel {
 
   constructor(
     private state: AssertsState,
-    initialFocus?: AssertionIdentity,
+    initialFocus?: PanelFocusBookmark,
   ) {
     super();
     this.groups = groupBySource(state.entries);
@@ -183,20 +194,72 @@ export class AssertsPanel extends SectionedPanel {
       this.groups.map((g) => ({ items: g.asserts })),
     );
 
+    const setFocus = (section: number, row: number): void => {
+      this.nav.focus = section;
+      this.nav.selection[section] = row;
+    };
+
     // Catalog mutations install fresh immutable entry objects. Restore by
-    // canonical identity rather than object reference when a panel reloads.
-    if (initialFocus) {
+    // canonical identity rather than object reference when the entry survives.
+    const identity = initialFocus?.identity;
+    if (identity) {
       for (let section = 0; section < this.groups.length; section++) {
         const index = this.groups[section]!.asserts.findIndex(
           (entry) =>
-            entry.source === initialFocus.source && entry.name === initialFocus.name,
+            entry.source === identity.source && entry.name === identity.name,
         );
         if (index >= 0) {
-          this.nav.focus = section;
-          this.nav.selection[section] = index;
+          setFocus(section, index);
           return;
         }
       }
+    }
+
+    // A removed entry has no identity to restore. Stay in its display section
+    // at the same row (next item, or previous when the old row was last).
+    if (initialFocus && this.groups.length > 0) {
+      const matchingSection = this.groups.findIndex(
+        (group) => group.source === initialFocus.sectionSource,
+      );
+      if (matchingSection >= 0 && this.groups[matchingSection]!.asserts.length > 0) {
+        const lastRow = this.groups[matchingSection]!.asserts.length - 1;
+        setFocus(
+          matchingSection,
+          Math.min(initialFocus.rowIndex, lastRow),
+        );
+        return;
+      }
+
+      // If the display section emptied or disappeared, move to the first row
+      // of the next non-empty section, or the last row of the previous one.
+      const nextStart = matchingSection >= 0
+        ? matchingSection + 1
+        : Math.min(initialFocus.sectionIndex, this.groups.length);
+      for (let section = nextStart; section < this.groups.length; section++) {
+        if (this.groups[section]!.asserts.length > 0) {
+          setFocus(section, 0);
+          return;
+        }
+      }
+      const previousStart = matchingSection >= 0
+        ? matchingSection - 1
+        : Math.min(initialFocus.sectionIndex - 1, this.groups.length - 1);
+      for (let section = previousStart; section >= 0; section--) {
+        const lastRow = this.groups[section]!.asserts.length - 1;
+        if (lastRow >= 0) {
+          setFocus(section, lastRow);
+          return;
+        }
+      }
+
+      // No entries remain; retain the nearest section header.
+      setFocus(
+        matchingSection >= 0
+          ? matchingSection
+          : Math.min(initialFocus.sectionIndex, this.groups.length - 1),
+        0,
+      );
+      return;
     }
 
     // Open on the first non-empty section so the user lands on a real row.
@@ -204,6 +267,22 @@ export class AssertsPanel extends SectionedPanel {
     // it (index 0) when every section is empty keeps `p`/`n` reachable.
     const firstNonEmpty = this.groups.findIndex((g) => g.asserts.length > 0);
     if (firstNonEmpty >= 0) this.nav.focus = firstNonEmpty;
+  }
+
+  /** Capture a stable focus bookmark before the command loop rebuilds the panel. */
+  focusBookmark(): PanelFocusBookmark {
+    const sectionIndex = this.nav.focusedSection;
+    const group = this.groups[sectionIndex];
+    const rowIndex = this.nav.focusedIndex;
+    const selected = group?.asserts[rowIndex];
+    return {
+      ...(selected
+        ? { identity: { source: selected.source, name: selected.name } }
+        : {}),
+      sectionSource: group?.source ?? PRESETS_SOURCE,
+      sectionIndex,
+      rowIndex,
+    };
   }
 
   /** Wire the TUI re-render trigger (called inside `ctx.ui.custom`). */
@@ -721,10 +800,7 @@ export class AssertsPanel extends SectionedPanel {
         );
         return undefined;
       }
-      return {
-        type: "reload",
-        focus: { source: selected.source, name: selected.name },
-      };
+      return "reload";
     }
 
     // ── e: edit focused preset (local presets only) ──
@@ -786,7 +862,7 @@ export class AssertsPanel extends SectionedPanel {
 export async function createLocalPreset(
   ctx: ExtensionContext,
   state: AssertsState,
-): Promise<void> {
+): Promise<AssertionIdentity | undefined> {
   const name = await textInputDialog(ctx, {
     title: "New preset",
     label: "Preset name:",
@@ -818,6 +894,7 @@ export async function createLocalPreset(
     return;
   }
   ctx.ui.notify(`pi-assert: created preset "${name}".`, "info");
+  return { source: "local", name };
 }
 
 // ---------------------------------------------------------------------------
@@ -909,13 +986,13 @@ export function registerAssertsCommand(
       state.updateStatus(ctx);
 
       // Each successful action already installs a fresh catalog snapshot.
-      // Re-enter only to rebuild the panel around that snapshot. A default
-      // toggle carries its selected identity into the next immutable panel.
-      let reloadFocus: AssertionIdentity | undefined;
+      // Re-enter only to rebuild the panel around that snapshot, carrying a
+      // focus bookmark through every child flow and mutation.
+      let reloadFocus: PanelFocusBookmark | undefined;
       while (true) {
         const initialFocus = reloadFocus;
         reloadFocus = undefined;
-        const action = await ctx.ui.custom<PanelAction | null>(
+        const exit = await ctx.ui.custom<PanelExit | null>(
           (tui, theme, kb, done) => {
             const panel = new AssertsPanel(state, initialFocus);
             panel.setTheme(theme);
@@ -943,9 +1020,11 @@ export function registerAssertsCommand(
               render: (w: number) => container.render(w),
               invalidate: () => container.invalidate(),
               handleInput: (data: string) => {
-                const result = panel.handleInput(data, ctx);
-                if (result) {
-                  done(result === "cancel" ? null : result);
+                const action = panel.handleInput(data, ctx);
+                if (action) {
+                  done(action === "cancel"
+                    ? null
+                    : { action, focus: panel.focusBookmark() });
                 }
                 tui.requestRender();
               },
@@ -954,27 +1033,24 @@ export function registerAssertsCommand(
           sectionedPanelOverlay(),
         );
 
+        if (exit === null) break;
+
+        const { action, focus } = exit;
+        reloadFocus = focus;
         if (action === "install") {
           await runInstallWizard(ctx, state);
           continue;
         }
         if (action === "create-preset") {
-          await createLocalPreset(ctx, state);
+          const created = await createLocalPreset(ctx, state);
+          if (created) reloadFocus = { ...focus, identity: created };
           continue;
         }
-        if (action !== null && typeof action === "object") {
-          if (action.type === "edit-preset") {
-            await editPreset(ctx, state, action.preset);
-            continue;
-          }
-          reloadFocus = action.focus;
+        if (typeof action === "object") {
+          await editPreset(ctx, state, action.preset);
           continue;
         }
-        if (action === "reload") {
-          continue;
-        }
-        // null / cancel
-        break;
+        if (action === "reload") continue;
       }
     },
   });
