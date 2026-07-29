@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   isCatalogPreset,
+  type AssertionIdentity,
   type CatalogEntry,
   type CatalogPreset,
 } from "../assertion-catalog/index.js";
@@ -88,6 +89,7 @@ type PanelAction =
   | "install"
   | "reload"
   | "create-preset"
+  | { type: "reload"; focus: AssertionIdentity }
   | { type: "edit-preset"; preset: CatalogPreset };
 
 export class AssertsPanel extends SectionedPanel {
@@ -171,12 +173,32 @@ export class AssertsPanel extends SectionedPanel {
     return !this.state.broken && this.state.entries.length > 0;
   }
 
-  constructor(private state: AssertsState) {
+  constructor(
+    private state: AssertsState,
+    initialFocus?: AssertionIdentity,
+  ) {
     super();
     this.groups = groupBySource(state.entries);
     this.nav = new SectionNavigator<CatalogEntry>(
       this.groups.map((g) => ({ items: g.asserts })),
     );
+
+    // Catalog mutations install fresh immutable entry objects. Restore by
+    // canonical identity rather than object reference when a panel reloads.
+    if (initialFocus) {
+      for (let section = 0; section < this.groups.length; section++) {
+        const index = this.groups[section]!.asserts.findIndex(
+          (entry) =>
+            entry.source === initialFocus.source && entry.name === initialFocus.name,
+        );
+        if (index >= 0) {
+          this.nav.focus = section;
+          this.nav.selection[section] = index;
+          return;
+        }
+      }
+    }
+
     // Open on the first non-empty section so the user lands on a real row.
     // The Presets section is always first but may be empty; falling back to
     // it (index 0) when every section is empty keeps `p`/`n` reachable.
@@ -699,7 +721,10 @@ export class AssertsPanel extends SectionedPanel {
         );
         return undefined;
       }
-      return "reload";
+      return {
+        type: "reload",
+        focus: { source: selected.source, name: selected.name },
+      };
     }
 
     // ── e: edit focused preset (local presets only) ──
@@ -884,11 +909,15 @@ export function registerAssertsCommand(
       state.updateStatus(ctx);
 
       // Each successful action already installs a fresh catalog snapshot.
-      // Re-enter only to rebuild the panel around that snapshot.
+      // Re-enter only to rebuild the panel around that snapshot. A default
+      // toggle carries its selected identity into the next immutable panel.
+      let reloadFocus: AssertionIdentity | undefined;
       while (true) {
+        const initialFocus = reloadFocus;
+        reloadFocus = undefined;
         const action = await ctx.ui.custom<PanelAction | null>(
           (tui, theme, kb, done) => {
-            const panel = new AssertsPanel(state);
+            const panel = new AssertsPanel(state, initialFocus);
             panel.setTheme(theme);
             panel.setKeybindings(kb);
             // Wire the re-render trigger so the async orphaned-check can
@@ -933,9 +962,12 @@ export function registerAssertsCommand(
           await createLocalPreset(ctx, state);
           continue;
         }
-        if (action !== null && typeof action === "object" &&
-          action.type === "edit-preset") {
-          await editPreset(ctx, state, action.preset);
+        if (action !== null && typeof action === "object") {
+          if (action.type === "edit-preset") {
+            await editPreset(ctx, state, action.preset);
+            continue;
+          }
+          reloadFocus = action.focus;
           continue;
         }
         if (action === "reload") {

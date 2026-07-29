@@ -2181,6 +2181,70 @@ describe("AssertsPanel M3: source-qualified catalog mutations", () => {
     assert.ok(after.Presets === undefined, "no Presets section on disk");
   });
 
+  it("t keeps focus on the highlighted assert after setting it as default", async () => {
+    const cwd = join(tmpRoot, "toggle-default-focus");
+    writeConfig(cwd, {
+      local: {
+        alpha: { description: "A", hook: "tool_call", shell: "true" },
+        gamma: { description: "G", hook: "tool_call", shell: "true" },
+      },
+    });
+    const state = stateFromDir(cwd);
+    let handler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+    const pi = {
+      registerCommand(_name: string, command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAssertsCommand(pi, state);
+
+    let panelCount = 0;
+    const ctx = {
+      cwd,
+      isProjectTrusted: () => state.projectTrusted,
+      ui: {
+        theme: mockTheme(),
+        notify() {},
+        setStatus() {},
+        custom<U>(
+          factory: (
+            tui: { terminal: { rows: number }; requestRender(): void },
+            theme: Theme,
+            keybindings: object,
+            done: (value: U) => void,
+          ) => { handleInput(data: string): void; render(width: number): string[] },
+        ): Promise<U> {
+          panelCount += 1;
+          return new Promise<U>((resolve) => {
+            const component = factory(
+              { terminal: { rows: 30 }, requestRender() {} },
+              mockTheme(),
+              {},
+              resolve,
+            );
+            if (panelCount === 1) {
+              component.handleInput("\x1b[B");
+              assert.ok(
+                component.render(100).some((line) => line.includes("[> ][gamma")),
+                "gamma is highlighted before toggle",
+              );
+              component.handleInput("t");
+              return;
+            }
+            assert.ok(
+              component.render(100).some((line) => line.includes("[> ][gamma") && line.includes("(default)")),
+              "the reopened panel preserves the highlighted assert",
+            );
+            component.handleInput("\x1b");
+          });
+        },
+      },
+    } as unknown as ExtensionContext;
+
+    await handler!("", ctx);
+    assert.equal(panelCount, 2, "the default mutation reloads the panel once");
+  });
+
   it("t toggles default through the preset's source/name identity", () => {
     const cwd = join(tmpRoot, "toggle-preset");
     writeConfig(cwd, {
