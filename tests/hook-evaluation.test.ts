@@ -123,6 +123,16 @@ describe("Hook Evaluation native outcomes", () => {
       );
     }
     assert.equal(existsSync(join(cwd, "not-run")), false);
+    assert.deepEqual(
+      result.executionReport?.executions.map(({ assertionRef, passed }) => ({
+        assertionRef,
+        passed,
+      })),
+      [
+        { assertionRef: "local/passes", passed: true },
+        { assertionRef: "local/blocks", passed: false },
+      ],
+    );
   });
 
   it("passes when filters miss or matching shells pass", async () => {
@@ -226,6 +236,10 @@ describe("Hook Evaluation native outcomes", () => {
     assert.match(presentationMessages(result)[0] ?? "", /2 turn_end assertions failed/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*one\*\*/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*two\*\*/);
+    assert.deepEqual(
+      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/one", "local/two"],
+    );
   });
 
   it("reports all agent_settled failures", async () => {
@@ -277,16 +291,29 @@ describe("Hook Evaluation native outcomes", () => {
     }
   });
 
-  it("returns frozen minimal results without internal policy records", async () => {
+  it("returns an immutable report containing only actual shell executions", async () => {
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("pass", "tool_call")],
+      [assertion("pass", "tool_call", "true", { source: "owner/rules" })],
     );
-    assert.deepEqual(Object.keys(result).sort(), ["effects", "outcome"]);
+    assert.deepEqual(Object.keys(result).sort(), [
+      "effects",
+      "executionReport",
+      "outcome",
+    ]);
     assert.ok(Object.isFrozen(result));
     assert.ok(Object.isFrozen(result.effects));
+    assert.ok(Object.isFrozen(result.executionReport));
+    assert.ok(Object.isFrozen(result.executionReport?.executions));
+    assert.equal(result.executionReport?.executions.length, 1);
+    const execution = result.executionReport?.executions[0];
+    assert.equal(execution?.assertionRef, "owner/rules/pass");
+    assert.equal(execution?.hook, "tool_call");
+    assert.equal(execution?.passed, true);
+    assert.ok((execution?.durationMs ?? -1) >= 0);
+    assert.ok(Object.isFrozen(execution));
   });
 });
 
@@ -312,6 +339,7 @@ describe("Assertion Invocation semantics", () => {
     const whenIdentity = readFileSync(join(cwd, "when.log"), "utf8").trim();
     const shellIdentity = readFileSync(join(cwd, "shell.log"), "utf8").trim();
     assert.equal(shellIdentity, whenIdentity);
+    assert.equal(result.executionReport?.executions.length, 1);
     const [ref, hook, runId, event, session] = shellIdentity.split("|");
     assert.equal(ref, "owner/rules/identity");
     assert.equal(hook, "tool_call");
@@ -416,6 +444,26 @@ describe("Assertion Invocation semantics", () => {
     );
     assert.equal(result.outcome, "pass");
     assert.equal(existsSync(join(cwd, "should-not-run")), false);
+    assert.deepEqual(
+      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/pass"],
+    );
+  });
+
+  it("omits a report when filters miss and ordinary when checks skip", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [
+        assertion("miss", "tool_call", "true", {
+          filter: { toolName: "^read$" },
+        }),
+        assertion("skip", "tool_call", "true", { when: "exit 9" }),
+      ],
+    );
+    assert.equal(result.outcome, "pass");
+    assert.equal(result.executionReport, undefined);
   });
 
   it("fails closed when a when process cannot execute", async () => {
@@ -432,6 +480,18 @@ describe("Assertion Invocation semantics", () => {
       assert.match(result.reason, /during when/);
       assert.ok(!result.reason.includes("`true`"));
     }
+    assert.equal(result.executionReport, undefined);
+  });
+
+  it("does not report a main shell that failed before spawning", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [assertion("broken-shell", "tool_call", String.fromCharCode(0))],
+    );
+    assert.equal(result.outcome, "block");
+    assert.equal(result.executionReport, undefined);
   });
 
   it("runs shells in the supplied working directory", async () => {
@@ -608,6 +668,28 @@ describe("synthetic assert_result phase", () => {
     ]);
     assert.match(lines[0] ?? "", /"outcome":"pass","code":0/);
     assert.match(lines[2] ?? "", /"outcome":"report","code":7/);
+
+    const executions = result.executionReport?.executions ?? [];
+    assert.deepEqual(executions.map((execution) => execution.assertionRef), [
+      "local/origin-pass",
+      "local/origin-fail",
+      "local/first",
+      "local/second",
+      "local/first",
+      "local/second",
+    ]);
+    assert.deepEqual(
+      executions.slice(2).map((execution) =>
+        execution.originatingResult?.assertionRef
+      ),
+      [
+        "local/origin-pass",
+        "local/origin-pass",
+        "local/origin-fail",
+        "local/origin-fail",
+      ],
+    );
+    assert.ok(Object.isFrozen(executions[2]?.originatingResult));
   });
 
   it("matches assertion refs by regex, outcomes exactly, and codes strictly", async () => {
@@ -723,13 +805,22 @@ describe("synthetic assert_result phase", () => {
     assert.equal(result.outcome, "pass");
     assert.equal(result.effects.length, 1);
     assert.match(presentationMessages(result)[0] ?? "", /assert_result assertion failed/);
+    assert.deepEqual(
+      result.executionReport?.executions.map((execution) => ({
+        assertionRef: execution.assertionRef,
+        origin: execution.originatingResult?.assertionRef,
+      })),
+      [
+        { assertionRef: "local/origin", origin: undefined },
+        { assertionRef: "local/handler", origin: "local/origin" },
+      ],
+    );
   });
 });
 
 describe("session policy state", () => {
   it("deduplicates corrective retries and clears the fingerprint after a pass", async () => {
     const evaluator = new HookEvaluation();
-    evaluator.beginPrompt();
     await evaluate(
       evaluator,
       "tool_call",
@@ -741,20 +832,18 @@ describe("session policy state", () => {
     const first = await evaluate(evaluator, "agent_end", {}, failing);
     assert.equal(first.outcome, "report");
     assert.deepEqual(first.effects.map((effect) => effect.type), [
-      "present",
       "request-corrective-turn",
     ]);
-    assert.match(
-      first.effects[0]?.type === "present" ? first.effects[0].message : "",
-      /pi-assert ran 2 commands/,
+    assert.deepEqual(
+      first.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/clean"],
     );
 
     const repeated = await evaluate(evaluator, "agent_end", {}, failing);
     assert.deepEqual(repeated.effects.map((effect) => effect.type), [
       "present",
-      "present",
     ]);
-    assert.match(presentationMessages(repeated)[1] ?? "", /automatic retry stopped/);
+    assert.match(presentationMessages(repeated)[0] ?? "", /automatic retry stopped/);
 
     const passing = await evaluate(
       evaluator,
@@ -768,19 +857,28 @@ describe("session policy state", () => {
     assert.equal(afterPass.effects.at(-1)?.type, "request-corrective-turn");
   });
 
-  it("beginPrompt resets execution accounting without clearing session policy", async () => {
+  it("keeps execution accounting local to each native event", async () => {
     const evaluator = new HookEvaluation();
-    evaluator.beginPrompt();
-    await evaluate(
+    const tool = await evaluate(
       evaluator,
       "tool_call",
       toolCall,
       [assertion("tool", "tool_call", "true")],
     );
-    evaluator.beginPrompt();
-    const result = await evaluate(evaluator, "agent_end", {}, []);
-    assert.equal(result.outcome, "pass");
-    assert.deepEqual(result.effects, []);
+    const end = await evaluate(
+      evaluator,
+      "agent_end",
+      {},
+      [assertion("end", "agent_end", "true")],
+    );
+    assert.deepEqual(
+      tool.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/tool"],
+    );
+    assert.deepEqual(
+      end.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/end"],
+    );
   });
 
   it("allows independent tool evaluations to overlap", async () => {
@@ -808,6 +906,14 @@ describe("session policy state", () => {
 
     assert.equal(first.outcome, "pass");
     assert.equal(second.outcome, "pass");
+    assert.deepEqual(
+      first.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/a"],
+    );
+    assert.deepEqual(
+      second.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/b"],
+    );
   });
 });
 

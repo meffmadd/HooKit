@@ -14,6 +14,12 @@ import {
   type RuntimeMetadataSnapshot,
 } from "./hook-evaluation/index.js";
 import { registerAssertsCommand } from "./ui/asserts.js";
+import {
+  EXECUTION_ENTRY_TYPE,
+  executionEntryData,
+  renderExecutionEntry,
+  type ExecutionTrigger,
+} from "./ui/execution-report.js";
 import { AssertsState } from "./ui/state.js";
 
 type ThinkingAwareContext = PiExtensionContext & {
@@ -88,10 +94,59 @@ function assertionContext(
   });
 }
 
+function executionTrigger(
+  hook: NativeHook,
+  event: HookEventMap[NativeHook],
+): ExecutionTrigger {
+  switch (hook) {
+    case "tool_call": {
+      const toolEvent = event as HookEventMap["tool_call"];
+      return {
+        event: "tool_call",
+        toolName: toolEvent.toolName,
+        toolCallId: toolEvent.toolCallId,
+      };
+    }
+    case "tool_result": {
+      const toolEvent = event as HookEventMap["tool_result"];
+      return {
+        event: "tool_result",
+        toolName: toolEvent.toolName,
+        toolCallId: toolEvent.toolCallId,
+      };
+    }
+    case "turn_end":
+      return {
+        event: "turn_end",
+        turnIndex: (event as HookEventMap["turn_end"]).turnIndex,
+      };
+    case "agent_end":
+      return { event: "agent_end" };
+    case "agent_settled":
+      return { event: "agent_settled" };
+    case "session_before_switch":
+      return {
+        event: "session_before_switch",
+        reason: (event as HookEventMap["session_before_switch"]).reason,
+      };
+    case "session_before_fork":
+      return {
+        event: "session_before_fork",
+        position: (event as HookEventMap["session_before_fork"]).position,
+      };
+  }
+}
+
 /** pi-assert extension entry point and thin Pi-specific adapter. */
 export default function (pi: ExtensionAPI) {
   const state = new AssertsState(pi);
   const hookEvaluation = new HookEvaluation();
+
+  try {
+    pi.registerEntryRenderer(EXECUTION_ENTRY_TYPE, renderExecutionEntry);
+  } catch {
+    // Guard behavior must not depend on transcript renderer registration.
+  }
 
   pi.on("session_start", (_event, ctx) => {
     clearRepoEntriesCache();
@@ -125,10 +180,6 @@ export default function (pi: ExtensionAPI) {
         "info",
       );
     }
-  });
-
-  pi.on("agent_start", () => {
-    hookEvaluation.beginPrompt();
   });
 
   pi.on("session_tree", (_event, ctx) => {
@@ -190,6 +241,19 @@ export default function (pi: ExtensionAPI) {
     const activeSet = state.activeAssertionSet();
     const context = assertionContext(pi, ctx);
     const result = await hookEvaluation.evaluate(hook, event, context, activeSet);
+    if (result.executionReport !== undefined) {
+      try {
+        pi.appendEntry(
+          EXECUTION_ENTRY_TYPE,
+          executionEntryData(
+            executionTrigger(hook, event),
+            result.executionReport,
+          ),
+        );
+      } catch {
+        // Durable observability is best-effort; ordered feedback still follows.
+      }
+    }
     await deliverEffects(result.effects, ctx);
     await displayControlOutcome(result, ctx);
     return result;

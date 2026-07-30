@@ -10,11 +10,10 @@ import {
   type AdapterOutcome,
   type HookAdapter,
 } from "./adapters.js";
-import {
-  invokeAssertions,
-  type ExecutionRecord,
-} from "./invocations.js";
+import { invokeAssertions } from "./invocations.js";
 import type {
+  AssertionExecution,
+  AssertionExecutionReport,
   EvaluationEffect,
   EvaluationEventMap,
   HookEvaluationResult,
@@ -30,6 +29,8 @@ export type { ActiveAssertion } from "./assertions.js";
 export type {
   AgentEndEvent,
   AgentSettledEvent,
+  AssertionExecution,
+  AssertionExecutionReport,
   BlockEvaluationResult,
   CancelEvaluationResult,
   EvaluationEffect,
@@ -37,6 +38,7 @@ export type {
   HookEvaluationResultMap,
   HookEventMap,
   HookExecutionContext,
+  OriginatingAssertionResult,
   PassEvaluationResult,
   PatchEvaluationResult,
   PresentationSeverity,
@@ -102,11 +104,28 @@ function freezeResults(
   return Object.freeze(results.map((result) => Object.freeze({ ...result })));
 }
 
-function formatExecutionReport(records: readonly ExecutionRecord[]): string {
-  const totalMs = records.reduce((sum, record) => sum + record.durationMs, 0);
-  return `pi-assert ran ${records.length} command${
-    records.length === 1 ? "" : "s"
-  } in ${totalMs}ms`;
+function freezeExecutionReport(
+  executions: readonly AssertionExecution[],
+): AssertionExecutionReport | undefined {
+  if (executions.length === 0) return undefined;
+  const frozenExecutions = Object.freeze(executions.map((execution) => {
+    const originatingResult = execution.originatingResult === undefined
+      ? undefined
+      : Object.freeze({
+        assertionRef: execution.originatingResult.assertionRef,
+        runId: execution.originatingResult.runId,
+        outcome: execution.originatingResult.outcome,
+      });
+    return Object.freeze({
+      assertionRef: execution.assertionRef,
+      runId: execution.runId,
+      hook: execution.hook,
+      durationMs: execution.durationMs,
+      passed: execution.passed,
+      ...(originatingResult === undefined ? {} : { originatingResult }),
+    });
+  }));
+  return Object.freeze({ executions: frozenExecutions });
 }
 
 function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string {
@@ -118,26 +137,41 @@ function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string
 function publicResult(
   outcome: AdapterOutcome | undefined,
   pendingEffects: EvaluationEffect[],
+  executionReport?: AssertionExecutionReport,
 ): HookEvaluationResult {
   const effects = Object.freeze(
     pendingEffects.map((effect) => Object.freeze({ ...effect })),
   );
-  if (!outcome) return Object.freeze({ outcome: "pass", effects });
+  const reporting = executionReport === undefined ? {} : { executionReport };
+  if (!outcome) {
+    return Object.freeze({ outcome: "pass", effects, ...reporting });
+  }
 
   switch (outcome.action) {
     case "block":
-      return Object.freeze({ outcome: "block", reason: outcome.reason, effects });
+      return Object.freeze({
+        outcome: "block",
+        reason: outcome.reason,
+        effects,
+        ...reporting,
+      });
     case "patch":
       return Object.freeze({
         outcome: "patch",
         reason: outcome.reason,
         patch: outcome.patch,
         effects,
+        ...reporting,
       });
     case "cancel":
-      return Object.freeze({ outcome: "cancel", reason: outcome.reason, effects });
+      return Object.freeze({
+        outcome: "cancel",
+        reason: outcome.reason,
+        effects,
+        ...reporting,
+      });
     case "report":
-      return Object.freeze({ outcome: "report", effects });
+      return Object.freeze({ outcome: "report", effects, ...reporting });
   }
 }
 
@@ -147,12 +181,6 @@ function publicResult(
  */
 export class HookEvaluation {
   private correctiveFingerprints = new Map<NativeHook, string>();
-  private promptExecutions: ExecutionRecord[] = [];
-
-  /** Begin accounting for a new low-level agent prompt. */
-  beginPrompt(): void {
-    this.promptExecutions = [];
-  }
 
   /**
    * Evaluate one native event against one captured Active Assertion Set.
@@ -185,7 +213,6 @@ export class HookEvaluation {
         fallbackAdapter.internalError(error, event as EvaluationEventMap[H]),
       );
       const effects: EvaluationEffect[] = [];
-      this.appendAgentEndSummary(hook, effects);
       this.appendOriginFeedback(hook, fallbackAdapter, outcome, effects);
       return publicResult(outcome, effects) as HookEvaluationResult<H>;
     }
@@ -203,9 +230,6 @@ export class HookEvaluation {
       adapter,
       event,
       context,
-      {
-        onExecution: (record) => this.promptExecutions.push(record),
-      },
     );
 
     let rawOutcome: AdapterOutcome | undefined;
@@ -224,24 +248,35 @@ export class HookEvaluation {
     const outcome = rawOutcome === undefined ? undefined : freezeOutcome(rawOutcome);
     const results = freezeResults(invocation.results);
 
-    // The originating decision and records are frozen before this awaited,
-    // detached phase starts. Handler behavior cannot change that decision.
-    const effects = await this.dispatchSyntheticResults(
+    // The originating decision and result events are frozen before this
+    // awaited, detached phase starts. Handler behavior cannot change it.
+    const synthetic = await this.dispatchSyntheticResults(
       assertions,
       results,
       context,
     );
-    this.appendAgentEndSummary(hook, effects);
-    this.appendOriginFeedback(hook, adapter, outcome, effects);
-    return publicResult(outcome, effects) as HookEvaluationResult<H>;
+    const executionReport = freezeExecutionReport([
+      ...invocation.executions,
+      ...synthetic.executions,
+    ]);
+    this.appendOriginFeedback(hook, adapter, outcome, synthetic.effects);
+    return publicResult(
+      outcome,
+      synthetic.effects,
+      executionReport,
+    ) as HookEvaluationResult<H>;
   }
 
   private async dispatchSyntheticResults(
     assertions: readonly ActiveAssertion[],
     results: readonly AssertResultEvent[],
     context: HookExecutionContext,
-  ): Promise<EvaluationEffect[]> {
+  ): Promise<{
+    effects: EvaluationEffect[];
+    executions: AssertionExecution[];
+  }> {
     const effects: EvaluationEffect[] = [];
+    const executions: AssertionExecution[] = [];
     const adapter = adapterFor("assert_result");
     const detachedContext: HookExecutionContext = Object.freeze({
       cwd: context.cwd,
@@ -256,11 +291,13 @@ export class HookEvaluation {
           result,
           detachedContext,
           {
+            originatingResult: result,
             continueAfterUnexpected: (handler, error) => {
               effects.push(present(handlerErrorMessage(handler, error), "error"));
             },
           },
         );
+        executions.push(...invocation.executions);
         if (invocation.unexpectedError !== undefined) {
           effects.push(present(
             `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
@@ -285,16 +322,7 @@ export class HookEvaluation {
         ));
       }
     }
-    return effects;
-  }
-
-  private appendAgentEndSummary(
-    hook: NativeHook,
-    effects: EvaluationEffect[],
-  ): void {
-    if (hook === "agent_end" && this.promptExecutions.length > 0) {
-      effects.push(present(formatExecutionReport(this.promptExecutions), "info"));
-    }
+    return { effects, executions };
   }
 
   private appendOriginFeedback<E>(

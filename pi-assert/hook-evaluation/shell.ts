@@ -32,6 +32,8 @@ const MANAGED_ENVIRONMENT_KEYS = [
 export interface ShellResult {
   readonly passed: boolean;
   readonly code: number | null;
+  /** Whether /bin/sh actually spawned, as opposed to setup failing first. */
+  readonly started: boolean;
 }
 
 /** Execute through the real local /bin/sh with bounded runtime. */
@@ -53,22 +55,26 @@ export function evaluateShell(
         cwd,
       });
 
+      let started = false;
+      child.on("spawn", () => {
+        started = true;
+      });
       child.on("error", (error: NodeJS.ErrnoException) => {
         if (
           error.name === "AbortError" ||
           signal?.aborted ||
           (error as unknown as { killed?: boolean }).killed
         ) {
-          resolve({ passed: false, code: null });
+          resolve({ passed: false, code: null, started });
           return;
         }
-        resolve({ passed: false, code: null });
+        resolve({ passed: false, code: null, started });
       });
       child.on("close", (code: number | null) => {
-        resolve({ passed: code === 0, code });
+        resolve({ passed: code === 0, code, started });
       });
     } catch {
-      resolve({ passed: false, code: null });
+      resolve({ passed: false, code: null, started: false });
     }
   });
 }

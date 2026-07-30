@@ -8,8 +8,9 @@ fail user-defined shell checks.
 - **`pi-assert/index.ts`** — thin Pi adapter. Authorizes catalog storage after
   checking project trust, loads session state, snapshots Pi's rich callback
   context onto bounded scalar metadata, captures one Active Assertion Set,
-  translates explicit Hook Evaluation outcomes into Pi callbacks, and delivers
-  ordered semantic effects best-effort. It owns no catalog or hook policy.
+  attributes and appends per-trigger execution entries, translates explicit
+  Hook Evaluation outcomes into Pi callbacks, and delivers ordered semantic
+  effects best-effort. It owns no catalog or hook policy.
 - **`pi-assert/assertion-catalog/`** — the session-scoped deep Assertion Catalog
   module. Its facade exposes immutable `AssertionCatalog` snapshots, entries
   without storage paths, explicit `{ source, name }` identities, structured
@@ -25,8 +26,9 @@ fail user-defined shell checks.
   delivery-neutral effects. Private collaborators own the exhaustive adapter
   registry, candidate/filter/environment projection, filter → `when` → shell
   Assertion Invocations, frozen synthetic `assert_result` dispatch, fail-closed
-  policy, execution accounting, and corrective retry deduplication. Shells run
-  via real `child_process.exec`; no shell port exists solely for tests.
+  policy, transaction-local immutable execution reporting (including synthetic
+  handler-to-origin association), and corrective retry deduplication. Shells
+  run via real `child_process.exec`; no shell port exists solely for tests.
 - **`pi-assert/domain/entry.ts` / `domain/validation.ts`** — shared persisted
   entry types, canonical source/name key/ref parsing, `AssertIndex` lookups,
   and persisted-entry validation reused by catalog storage and the external
@@ -38,6 +40,12 @@ fail user-defined shell checks.
   (`fetchRuleFiles`/`fetchRuleFile`, session-cached `fetchRepoEntries`) plus
   pure outdated classification and picker helpers. It performs no local
   persistence; fetched entries are submitted to Assertion Catalog mutations.
+- **`pi-assert/ui/execution-report.ts`** — the one defensive custom-entry
+  payload snapshot and renderer for durable context-neutral per-trigger
+  execution summaries. It owns the inset custom-message box, configured-key
+  collapsed hint, expanded presentation, bounded persisted trigger metadata,
+  duration alignment, and synthetic-handler nesting; Pi owns the global
+  expansion binding and session history.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail and an
@@ -118,13 +126,13 @@ fail user-defined shell checks.
   orphaned asserts (installed name missing from the repo) via a session-cached
   `fetchRepoEntries`. Both degrade silently on network failure.
 - **Prefer one shared implementation over two.** Catalog persistence and
-  validation, Hook Evaluation, list/dialog rendering, sectioned-panel
-  composition + input, and text measuring/wrapping each live in a single
-  module (`assertion-catalog/`, `hook-evaluation/`, `ui/sectioned-panel.ts`,
-  `ui/components.ts`, and pi-tui's `visibleWidth`/`wrapTextWithAnsi`
-  respectively) that every caller builds on. When adding a new view or hook,
-  extend the shared core instead of copying the logic — two copies will
-  silently drift.
+  validation, Hook Evaluation, execution-entry rendering, list/dialog
+  rendering, sectioned-panel composition + input, and text measuring/wrapping
+  each live in a single module (`assertion-catalog/`, `hook-evaluation/`,
+  `ui/execution-report.ts`, `ui/sectioned-panel.ts`, `ui/components.ts`, and
+  pi-tui's `visibleWidth`/`wrapTextWithAnsi` respectively) that every caller
+  builds on. When adding a new view or hook, extend the shared core instead of
+  copying the logic — two copies will silently drift.
 - **Sectioned panels share input, not just rendering.** `SectionedPanel`
   owns the search-mode block and the normal-mode navigation keys
   (`handleSearchInput`/`handleNavInput`) plus `toggleFocused`; the `/asserts`

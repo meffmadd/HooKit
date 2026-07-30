@@ -185,6 +185,40 @@ A preset replaces shell fields with a `preset` array of qualified refs:
 
 Use `/asserts` to install, enable, disable, and manage rules and presets.
 
+## Execution summaries
+
+After each concrete native event, pi-assert appends a durable execution summary
+when at least one assertion main shell actually ran. The collapsed transcript
+row is compact and attributable, for example:
+
+```text
+ pi-assert ran 1 command in 4ms · tool_call bash (ctrl+o to expand)
+ pi-assert ran 2 commands in 8ms · turn_end 2 (ctrl+o to expand)
+```
+
+The collapsed summary is inset and styled like Pi's other transcript messages;
+its hint reflects Pi's global `app.tools.expand` binding (`Ctrl-O` by default).
+Expanded rows show `✓`/`✗`, the canonical `source/name` assertion
+reference, and each shell's duration. Tool summaries also show the tool-call ID
+only when expanded. `assert_result` handler shells count as commands and appear
+with an indented `↳` beneath the originating assertion result; the same handler
+can therefore appear repeatedly when it handles multiple results.
+
+Only started main `shell` commands are listed and counted. Filter misses,
+ordinary non-zero `when` skips, and assertions not reached by fail-fast policy
+are omitted; a passing `when` is not a separate command. A `when`
+infrastructure failure remains on the existing fail-closed error path and does
+not fabricate a shell row. Aggregate hooks list every completed shell.
+
+Execution summaries are custom session entries: they persist across resume,
+reload, fork, and tree navigation but never enter model context. They supplement
+rather than replace block reasons, patched results, cancellation feedback,
+report-only errors, corrective turns, or handler-failure notifications. Pi's
+custom-entry interface is append-only, so summaries for parallel tools can
+appear together after a batch; the trigger suffix and expanded tool-call ID
+provide attribution. Print, JSON, and RPC modes receive no duplicate agent
+message for these summaries.
+
 ## Environment
 
 Every matching assertion receives the following shared variables. Optional

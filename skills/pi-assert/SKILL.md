@@ -141,6 +141,29 @@ session/model/runtime snapshot and are awaited in order without the originating
 abort signal. Their failures cannot change the already-computed originating
 decision, and they never emit recursive results.
 
+## Execution summaries
+
+Each concrete native event that starts at least one main assertion shell gets
+one durable, context-neutral transcript entry. Its inset collapsed form is
+`pi-assert ran N command(s) in Xms · <trigger> (ctrl+o to expand)`; the shown
+key reflects Pi's configured `app.tools.expand` binding (`Ctrl-O` by default).
+Expand it to reveal source-qualified refs, `✓`/`✗` status, per-shell durations,
+and the tool-call ID for tool events.
+Synthetic `assert_result` handler shells count and are nested with `↳` beneath
+the result they handled, including repeated executions of the same handler.
+
+Filters and ordinary non-zero `when` skips produce no row. A passing `when`
+precondition is not counted separately, and an infrastructure failure during
+`when` remains on the existing error path without a fictitious main-shell row.
+Fail-fast hooks show only reached shells; aggregate hooks show all completed
+shells. The entry persists with Pi session history across resume, reload, fork,
+and tree navigation but is never sent to the model. Existing block, patch,
+cancel, report, corrective, and handler-failure feedback remains separate.
+Because Pi appends custom entries rather than attaching them to arbitrary tool
+rows, parallel summaries may appear together after a batch; trigger labels and
+expanded tool-call IDs disambiguate them. Non-TUI modes receive no duplicate
+agent message.
+
 ## Presets
 
 A preset has `description`, a `preset` array, and optional boolean `default`;

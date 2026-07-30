@@ -1,5 +1,10 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import type { AssertResultEvent, NativeHook } from "../domain/entry.js";
+import type {
+  AssertResultEvent,
+  AssertResultOutcome,
+  Hook,
+  NativeHook,
+} from "../domain/entry.js";
 
 /** Minimal native tool-call event consumed by Hook Evaluation. */
 export interface ToolCallEvent {
@@ -102,8 +107,31 @@ export type EvaluationEffect =
       readonly message: string;
     };
 
+/** Result identity that causally associates a synthetic handler execution. */
+export interface OriginatingAssertionResult {
+  readonly assertionRef: string;
+  readonly runId: string;
+  readonly outcome: AssertResultOutcome;
+}
+
+/** One actually started main assertion shell, never a filter or precondition. */
+export interface AssertionExecution {
+  readonly assertionRef: string;
+  readonly runId: string;
+  readonly hook: Hook;
+  readonly durationMs: number;
+  readonly passed: boolean;
+  readonly originatingResult?: OriginatingAssertionResult;
+}
+
+/** Immutable, delivery-neutral accounting for one complete Hook Evaluation. */
+export interface AssertionExecutionReport {
+  readonly executions: readonly AssertionExecution[];
+}
+
 interface EvaluationResultBase {
   readonly effects: readonly EvaluationEffect[];
+  readonly executionReport?: AssertionExecutionReport;
 }
 
 export interface PassEvaluationResult extends EvaluationResultBase {

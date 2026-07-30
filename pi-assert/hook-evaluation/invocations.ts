@@ -7,23 +7,21 @@ import type {
 } from "./adapters.js";
 import { matchFilter } from "./environment.js";
 import { evaluateShell } from "./shell.js";
-import type { HookExecutionContext } from "./types.js";
-
-export interface ExecutionRecord {
-  readonly name: string;
-  readonly hook: string;
-  readonly durationMs: number;
-  readonly passed: boolean;
-}
+import type {
+  AssertionExecution,
+  HookExecutionContext,
+  OriginatingAssertionResult,
+} from "./types.js";
 
 export interface InvocationBatch {
+  readonly executions: AssertionExecution[];
   readonly failures: AssertionFailure[];
   readonly results: AssertResultEvent[];
   readonly unexpectedError?: unknown;
 }
 
 interface InvocationOptions {
-  readonly onExecution?: (record: ExecutionRecord) => void;
+  readonly originatingResult?: OriginatingAssertionResult;
   readonly continueAfterUnexpected?: (
     assertion: ActiveAssertion,
     error: unknown,
@@ -54,9 +52,10 @@ export async function invokeAssertions<E>(
   options: InvocationOptions = {},
 ): Promise<InvocationBatch> {
   if (adapter.skipIfAborted && context.signal?.aborted) {
-    return { failures: [], results: [] };
+    return { executions: [], failures: [], results: [] };
   }
 
+  const executions: AssertionExecution[] = [];
   const failures: AssertionFailure[] = [];
   const results: AssertResultEvent[] = [];
   const emitsResults = adapter.hook !== "assert_result";
@@ -101,7 +100,7 @@ export async function invokeAssertions<E>(
             ));
           }
           if (adapter.aggregation === "first") {
-            return { failures, results };
+            return { executions, failures, results };
           }
           continue;
         }
@@ -115,12 +114,18 @@ export async function invokeAssertions<E>(
         context.signal,
         context.cwd,
       );
-      options.onExecution?.({
-        name: assertion.name,
-        hook: adapter.hook,
-        durationMs: Date.now() - startedAt,
-        passed: shellResult.passed,
-      });
+      if (shellResult.started) {
+        executions.push({
+          assertionRef: entryRef(assertion.source, assertion.name),
+          runId,
+          hook: assertion.hook,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          passed: shellResult.passed,
+          ...(options.originatingResult === undefined
+            ? {}
+            : { originatingResult: options.originatingResult }),
+        });
+      }
 
       if (emitsResults) {
         results.push(assertionResult(
@@ -138,11 +143,13 @@ export async function invokeAssertions<E>(
           command: assertion.shell,
           result: shellResult,
         });
-        if (adapter.aggregation === "first") return { failures, results };
+        if (adapter.aggregation === "first") {
+          return { executions, failures, results };
+        }
       }
     } catch (error) {
       if (!options.continueAfterUnexpected) {
-        return { failures, results, unexpectedError: error };
+        return { executions, failures, results, unexpectedError: error };
       }
       try {
         await options.continueAfterUnexpected(assertion, error);
@@ -152,5 +159,5 @@ export async function invokeAssertions<E>(
     }
   }
 
-  return { failures, results };
+  return { executions, failures, results };
 }

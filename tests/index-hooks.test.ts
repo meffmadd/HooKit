@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  EntryRenderer,
+  ExtensionAPI,
+  ExtensionContext,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 
 import registerExtension from "../pi-assert/index.js";
 import {
@@ -16,11 +21,24 @@ type EventHandler = (
   ctx: ExtensionContext,
 ) => unknown | Promise<unknown>;
 
-function extensionHarness(): {
+interface CapturedEntry {
+  customType: string;
+  data: unknown;
+}
+
+interface ExtensionHarness {
   pi: ExtensionAPI;
+  entries: CapturedEntry[];
+  messages: Array<{ content: string }>;
   handler: (event: string) => EventHandler;
-} {
+  renderer: (customType: string) => EntryRenderer<unknown>;
+}
+
+function extensionHarness(): ExtensionHarness {
   const handlers = new Map<string, EventHandler[]>();
+  const renderers = new Map<string, EntryRenderer<unknown>>();
+  const entries: CapturedEntry[] = [];
+  const messages: Array<{ content: string }> = [];
   const pi = {
     on(event: string, handler: EventHandler) {
       const registered = handlers.get(event) ?? [];
@@ -28,19 +46,66 @@ function extensionHarness(): {
       handlers.set(event, registered);
     },
     registerCommand() {},
-    appendEntry() {},
-    sendMessage() {},
+    registerEntryRenderer(
+      customType: string,
+      renderer: EntryRenderer<unknown>,
+    ) {
+      renderers.set(customType, renderer);
+    },
+    appendEntry(customType: string, data: unknown) {
+      entries.push({ customType, data });
+    },
+    sendMessage(message: { content: string }) {
+      messages.push(message);
+    },
     getThinkingLevel: () => "high",
   } as unknown as ExtensionAPI;
 
   return {
     pi,
+    entries,
+    messages,
     handler(event: string): EventHandler {
       const registered = handlers.get(event);
       assert.ok(registered?.length, `missing ${event} handler`);
       return registered[0];
     },
+    renderer(customType: string): EntryRenderer<unknown> {
+      const renderer = renderers.get(customType);
+      assert.ok(renderer, `missing ${customType} renderer`);
+      return renderer;
+    },
   };
+}
+
+const renderTheme = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+} as unknown as Theme;
+
+function renderEntry(
+  harness: ExtensionHarness,
+  index: number,
+  expanded: boolean,
+  width = 120,
+): string {
+  const captured = harness.entries[index];
+  assert.ok(captured, `missing captured entry ${index}`);
+  const renderer = harness.renderer(captured.customType);
+  const component = renderer(
+    {
+      type: "custom",
+      id: `entry-${index}`,
+      parentId: null,
+      timestamp: new Date(0).toISOString(),
+      customType: captured.customType,
+      data: captured.data,
+    },
+    { expanded },
+    renderTheme,
+  );
+  assert.ok(component, "entry renderer returned no component");
+  return component.render(width).map((line) => line.trimEnd()).join("\n");
 }
 
 describe("index catalog authorization", () => {
@@ -86,6 +151,9 @@ describe("index catalog authorization", () => {
         { type: "session_start", reason: "startup" },
         ctx,
       );
+      (harness.pi as unknown as { appendEntry: () => void }).appendEntry = () => {
+        throw new Error("execution entry unavailable");
+      };
       const result = await harness.handler("tool_call")(
         { toolName: "bash", toolCallId: "global", input: {} },
         ctx,
@@ -96,12 +164,197 @@ describe("index catalog authorization", () => {
         reason: 'pi-assert: assertion "global" rejected bash — `false`',
       });
       assert.ok(!notifications.some((message) => message.includes("failed to parse")));
+      assert.ok(notifications.some((message) => message.includes("rejected bash")));
       assert.equal(readFileSync(projectPath, "utf8"), "{ malformed and untrusted");
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("index execution entries", () => {
+  it("appends one context-neutral, expandable entry per tool-call event", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-executions-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          passes: {
+            description: "observe successful checks",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          "turn-pass": {
+            description: "first aggregate check",
+            hook: "turn_end",
+            shell: "true",
+            default: true,
+          },
+          "turn-fail": {
+            description: "second aggregate check",
+            hook: "turn_end",
+            shell: "false",
+            default: true,
+          },
+        },
+      }));
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+
+      for (const toolCallId of ["call-1", "call-2"]) {
+        const result = await harness.handler("tool_call")(
+          { toolName: "bash", toolCallId, input: { command: "echo hi" } },
+          ctx,
+        );
+        assert.equal(result, undefined);
+      }
+
+      assert.equal(harness.entries.length, 2);
+      assert.equal(harness.messages.length, 0);
+      const firstData = harness.entries[0]?.data as {
+        trigger: { event: string; toolName: string; toolCallId: string };
+        executions: Array<{
+          assertionRef: string;
+          durationMs: number;
+          passed: boolean;
+        }>;
+      };
+      assert.deepEqual(firstData.trigger, {
+        event: "tool_call",
+        toolName: "bash",
+        toolCallId: "call-1",
+      });
+      assert.equal(firstData.executions.length, 1);
+      assert.equal(firstData.executions[0]?.assertionRef, "local/passes");
+      assert.equal(firstData.executions[0]?.passed, true);
+      assert.ok((firstData.executions[0]?.durationMs ?? -1) >= 0);
+
+      const collapsed = renderEntry(harness, 0, false);
+      assert.match(
+        collapsed,
+        /^\n pi-assert ran 1 command in \d+ms · tool_call bash \(ctrl\+o to expand\)\n$/,
+      );
+      assert.ok(!collapsed.includes("local/passes"));
+      assert.ok(!collapsed.includes("call-1"));
+
+      const expanded = renderEntry(harness, 0, true);
+      assert.match(expanded, /^\n pi-assert ran 1 command/m);
+      assert.match(expanded, /\n   tool-call id: call-1/);
+      assert.match(expanded, /✓ local\/passes\s+\d+ms/);
+      assert.ok(!expanded.includes("to expand"));
+      assert.equal(
+        firstData.executions.reduce(
+          (total, execution) => total + execution.durationMs,
+          0,
+        ),
+        Number(collapsed.match(/in (\d+)ms/)?.[1]),
+      );
+
+      await harness.handler("turn_end")({ turnIndex: 2 }, ctx);
+      assert.equal(harness.entries.length, 3);
+      assert.match(
+        renderEntry(harness, 2, false),
+        /^\n pi-assert ran 2 commands in \d+ms · turn_end 2 \(ctrl\+o to expand\)\n$/,
+      );
+      const expandedTurn = renderEntry(harness, 2, true);
+      assert.match(expandedTurn, /✓ local\/turn-pass\s+\d+ms/);
+      assert.match(expandedTurn, /✗ local\/turn-fail\s+\d+ms/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not append entries for filter misses or ordinary when skips", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-skips-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          miss: {
+            description: "different tool",
+            hook: "tool_call",
+            filter: { toolName: "^read$" },
+            shell: "true",
+            default: true,
+          },
+          skip: {
+            description: "precondition skips",
+            hook: "tool_call",
+            when: "false",
+            shell: "true",
+            default: true,
+          },
+        },
+      }));
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "skipped", input: {} },
+        ctx,
+      );
+      assert.deepEqual(harness.entries, []);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renders malformed historical payloads locally instead of throwing", () => {
+    const harness = extensionHarness();
+    registerExtension(harness.pi);
+    harness.entries.push({
+      customType: "pi-assert-execution",
+      data: { version: 0, executions: "older-shape" },
+    });
+    assert.equal(
+      renderEntry(harness, 0, true).trim(),
+      "pi-assert execution summary unavailable",
+    );
   });
 });
 
@@ -191,6 +444,18 @@ describe("index synthetic result dispatch", () => {
         { assertionRef: "local/passes", outcome: "pass" },
         { assertionRef: "local/blocks", outcome: "block" },
       ]);
+
+      assert.equal(harness.entries.length, 1);
+      const expanded = renderEntry(harness, 0, true, 160);
+      assert.match(expanded, /pi-assert ran 6 commands in \d+ms · tool_call bash/);
+      assert.match(
+        expanded,
+        /✓ local\/passes[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
+      );
+      assert.match(
+        expanded,
+        /✗ local\/blocks[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
+      );
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -200,7 +465,7 @@ describe("index synthetic result dispatch", () => {
 });
 
 describe("index effect and outcome translation", () => {
-  it("delivers ordered effects best-effort before corrective feedback", async () => {
+  it("continues ordered feedback when execution-entry delivery fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-assert-index-effects-"));
     const previousHome = process.env.HOME;
     process.env.HOME = root;
@@ -217,7 +482,7 @@ describe("index effect and outcome translation", () => {
             default: true,
           },
           "failing-handler": {
-            description: "present before the summary",
+            description: "present before corrective feedback",
             hook: "assert_result",
             shell: "false",
             default: true,
@@ -260,13 +525,18 @@ describe("index effect and outcome translation", () => {
       deliveries.length = 0;
       notificationCount = 0;
       checkingEffects = true;
+      (harness.pi as unknown as {
+        appendEntry: () => void;
+      }).appendEntry = () => {
+        deliveries.push("entry");
+        throw new Error("entry delivery failed");
+      };
 
-      await harness.handler("agent_start")({}, ctx);
       await harness.handler("agent_end")({ messages: [] }, ctx);
 
       assert.equal(deliveries.length, 3);
-      assert.match(deliveries[0]!, /assert_result assertion failed/);
-      assert.match(deliveries[1]!, /pi-assert ran 1 command/);
+      assert.equal(deliveries[0], "entry");
+      assert.match(deliveries[1]!, /assert_result assertion failed/);
       assert.match(deliveries[2]!, /^corrective:1 assertion failed/);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
@@ -332,6 +602,11 @@ describe("index effect and outcome translation", () => {
       assert.equal(patch.isError, true);
       assert.strictEqual(patch.details, details);
       assert.match(patch.content[0]!.text, /original tool result was suppressed/);
+      assert.equal(harness.entries.length, 1);
+      assert.match(
+        renderEntry(harness, 0, false),
+        /^\n pi-assert ran 1 command in \d+ms · tool_result read \(ctrl\+o to expand\)\n$/,
+      );
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
