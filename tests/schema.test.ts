@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import Ajv from "ajv";
+import { validateRuleEntry } from "../pi-assert/domain/validation.js";
 
 // ── Load the schema ────────────────────────────────────────────────
 
@@ -28,6 +29,70 @@ describe("schema self-validation", () => {
   it("schema.json is valid JSON Schema (draft-07)", () => {
     assert.ok(validate);
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Runtime/schema parity for Action Handlers
+// ═══════════════════════════════════════════════════════════════════
+
+describe("Action Handler runtime/schema parity", () => {
+  const actionCases: Array<{ action: unknown; expected: boolean }> = [
+    { action: { type: "interrupt" }, expected: true },
+    { action: { type: "shutdown" }, expected: true },
+    { action: { type: "shutdown", interrupt: true }, expected: true },
+    { action: { type: "compact" }, expected: true },
+    { action: { type: "compact", instructions: "Keep decisions" }, expected: true },
+    {
+      action: { type: "message", message: "Now", delivery: "steer" },
+      expected: true,
+    },
+    {
+      action: {
+        type: "message",
+        message: "Later",
+        delivery: "followUp",
+        triggerTurn: true,
+      },
+      expected: true,
+    },
+    {
+      action: { type: "message", message: "Next", delivery: "nextTurn" },
+      expected: true,
+    },
+    {
+      action: {
+        type: "emit-custom-event",
+        name: "example:event",
+        data: { nested: [true, 1, null] },
+      },
+      expected: true,
+    },
+    {
+      action: {
+        type: "message",
+        message: "Invalid",
+        delivery: "nextTurn",
+        triggerTurn: true,
+      },
+      expected: false,
+    },
+    { action: { type: "interrupt", extra: true }, expected: false },
+    { action: { type: "emit-custom-event", name: "   " }, expected: false },
+  ];
+
+  for (const [index, { action, expected }] of actionCases.entries()) {
+    it(`keeps action variant ${index} aligned`, () => {
+      const entry = {
+        description: "d",
+        hook: "tool_call",
+        action,
+      };
+      const schemaAccepts = validate({ local: { rule: entry } });
+      const runtimeAccepts = validateRuleEntry(entry)?.kind === "action";
+      assert.equal(schemaAccepts, expected, JSON.stringify(validate.errors));
+      assert.equal(runtimeAccepts, expected);
+    });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -558,7 +623,125 @@ describe("validate", () => {
       expected: false,
     },
 
-    // ── Preset entries (oneOf assert | preset) ──────────────────────
+    // ── Action Handler entries ──────────────────────────────────────
+
+    ...[
+      { type: "interrupt" },
+      { type: "shutdown" },
+      { type: "shutdown", interrupt: true },
+      { type: "compact" },
+      { type: "compact", instructions: "Keep decisions" },
+      { type: "message", message: "Review this", delivery: "steer" },
+      {
+        type: "message",
+        message: "Continue later",
+        delivery: "followUp",
+        triggerTurn: true,
+      },
+      { type: "message", message: "For next prompt", delivery: "nextTurn" },
+      { type: "emit-custom-event", name: "example:ready" },
+      {
+        type: "emit-custom-event",
+        name: "example:data",
+        data: { nested: [true, 2, null] },
+      },
+    ].map((action, index) => ({
+      label: `accepts Action Handler variant ${index}`,
+      config: {
+        local: {
+          action: {
+            description: "d",
+            hook: "tool_call",
+            filter: { toolName: "^bash$" },
+            when: "true",
+            action,
+            default: true,
+          },
+        },
+      },
+      expected: true,
+    })),
+    {
+      label: "rejects nextTurn with triggerTurn true",
+      config: {
+        local: {
+          action: {
+            description: "d",
+            hook: "tool_call",
+            action: {
+              type: "message",
+              message: "bad",
+              delivery: "nextTurn",
+              triggerTurn: true,
+            },
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects an unknown action field",
+      config: {
+        local: {
+          action: {
+            description: "d",
+            hook: "tool_call",
+            action: { type: "interrupt", extra: true },
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects an empty custom event name",
+      config: {
+        local: {
+          action: {
+            description: "d",
+            hook: "tool_call",
+            action: { type: "emit-custom-event", name: "   " },
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects an entry carrying both shell and action",
+      config: {
+        local: {
+          ambiguous: {
+            description: "d",
+            hook: "tool_call",
+            shell: "true",
+            action: { type: "interrupt" },
+          },
+        },
+      },
+      expected: false,
+    },
+    {
+      label: "rejects an inert entry without shell, action, or preset",
+      config: {
+        local: { inert: { description: "d", hook: "tool_call" } },
+      },
+      expected: false,
+    },
+    {
+      label: "accepts an assert_result Action Handler",
+      config: {
+        local: {
+          action: {
+            description: "d",
+            hook: "assert_result",
+            filter: { outcome: ["block", "patch"], code: [1, null] },
+            action: { type: "interrupt" },
+          },
+        },
+      },
+      expected: true,
+    },
+
+    // ── Preset entries (oneOf executable | preset) ──────────────────
 
     {
       label: "accepts a preset with description + preset refs",

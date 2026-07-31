@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { entryRef, type AssertResultEvent } from "../domain/entry.js";
-import type { ActiveAssertion } from "./assertions.js";
+import type { ActiveAssertion, ActiveExecutable } from "./assertions.js";
 import type {
   AssertionFailure,
   HookAdapter,
@@ -28,6 +28,22 @@ interface InvocationOptions {
   ) => void | Promise<void>;
 }
 
+export function invocationEnvironment<E>(
+  assertion: Pick<ActiveExecutable, "source" | "name" | "hook">,
+  runId: string,
+  adapter: HookAdapter<E>,
+  event: E,
+  context: HookExecutionContext,
+): Record<string, string> {
+  return {
+    ...adapter.buildEnvironment(event, context),
+    PI_ASSERT_REF: entryRef(assertion.source, assertion.name),
+    PI_ASSERT_HOOK: assertion.hook,
+    PI_ASSERT_RUN_ID: runId,
+    PI_EVENT: adapter.hook,
+  };
+}
+
 function assertionResult(
   assertion: ActiveAssertion,
   runId: string,
@@ -51,7 +67,7 @@ export async function invokeAssertions<E>(
   context: HookExecutionContext,
   options: InvocationOptions = {},
 ): Promise<InvocationBatch> {
-  if (adapter.skipIfAborted && context.signal?.aborted) {
+  if (adapter.skipAssertionsIfAborted && context.signal?.aborted) {
     return { executions: [], failures: [], results: [] };
   }
 
@@ -69,13 +85,13 @@ export async function invokeAssertions<E>(
       if (!matches(assertion.filter, candidate)) continue;
 
       const runId = randomUUID();
-      const env = {
-        ...adapter.buildEnvironment(event, context),
-        PI_ASSERT_REF: entryRef(assertion.source, assertion.name),
-        PI_ASSERT_HOOK: assertion.hook,
-        PI_ASSERT_RUN_ID: runId,
-        PI_EVENT: adapter.hook,
-      };
+      const env = invocationEnvironment(
+        assertion,
+        runId,
+        adapter,
+        event,
+        context,
+      );
 
       if (assertion.when) {
         const whenResult = await evaluateShell(

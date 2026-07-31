@@ -189,6 +189,62 @@ export default function (pi: ExtensionAPI) {
 
   registerAssertsCommand(pi, state);
 
+  function reportDeliveryFailure(
+    ctx: PiExtensionContext,
+    message: string,
+  ): void {
+    try {
+      if (ctx.hasUI) ctx.ui.notify(message, "error");
+    } catch {
+      // Presentation cannot turn best-effort effect delivery into a failure.
+    }
+  }
+
+  function deliverAction(
+    effect: Extract<EvaluationEffect, { type: "request-action" }>,
+    ctx: PiExtensionContext,
+  ): void {
+    const action = effect.action;
+    switch (action.type) {
+      case "interrupt":
+        ctx.abort();
+        return;
+      case "shutdown":
+        if (action.interrupt) ctx.abort();
+        ctx.shutdown();
+        return;
+      case "compact":
+        ctx.compact({
+          ...(action.instructions === undefined
+            ? {}
+            : { customInstructions: action.instructions }),
+          onError: (error) => {
+            reportDeliveryFailure(
+              ctx,
+              `pi-assert: compact action from "${effect.assertionRef}" failed — ${error.message}`,
+            );
+          },
+        });
+        return;
+      case "message":
+        pi.sendMessage(
+          {
+            customType: "pi-assert",
+            content: action.message,
+            display: true,
+          },
+          {
+            deliverAs: action.delivery,
+            triggerTurn: action.triggerTurn ?? false,
+          },
+        );
+        return;
+      case "emit-custom-event":
+        pi.events.emit(action.name, action.data);
+        return;
+    }
+  }
+
   async function deliverEffects(
     effects: readonly EvaluationEffect[],
     ctx: PiExtensionContext,
@@ -197,7 +253,7 @@ export default function (pi: ExtensionAPI) {
       try {
         if (effect.type === "present") {
           if (ctx.hasUI) ctx.ui.notify(effect.message, effect.severity);
-        } else {
+        } else if (effect.type === "request-corrective-turn") {
           pi.sendMessage(
             {
               customType: "pi-assert",
@@ -206,8 +262,17 @@ export default function (pi: ExtensionAPI) {
             },
             { triggerTurn: true },
           );
+        } else {
+          deliverAction(effect, ctx);
         }
-      } catch {
+      } catch (error) {
+        if (effect.type === "request-action") {
+          const detail = error instanceof Error ? error.message : String(error);
+          reportDeliveryFailure(
+            ctx,
+            `pi-assert: action from "${effect.assertionRef}" delivery failed — ${detail}`,
+          );
+        }
         // Every delivery is best-effort; continue with later ordered effects.
       }
     }

@@ -344,6 +344,114 @@ describe("index execution entries", () => {
     }
   });
 
+  it("persists bounded mixed summaries and nests synthetic actions under their origin", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-mixed-actions-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          origin: {
+            description: "origin",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          native: {
+            description: "native action",
+            hook: "tool_call",
+            action: {
+              type: "message",
+              message: "NATIVE_SECRET",
+              delivery: "followUp",
+            },
+            default: true,
+          },
+          after: {
+            description: "synthetic action",
+            hook: "assert_result",
+            action: {
+              type: "message",
+              message: "SYNTHETIC_SECRET",
+              delivery: "nextTurn",
+            },
+            default: true,
+          },
+        },
+      }));
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+
+      await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "mixed", input: {} },
+        ctx,
+      );
+
+      assert.equal(harness.messages.length, 2);
+      assert.equal(harness.entries.length, 1);
+      const persisted = JSON.stringify(harness.entries[0]?.data);
+      assert.ok(!persisted.includes("NATIVE_SECRET"));
+      assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
+      assert.match(
+        renderEntry(harness, 0, false),
+        /ran 1 command in \d+ms and requested 2 actions · tool_call bash/,
+      );
+      assert.match(
+        renderEntry(harness, 0, true),
+        /↳ → local\/after · message requested/,
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("continues rendering historical version-1 command summaries", () => {
+    const harness = extensionHarness();
+    registerExtension(harness.pi);
+    harness.entries.push({
+      customType: "pi-assert-execution",
+      data: {
+        version: 1,
+        trigger: {
+          event: "tool_call",
+          toolName: "bash",
+          toolCallId: "historical",
+        },
+        executions: [{
+          assertionRef: "local/old",
+          runId: "old-run",
+          hook: "tool_call",
+          durationMs: 3,
+          passed: true,
+        }],
+      },
+    });
+    assert.match(
+      renderEntry(harness, 0, false),
+      /pi-assert ran 1 command in 3ms · tool_call bash/,
+    );
+  });
+
   it("renders malformed historical payloads locally instead of throwing", () => {
     const harness = extensionHarness();
     registerExtension(harness.pi);
@@ -607,6 +715,268 @@ describe("index effect and outcome translation", () => {
         renderEntry(harness, 0, false),
         /^\n pi-assert ran 1 command in \d+ms · tool_result read \(ctrl\+o to expand\)\n$/,
       );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("index Action Handler delivery", () => {
+  it("maps every action onto supported Pi APIs in configured order", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-actions-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          interrupt: {
+            description: "stop work",
+            hook: "tool_call",
+            action: { type: "interrupt" },
+            default: true,
+          },
+          shutdown: {
+            description: "exit",
+            hook: "tool_call",
+            action: { type: "shutdown", interrupt: true },
+            default: true,
+          },
+          drain: {
+            description: "exit without interrupting",
+            hook: "tool_call",
+            action: { type: "shutdown" },
+            default: true,
+          },
+          compact: {
+            description: "summarize",
+            hook: "tool_call",
+            action: { type: "compact", instructions: "Keep decisions" },
+            default: true,
+          },
+          compactDefault: {
+            description: "summarize with defaults",
+            hook: "tool_call",
+            action: { type: "compact" },
+            default: true,
+          },
+          steer: {
+            description: "steer",
+            hook: "tool_call",
+            action: {
+              type: "message",
+              message: "steer now",
+              delivery: "steer",
+              triggerTurn: true,
+            },
+            default: true,
+          },
+          later: {
+            description: "later",
+            hook: "tool_call",
+            action: {
+              type: "message",
+              message: "follow later",
+              delivery: "followUp",
+            },
+            default: true,
+          },
+          next: {
+            description: "next",
+            hook: "tool_call",
+            action: {
+              type: "message",
+              message: "next prompt",
+              delivery: "nextTurn",
+            },
+            default: true,
+          },
+          event: {
+            description: "integration",
+            hook: "tool_call",
+            action: {
+              type: "emit-custom-event",
+              name: "session_start",
+              data: { safe: true },
+            },
+            default: true,
+          },
+        },
+      }));
+
+      const calls: Array<{ type: string; value?: unknown }> = [];
+      let compactError: ((error: Error) => void) | undefined;
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        abort: () => calls.push({ type: "abort" }),
+        shutdown: () => calls.push({ type: "shutdown" }),
+        compact: (options: { customInstructions?: string; onError?: (error: Error) => void }) => {
+          calls.push({ type: "compact", value: options.customInstructions });
+          compactError = options.onError;
+        },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => calls.push({ type: "notify", value: message }),
+        },
+      } as unknown as ExtensionContext;
+
+      const harness = extensionHarness();
+      (harness.pi as unknown as {
+        sendMessage: (message: unknown, options: unknown) => void;
+        events: { emit: (name: string, data: unknown) => void };
+      }).sendMessage = (message, options) => {
+        calls.push({ type: "message", value: { message, options } });
+      };
+      (harness.pi as unknown as {
+        events: { emit: (name: string, data: unknown) => void };
+      }).events = {
+        emit: (name, data) => calls.push({ type: "event", value: { name, data } }),
+      };
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      calls.length = 0;
+
+      const result = await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "actions", input: {} },
+        ctx,
+      );
+      assert.equal(result, undefined);
+      assert.deepEqual(calls.map((call) => call.type), [
+        "abort",
+        "abort",
+        "shutdown",
+        "shutdown",
+        "compact",
+        "compact",
+        "message",
+        "message",
+        "message",
+        "event",
+      ]);
+      assert.equal(calls[4]?.value, "Keep decisions");
+      assert.equal(calls[5]?.value, undefined);
+      assert.deepEqual(calls[6]?.value, {
+        message: { customType: "pi-assert", content: "steer now", display: true },
+        options: { deliverAs: "steer", triggerTurn: true },
+      });
+      assert.deepEqual(calls[8]?.value, {
+        message: { customType: "pi-assert", content: "next prompt", display: true },
+        options: { deliverAs: "nextTurn", triggerTurn: false },
+      });
+      assert.deepEqual(calls[9]?.value, {
+        name: "session_start",
+        data: { safe: true },
+      });
+
+      assert.equal(harness.entries.length, 1);
+      const data = harness.entries[0]?.data as {
+        executions: unknown[];
+        actionRequests: Array<{ actionType: string }>;
+      };
+      assert.deepEqual(data.executions, []);
+      assert.deepEqual(data.actionRequests.map((request) => request.actionType), [
+        "interrupt",
+        "shutdown",
+        "shutdown",
+        "compact",
+        "compact",
+        "message",
+        "message",
+        "message",
+        "emit-custom-event",
+      ]);
+      assert.match(
+        renderEntry(harness, 0, false),
+        /pi-assert requested 9 actions · tool_call bash/,
+      );
+      assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested/);
+
+      compactError?.(new Error("compact exploded"));
+      assert.match(String(calls.at(-1)?.value), /compact exploded/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a native block and continues after one action delivery throws", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-action-failure-"));
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          block: {
+            description: "block",
+            hook: "tool_call",
+            shell: "false",
+            default: true,
+          },
+          broken: {
+            description: "broken message",
+            hook: "tool_call",
+            action: { type: "message", message: "x", delivery: "steer" },
+            default: true,
+          },
+          sibling: {
+            description: "still emitted",
+            hook: "tool_call",
+            action: { type: "emit-custom-event", name: "test:sibling" },
+            default: true,
+          },
+        },
+      }));
+      const notices: string[] = [];
+      const events: string[] = [];
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => notices.push(message),
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      (harness.pi as unknown as { sendMessage: () => void }).sendMessage = () => {
+        throw new Error("message failed");
+      };
+      (harness.pi as unknown as {
+        events: { emit: (name: string) => void };
+      }).events = { emit: (name) => events.push(name) };
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+      notices.length = 0;
+
+      const result = await harness.handler("tool_call")(
+        { toolName: "bash", toolCallId: "blocked", input: {} },
+        ctx,
+      );
+      assert.deepEqual(result, {
+        block: true,
+        reason: 'pi-assert: assertion "block" rejected bash — `false`',
+      });
+      assert.deepEqual(events, ["test:sibling"]);
+      assert.ok(notices.some((message) => message.includes("message failed")));
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;

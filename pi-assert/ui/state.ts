@@ -4,9 +4,9 @@ import {
   isCatalogPreset,
   type CatalogDiagnostic,
   type CatalogEntry,
+  type CatalogExecutableEntry,
   type CatalogMutation,
   type CatalogResult,
-  type CatalogShellAssertion,
   type CatalogStorageLocations,
 } from "../assertion-catalog/index.js";
 import { AssertIndex, entryKey, parseEntryRef } from "../domain/entry.js";
@@ -15,7 +15,7 @@ import {
   type ActiveAssertionSet,
 } from "../hook-evaluation/index.js";
 
-/** Resolve one preset level to available shell assertions, in ref order. */
+/** Resolve one preset level to available executable entries, in ref order. */
 export function formatCatalogFailure(
   result: Extract<CatalogResult, { ok: false }>,
 ): string {
@@ -236,8 +236,8 @@ export class AssertsState {
     else this.active.add(key);
   }
 
-  private activeAssertions(): CatalogShellAssertion[] {
-    const assertions: CatalogShellAssertion[] = [];
+  private activeAssertions(): CatalogExecutableEntry[] {
+    const assertions: CatalogExecutableEntry[] = [];
     const seen = new Set<string>();
     for (const entry of this.entries) {
       if (!this.isActive(entry)) continue;

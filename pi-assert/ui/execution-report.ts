@@ -5,17 +5,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
+  isActionType,
   isAssertResultOutcome,
   isLifecycleHook,
 } from "../domain/entry.js";
 import type {
+  ActionRequestExecution,
   AssertionExecution,
   AssertionExecutionReport,
   OriginatingAssertionResult,
 } from "../hook-evaluation/index.js";
 
 export const EXECUTION_ENTRY_TYPE = "pi-assert-execution";
-const EXECUTION_ENTRY_VERSION = 1;
+const EXECUTION_ENTRY_VERSION = 2;
 const MAX_LABEL_LENGTH = 512;
 const MAX_ID_LENGTH = 256;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -41,9 +43,17 @@ export type ExecutionTrigger =
     };
 
 export interface ExecutionEntryData {
-  readonly version: 1;
+  readonly version: 2;
   readonly trigger: ExecutionTrigger;
   readonly executions: readonly AssertionExecution[];
+  readonly actionRequests: readonly ActionRequestExecution[];
+}
+
+interface ParsedExecutionEntryData {
+  readonly version: 1 | 2;
+  readonly trigger: ExecutionTrigger;
+  readonly executions: readonly AssertionExecution[];
+  readonly actionRequests: readonly ActionRequestExecution[];
 }
 
 function cleanText(value: string, maximum: number): string {
@@ -113,6 +123,20 @@ function snapshotExecution(execution: AssertionExecution): AssertionExecution {
   });
 }
 
+function snapshotActionRequest(
+  request: ActionRequestExecution,
+): ActionRequestExecution {
+  return Object.freeze({
+    assertionRef: cleanText(request.assertionRef, MAX_LABEL_LENGTH) || "unknown",
+    runId: cleanText(request.runId, MAX_ID_LENGTH) || "unknown",
+    hook: request.hook,
+    actionType: request.actionType,
+    ...(request.originatingResult === undefined
+      ? {}
+      : { originatingResult: snapshotOrigin(request.originatingResult) }),
+  });
+}
+
 /** Copy one Hook Evaluation report onto a bounded, persistence-safe UI payload. */
 export function executionEntryData(
   trigger: ExecutionTrigger,
@@ -122,6 +146,9 @@ export function executionEntryData(
     version: EXECUTION_ENTRY_VERSION,
     trigger: snapshotTrigger(trigger),
     executions: Object.freeze(report.executions.map(snapshotExecution)),
+    actionRequests: Object.freeze(
+      (report.actionRequests ?? []).map(snapshotActionRequest),
+    ),
   });
 }
 
@@ -204,13 +231,42 @@ function parseExecution(value: unknown): AssertionExecution | undefined {
   };
 }
 
-function parseEntryData(value: unknown): ExecutionEntryData | undefined {
+function parseActionRequest(value: unknown): ActionRequestExecution | undefined {
+  if (!isRecord(value)) return undefined;
+  const assertionRef = requiredText(value.assertionRef, MAX_LABEL_LENGTH);
+  const runId = requiredText(value.runId, MAX_ID_LENGTH);
   if (
-    !isRecord(value) || value.version !== EXECUTION_ENTRY_VERSION ||
-    !Array.isArray(value.executions) || value.executions.length === 0
+    assertionRef === undefined || runId === undefined ||
+    !isLifecycleHook(value.hook) || !isActionType(value.actionType)
   ) {
     return undefined;
   }
+
+  let originatingResult: OriginatingAssertionResult | undefined;
+  if (value.originatingResult !== undefined) {
+    originatingResult = parseOrigin(value.originatingResult);
+    if (originatingResult === undefined) return undefined;
+  }
+  return {
+    assertionRef,
+    runId,
+    hook: value.hook,
+    actionType: value.actionType,
+    ...(originatingResult === undefined ? {} : { originatingResult }),
+  };
+}
+
+function parseEntryData(value: unknown): ParsedExecutionEntryData | undefined {
+  if (
+    !isRecord(value) || (value.version !== 1 && value.version !== 2) ||
+    !Array.isArray(value.executions)
+  ) {
+    return undefined;
+  }
+  const actionValues = value.version === 1 ? [] : value.actionRequests;
+  if (!Array.isArray(actionValues)) return undefined;
+  if (value.executions.length === 0 && actionValues.length === 0) return undefined;
+
   const trigger = parseTrigger(value.trigger);
   if (trigger === undefined) return undefined;
   const executions: AssertionExecution[] = [];
@@ -219,10 +275,17 @@ function parseEntryData(value: unknown): ExecutionEntryData | undefined {
     if (parsed === undefined) return undefined;
     executions.push(parsed);
   }
+  const actionRequests: ActionRequestExecution[] = [];
+  for (const action of actionValues) {
+    const parsed = parseActionRequest(action);
+    if (parsed === undefined) return undefined;
+    actionRequests.push(parsed);
+  }
   return {
-    version: EXECUTION_ENTRY_VERSION,
+    version: value.version,
     trigger,
     executions,
+    actionRequests,
   };
 }
 
@@ -252,44 +315,73 @@ interface ExecutionRow {
   readonly nested: boolean;
 }
 
+interface ActionRow {
+  readonly action: ActionRequestExecution;
+  readonly nested: boolean;
+}
+
 interface OriginRow {
   readonly origin: OriginatingAssertionResult;
 }
 
-type ExpandedRow = ExecutionRow | OriginRow;
+type ExpandedRow = ExecutionRow | ActionRow | OriginRow;
 
-function expandedRows(executions: readonly AssertionExecution[]): ExpandedRow[] {
-  const handlers = new Map<string, AssertionExecution[]>();
+function expandedRows(
+  executions: readonly AssertionExecution[],
+  actionRequests: readonly ActionRequestExecution[],
+): ExpandedRow[] {
+  const executionHandlers = new Map<string, AssertionExecution[]>();
   for (const execution of executions) {
     const origin = execution.originatingResult;
     if (origin === undefined) continue;
     const key = executionKey(origin.assertionRef, origin.runId);
-    const group = handlers.get(key) ?? [];
+    const group = executionHandlers.get(key) ?? [];
     group.push(execution);
-    handlers.set(key, group);
+    executionHandlers.set(key, group);
+  }
+  const actionHandlers = new Map<string, ActionRequestExecution[]>();
+  for (const action of actionRequests) {
+    const origin = action.originatingResult;
+    if (origin === undefined) continue;
+    const key = executionKey(origin.assertionRef, origin.runId);
+    const group = actionHandlers.get(key) ?? [];
+    group.push(action);
+    actionHandlers.set(key, group);
   }
 
   const rows: ExpandedRow[] = [];
   const consumed = new Set<string>();
+  const appendHandlers = (key: string): void => {
+    for (const execution of executionHandlers.get(key) ?? []) {
+      rows.push({ execution, nested: true });
+    }
+    for (const action of actionHandlers.get(key) ?? []) {
+      rows.push({ action, nested: true });
+    }
+  };
+
   for (const execution of executions) {
     if (execution.originatingResult !== undefined) continue;
     rows.push({ execution, nested: false });
     const key = executionKey(execution.assertionRef, execution.runId);
-    for (const handler of handlers.get(key) ?? []) {
-      rows.push({ execution: handler, nested: true });
-    }
+    appendHandlers(key);
     consumed.add(key);
   }
+  for (const action of actionRequests) {
+    if (action.originatingResult === undefined) {
+      rows.push({ action, nested: false });
+    }
+  }
 
-  for (const execution of executions) {
-    const origin = execution.originatingResult;
-    if (origin === undefined) continue;
+  const origins = [
+    ...executions.flatMap((item) => item.originatingResult ?? []),
+    ...actionRequests.flatMap((item) => item.originatingResult ?? []),
+  ];
+  for (const origin of origins) {
     const key = executionKey(origin.assertionRef, origin.runId);
     if (consumed.has(key)) continue;
     rows.push({ origin });
-    for (const handler of handlers.get(key) ?? []) {
-      rows.push({ execution: handler, nested: true });
-    }
+    appendHandlers(key);
     consumed.add(key);
   }
   return rows;
@@ -301,9 +393,10 @@ function isExecutionRow(row: ExpandedRow): row is ExecutionRow {
 
 function renderExpandedRows(
   executions: readonly AssertionExecution[],
+  actionRequests: readonly ActionRequestExecution[],
   theme: Theme,
 ): string[] {
-  const rows = expandedRows(executions);
+  const rows = expandedRows(executions, actionRequests);
   const labels = rows.filter(isExecutionRow).map(({ execution, nested }) =>
     `${nested ? "  ↳ " : ""}${execution.passed ? "✓" : "✗"} ${execution.assertionRef}`
   );
@@ -314,12 +407,19 @@ function renderExpandedRows(
 
   let labelIndex = 0;
   return rows.map((row) => {
-    if (!isExecutionRow(row)) {
+    if ("origin" in row) {
       return theme.fg(
         "dim",
         `  ${row.origin.assertionRef} · ${row.origin.outcome} result`,
       );
     }
+    if ("action" in row) {
+      const prefix = row.nested ? "  ↳ " : "";
+      return `${prefix}${theme.fg("accent", "→")} ${
+        theme.fg("text", row.action.assertionRef)
+      }${theme.fg("dim", ` · ${row.action.actionType} requested`)}`;
+    }
+
     const { execution, nested } = row;
     const plainLabel = labels[labelIndex++]!;
     const prefix = nested ? "  ↳ " : "";
@@ -361,9 +461,20 @@ export const renderExecutionEntry: EntryRenderer<unknown> = (
       0,
     );
     const count = data.executions.length;
-    const summary = `pi-assert ran ${count} command${
+    const actionCount = data.actionRequests.length;
+    const commandSummary = `ran ${count} command${
       count === 1 ? "" : "s"
-    } in ${totalMs}ms · ${triggerLabel(data.trigger)}`;
+    } in ${totalMs}ms`;
+    const actionSummary = `requested ${actionCount} action${
+      actionCount === 1 ? "" : "s"
+    }`;
+    const summary = `pi-assert ${
+      count === 0
+        ? actionSummary
+        : actionCount === 0
+        ? commandSummary
+        : `${commandSummary} and ${actionSummary}`
+    } · ${triggerLabel(data.trigger)}`;
     const expandKey = keyText("app.tools.expand") || "ctrl+o";
     const lines = [
       expanded
@@ -380,7 +491,11 @@ export const renderExecutionEntry: EntryRenderer<unknown> = (
       ) {
         lines.push(theme.fg("dim", `  tool-call id: ${data.trigger.toolCallId}`));
       }
-      lines.push(...renderExpandedRows(data.executions, theme));
+      lines.push(...renderExpandedRows(
+        data.executions,
+        data.actionRequests,
+        theme,
+      ));
     }
     return transcriptBox(theme, lines.join("\n"));
   } catch {

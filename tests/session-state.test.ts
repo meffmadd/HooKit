@@ -212,6 +212,38 @@ describe("session state Active Assertion Set", () => {
     assert.equal(readFileSync(log, "utf8"), "b\na\n");
   });
 
+  it("expands Action Handlers through presets alongside Shell Assertions", async () => {
+    const { root, global, project, state } = setup("preset-action");
+    writeJson(project, {
+      local: {
+        guard: shell("true"),
+        notify: {
+          description: "notify",
+          hook: "tool_call",
+          action: { type: "interrupt" },
+        },
+        bundle: {
+          description: "bundle",
+          preset: ["local/guard", "local/notify"],
+        },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context(["local\x00bundle"]));
+
+    const evaluated = await new HookEvaluation().evaluate(
+      "tool_call",
+      { toolName: "bash", toolCallId: "preset-action", input: {} },
+      { cwd: root, metadata: {} },
+      state.activeAssertionSet(),
+    );
+    assert.equal(evaluated.outcome, "pass");
+    assert.deepEqual(
+      evaluated.executionReport?.actionRequests.map((request) => request.assertionRef),
+      ["local/notify"],
+    );
+  });
+
   it("captures an immutable set before later activation changes", async () => {
     const { root, global, project, state } = setup("immutable");
     const log = join(root, "captured.log");

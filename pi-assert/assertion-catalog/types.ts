@@ -1,4 +1,5 @@
 import type {
+  Action,
   Hook,
   ReadonlyEntryFilter,
   PersistedEntry,
@@ -23,15 +24,30 @@ export interface CatalogShellAssertion extends CatalogEntryBase {
   readonly shell: string;
 }
 
+/** A validated declarative Action Handler available to session activation. */
+export interface CatalogActionHandler extends CatalogEntryBase {
+  readonly hook: Hook;
+  readonly filter?: ReadonlyEntryFilter;
+  readonly when?: string;
+  readonly action: Action;
+}
+
 /** A validated one-level preset available to session activation. */
 export interface CatalogPreset extends CatalogEntryBase {
   readonly preset: readonly string[];
 }
 
-export type CatalogEntry = CatalogShellAssertion | CatalogPreset;
+export type CatalogExecutableEntry = CatalogShellAssertion | CatalogActionHandler;
+export type CatalogEntry = CatalogExecutableEntry | CatalogPreset;
 
 export function isCatalogPreset(entry: CatalogEntry): entry is CatalogPreset {
   return "preset" in entry;
+}
+
+export function isCatalogActionHandler(
+  entry: CatalogEntry,
+): entry is CatalogActionHandler {
+  return "action" in entry;
 }
 
 /** Filesystem locations authorized before catalog creation. */

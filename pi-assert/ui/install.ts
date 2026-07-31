@@ -203,17 +203,18 @@ async function promptAssertEntry(
       title: "Remove rule",
       message: (item) => {
         const e = entries[item.value];
-        const kind = e && "preset" in e ? "preset" : "assert";
+        const kind = e && "preset" in e
+          ? "preset"
+          : e && "action" in e
+          ? "Action Handler"
+          : "assert";
         return `  Remove "${item.value}" ${kind}?`;
       },
     },
     detailFor: (value) => {
       const e = entries[value];
       if (!e) return undefined;
-      if ("preset" in e) {
-        return { preset: e.preset };
-      }
-      return { shell: e.shell, when: e.when };
+      return e;
     },
   });
 }
@@ -437,7 +438,7 @@ export async function runInstallWizard(
     let index: number | undefined;
     for (;;) {
       // Build the installed map from the fresh catalog returned by the last
-      // mutation. Include both shell assertions and presets for classification.
+      // mutation. Include every entry kind for classification.
       const installedMap = new Map<string, CatalogEntry>();
       for (const a of state.entries) {
         if (a.source === repo) installedMap.set(a.name, a);

@@ -1,5 +1,7 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type {
+  Action,
+  ActionType,
   AssertResultEvent,
   AssertResultOutcome,
   Hook,
@@ -105,6 +107,12 @@ export type EvaluationEffect =
   | {
       readonly type: "request-corrective-turn";
       readonly message: string;
+    }
+  | {
+      readonly type: "request-action";
+      readonly assertionRef: string;
+      readonly runId: string;
+      readonly action: Action;
     };
 
 /** Result identity that causally associates a synthetic handler execution. */
@@ -124,9 +132,19 @@ export interface AssertionExecution {
   readonly originatingResult?: OriginatingAssertionResult;
 }
 
+/** One configured action request, excluding unbounded action payload fields. */
+export interface ActionRequestExecution {
+  readonly assertionRef: string;
+  readonly runId: string;
+  readonly hook: Hook;
+  readonly actionType: ActionType;
+  readonly originatingResult?: OriginatingAssertionResult;
+}
+
 /** Immutable, delivery-neutral accounting for one complete Hook Evaluation. */
 export interface AssertionExecutionReport {
   readonly executions: readonly AssertionExecution[];
+  readonly actionRequests: readonly ActionRequestExecution[];
 }
 
 interface EvaluationResultBase {

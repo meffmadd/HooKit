@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SelectItem } from "@earendil-works/pi-tui";
-import type { PersistedEntry } from "./domain/entry.js";
+import type { Action, PersistedEntry } from "./domain/entry.js";
 import { validateRuleEntry } from "./domain/validation.js";
 
 // ---------------------------------------------------------------------------
@@ -98,8 +98,7 @@ export async function fetchRuleFiles(
 /**
  * Fetch and parse a single rules/*.json file from a GitHub repo.
  *
- * Returns only entries that have a `description`, `hook`, and `shell`
- * (all required by the schema).
+ * Returns only schema-valid Shell Assertions, Action Handlers, and Presets.
  */
 export async function fetchRuleFile(
   repo: string,
@@ -139,11 +138,7 @@ export async function fetchRuleFile(
   const entries: RuleEntries = {};
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
     const kind = validateRuleEntry(def);
-    if (kind?.kind === "assert") {
-      entries[name] = def as PersistedEntry;
-    } else if (kind?.kind === "preset") {
-      entries[name] = def as PersistedEntry;
-    }
+    if (kind) entries[name] = def as PersistedEntry;
   }
 
   return entries;
@@ -234,14 +229,23 @@ export function clearRepoEntriesCache(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal shape needed to compute an assert's content signature.  Both
- * {@link RuleEntry} and catalog shell assertions both satisfy it, so
- * outdated detection stays independent of persistence.
+ * Minimal shape needed to compute a Shell Assertion content signature.
+ * Repository entries and catalog assertions satisfy it, so outdated detection
+ * stays independent of persistence.
  */
 interface SignableAssert {
   description: string;
   hook: string;
   shell: string;
+  filter?: Record<string, unknown>;
+  when?: string;
+}
+
+/** Minimal shape needed to compute an Action Handler's content signature. */
+interface SignableActionHandler {
+  description: string;
+  hook: string;
+  action: Action;
   filter?: Record<string, unknown>;
   when?: string;
 }
@@ -252,16 +256,19 @@ interface SignablePreset {
   preset: readonly string[];
 }
 
-/** Union type for content signature computation (assert or preset). */
-export type SignableEntry = SignableAssert | SignablePreset;
+/** Union type for content signatures of every catalog entry kind. */
+export type SignableEntry =
+  | SignableAssert
+  | SignableActionHandler
+  | SignablePreset;
 
 /**
  * Canonical content signature of an entry, used for outdated detection.
  *
  * Excludes `default` (a local-only preference, never a repo-driven change)
- * and includes only the repo-driven fields. For asserts: `description`,
- * `hook`, `shell`, and `filter`/`when` **when present**. For presets:
- * `description` and `preset` array.
+ * and includes only repo-driven fields. Shell Assertions include
+ * `description`, `hook`, `shell`, and optional `filter`/`when`; Action Handlers
+ * substitute `action` for `shell`; presets include `description` and `preset`.
  *
  * Omitted optional fields are dropped entirely (never emitted as `undefined`)
  * so a deep-equal of two signatures treats "absent" on both sides as equal.
@@ -283,11 +290,11 @@ export function entryContentSignature(
       preset: entry.preset,
     };
   }
-  // Assert branch
+  // Executable-entry branch
   const sig: Record<string, unknown> = {
     description: entry.description,
     hook: entry.hook,
-    shell: entry.shell,
+    ...("action" in entry ? { action: entry.action } : { shell: entry.shell }),
   };
   if (entry.filter !== undefined) sig.filter = entry.filter;
   if (entry.when !== undefined) sig.when = entry.when;

@@ -276,6 +276,15 @@ describe("fetchRuleFile", () => {
           hook: "tool_call",
           shell: "grep rm",
         },
+        notify: {
+          description: "Notify another extension.",
+          hook: "assert_result",
+          action: {
+            type: "emit-custom-event",
+            name: "example:guard-result",
+            data: { installed: true },
+          },
+        },
       },
       expected: {
         "block-write": {
@@ -288,6 +297,15 @@ describe("fetchRuleFile", () => {
           description: "Blocks rm -rf in bash.",
           hook: "tool_call",
           shell: "grep rm",
+        },
+        notify: {
+          description: "Notify another extension.",
+          hook: "assert_result",
+          action: {
+            type: "emit-custom-event",
+            name: "example:guard-result",
+            data: { installed: true },
+          },
         },
       },
     },

@@ -67,7 +67,7 @@ export interface HookAdapter<E> {
   readonly failureAction: FailureAction;
   readonly aggregation: FailureAggregation;
   readonly feedback: FeedbackPolicy;
-  readonly skipIfAborted?: boolean;
+  readonly skipAssertionsIfAborted?: boolean;
   candidate(event: E): Record<string, unknown>;
   matchesFilter?(
     filter: ReadonlyEntryFilter | undefined,
@@ -264,7 +264,7 @@ const turnEndAdapter: HookAdapter<EvaluationEventMap["turn_end"]> = {
   failureAction: "report",
   aggregation: "all",
   feedback: "present-error",
-  skipIfAborted: true,
+  skipAssertionsIfAborted: true,
   candidate: turnEndCandidate,
   buildEnvironment: lifecycleBuilder("turn_end", turnEndCandidate),
   outcome: (failures) => {
@@ -284,7 +284,7 @@ const agentEndAdapter: HookAdapter<EvaluationEventMap["agent_end"]> = {
   failureAction: "report",
   aggregation: "all",
   feedback: "corrective-turn",
-  skipIfAborted: true,
+  skipAssertionsIfAborted: true,
   candidate: agentEndCandidate,
   buildEnvironment: lifecycleBuilder("agent_end", agentEndCandidate),
   outcome: (failures) => {

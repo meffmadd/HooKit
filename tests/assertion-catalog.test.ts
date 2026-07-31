@@ -68,6 +68,18 @@ function localShell(shell = "true", extra: Record<string, unknown> = {}) {
   };
 }
 
+function localAction(
+  action: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    description: "Local action",
+    hook: "tool_call",
+    action,
+    ...extra,
+  };
+}
+
 const remoteShell = {
   description: "Remote guard",
   hook: "tool_call" as const,
@@ -135,6 +147,35 @@ describe("Assertion Catalog creation", () => {
     assert.equal(find(loaded, id("hidden/repo", "hidden")), undefined);
     assert.deepEqual(loaded.repositories, ["owner/repo"]);
     assert.equal("path" in shared, false, "storage provenance is not exposed");
+  });
+
+  it("loads and clones validated Action Handlers without storage provenance", () => {
+    const paths = locations("actions");
+    const action = {
+      type: "emit-custom-event" as const,
+      name: "test:event",
+      data: { nested: [1, true] },
+    };
+    writeJson(paths.project!, {
+      local: {
+        handler: {
+          description: "Notify an integration",
+          hook: "assert_result",
+          filter: { outcome: "block" },
+          when: "true",
+          action,
+          default: true,
+        },
+      },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    const handler = find(loaded, id("local", "handler"));
+    assert.ok(handler && "action" in handler);
+    assert.deepEqual(handler.action, action);
+    assert.notStrictEqual(handler.action, action);
+    assert.equal(handler.default, true);
+    assert.equal("path" in handler, false);
   });
 
   it("retains legacy all-object-section eligibility when project repos is absent", () => {
@@ -397,7 +438,10 @@ describe("Assertion Catalog mutations", () => {
       },
     });
     writeJson(paths.project!, {
-      local: { shadowed: localShell("project-shadow", { default: true }) },
+      local: {
+        shadowed: localShell("project-shadow", { default: true }),
+        handler: localAction({ type: "interrupt" }, { default: true }),
+      },
     });
     let current = catalog(AssertionCatalog.open(paths));
 
@@ -410,6 +454,11 @@ describe("Assertion Catalog mutations", () => {
       type: "update",
       identity: id("local", "shadowed"),
       entry: localShell("new-project"),
+    }));
+    current = catalog(current.mutate({
+      type: "update",
+      identity: id("local", "handler"),
+      entry: localAction({ type: "shutdown", interrupt: true }),
     }));
 
     const global = readJson(paths.global);
@@ -431,6 +480,16 @@ describe("Assertion Catalog mutations", () => {
       default: true,
     });
     assert.equal(find(current, id("local", "shadowed"))?.default, true);
+    assert.deepEqual((project.local as Record<string, unknown>).handler, {
+      description: "Local action",
+      hook: "tool_call",
+      action: { type: "shutdown", interrupt: true },
+      default: true,
+    });
+    const handler = find(current, id("local", "handler"));
+    assert.ok(handler && "action" in handler);
+    assert.deepEqual(handler.action, { type: "shutdown", interrupt: true });
+    assert.equal(handler.default, true);
   });
 
   it("uses provenance from the mandatory re-read rather than the old snapshot", () => {

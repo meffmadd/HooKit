@@ -1,5 +1,10 @@
 import { entryRef, type AssertResultEvent, type NativeHook } from "../domain/entry.js";
-import type { ActiveAssertion } from "./assertions.js";
+import {
+  isActiveActionHandler,
+  isActiveAssertion,
+  type ActiveAssertion,
+  type ActiveExecutable,
+} from "./assertions.js";
 import {
   assertionsIn,
   type ActiveAssertionSet,
@@ -8,10 +13,13 @@ import {
   adapterFor,
   formatErrorDetail,
   type AdapterOutcome,
+  type AssertionFailure,
   type HookAdapter,
 } from "./adapters.js";
+import { invokeActionHandlers } from "./actions.js";
 import { invokeAssertions } from "./invocations.js";
 import type {
+  ActionRequestExecution,
   AssertionExecution,
   AssertionExecutionReport,
   EvaluationEffect,
@@ -25,8 +33,13 @@ import type {
 
 export { createActiveAssertionSet } from "./active-set.js";
 export type { ActiveAssertionSet } from "./active-set.js";
-export type { ActiveAssertion } from "./assertions.js";
 export type {
+  ActiveActionHandler,
+  ActiveAssertion,
+  ActiveExecutable,
+} from "./assertions.js";
+export type {
+  ActionRequestExecution,
   AgentEndEvent,
   AgentSettledEvent,
   AssertionExecution,
@@ -104,18 +117,25 @@ function freezeResults(
   return Object.freeze(results.map((result) => Object.freeze({ ...result })));
 }
 
+function freezeOrigin(
+  origin: ActionRequestExecution["originatingResult"],
+) {
+  return origin === undefined
+    ? undefined
+    : Object.freeze({
+        assertionRef: origin.assertionRef,
+        runId: origin.runId,
+        outcome: origin.outcome,
+      });
+}
+
 function freezeExecutionReport(
   executions: readonly AssertionExecution[],
+  actionRequests: readonly ActionRequestExecution[],
 ): AssertionExecutionReport | undefined {
-  if (executions.length === 0) return undefined;
+  if (executions.length === 0 && actionRequests.length === 0) return undefined;
   const frozenExecutions = Object.freeze(executions.map((execution) => {
-    const originatingResult = execution.originatingResult === undefined
-      ? undefined
-      : Object.freeze({
-        assertionRef: execution.originatingResult.assertionRef,
-        runId: execution.originatingResult.runId,
-        outcome: execution.originatingResult.outcome,
-      });
+    const originatingResult = freezeOrigin(execution.originatingResult);
     return Object.freeze({
       assertionRef: execution.assertionRef,
       runId: execution.runId,
@@ -125,7 +145,20 @@ function freezeExecutionReport(
       ...(originatingResult === undefined ? {} : { originatingResult }),
     });
   }));
-  return Object.freeze({ executions: frozenExecutions });
+  const frozenActions = Object.freeze(actionRequests.map((request) => {
+    const originatingResult = freezeOrigin(request.originatingResult);
+    return Object.freeze({
+      assertionRef: request.assertionRef,
+      runId: request.runId,
+      hook: request.hook,
+      actionType: request.actionType,
+      ...(originatingResult === undefined ? {} : { originatingResult }),
+    });
+  }));
+  return Object.freeze({
+    executions: frozenExecutions,
+    actionRequests: frozenActions,
+  });
 }
 
 function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string {
@@ -134,13 +167,25 @@ function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string
   }" failed to execute — ${formatErrorDetail(error)}`;
 }
 
+function freezeNested<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) freezeNested(nested);
+  return Object.freeze(value);
+}
+
 function publicResult(
   outcome: AdapterOutcome | undefined,
   pendingEffects: EvaluationEffect[],
   executionReport?: AssertionExecutionReport,
 ): HookEvaluationResult {
   const effects = Object.freeze(
-    pendingEffects.map((effect) => Object.freeze({ ...effect })),
+    pendingEffects.map((effect) => {
+      if (effect.type !== "request-action") return Object.freeze({ ...effect });
+      const action = freezeNested({ ...effect.action });
+      return Object.freeze({ ...effect, action });
+    }),
   );
   const reporting = executionReport === undefined ? {} : { executionReport };
   if (!outcome) {
@@ -222,9 +267,11 @@ export class HookEvaluation {
     hook: H,
     event: EvaluationEventMap[H],
     context: HookExecutionContext,
-    assertions: readonly ActiveAssertion[],
+    entries: readonly ActiveExecutable[],
     adapter: HookAdapter<EvaluationEventMap[H]>,
   ): Promise<HookEvaluationResult<H>> {
+    const assertions = entries.filter(isActiveAssertion);
+    const actionHandlers = entries.filter(isActiveActionHandler);
     const invocation = await invokeAssertions(
       assertions,
       adapter,
@@ -248,35 +295,57 @@ export class HookEvaluation {
     const outcome = rawOutcome === undefined ? undefined : freezeOutcome(rawOutcome);
     const results = freezeResults(invocation.results);
 
-    // The originating decision and result events are frozen before this
-    // awaited, detached phase starts. Handler behavior cannot change it.
+    // The originating decision and result events are frozen before either
+    // reaction phase starts. Action requests cannot alter the native outcome.
+    let nativeActions: Awaited<ReturnType<typeof invokeActionHandlers>> = {
+      effects: [],
+      actionRequests: [],
+    };
+    try {
+      nativeActions = await invokeActionHandlers(
+        actionHandlers,
+        adapter,
+        event,
+        context,
+      );
+    } catch (error) {
+      nativeActions.effects.push(present(
+        `pi-assert: ${hook} Action Handlers failed to execute — ${
+          formatErrorDetail(error)
+        }`,
+        "error",
+      ));
+    }
     const synthetic = await this.dispatchSyntheticResults(
-      assertions,
+      entries,
       results,
       context,
     );
-    const executionReport = freezeExecutionReport([
-      ...invocation.executions,
-      ...synthetic.executions,
-    ]);
-    this.appendOriginFeedback(hook, adapter, outcome, synthetic.effects);
+    const executionReport = freezeExecutionReport(
+      [...invocation.executions, ...synthetic.executions],
+      [...nativeActions.actionRequests, ...synthetic.actionRequests],
+    );
+    const effects = [...nativeActions.effects, ...synthetic.effects];
+    this.appendOriginFeedback(hook, adapter, outcome, effects);
     return publicResult(
       outcome,
-      synthetic.effects,
+      effects,
       executionReport,
     ) as HookEvaluationResult<H>;
   }
 
   private async dispatchSyntheticResults(
-    assertions: readonly ActiveAssertion[],
+    entries: readonly ActiveExecutable[],
     results: readonly AssertResultEvent[],
     context: HookExecutionContext,
   ): Promise<{
     effects: EvaluationEffect[];
     executions: AssertionExecution[];
+    actionRequests: ActionRequestExecution[];
   }> {
     const effects: EvaluationEffect[] = [];
     const executions: AssertionExecution[] = [];
+    const actionRequests: ActionRequestExecution[] = [];
     const adapter = adapterFor("assert_result");
     const detachedContext: HookExecutionContext = Object.freeze({
       cwd: context.cwd,
@@ -285,30 +354,50 @@ export class HookEvaluation {
 
     for (const result of results) {
       try {
-        const invocation = await invokeAssertions(
-          assertions,
-          adapter,
-          result,
-          detachedContext,
-          {
-            originatingResult: result,
-            continueAfterUnexpected: (handler, error) => {
-              effects.push(present(handlerErrorMessage(handler, error), "error"));
+        const failures: AssertionFailure[] = [];
+        for (const handler of entries) {
+          if (handler.hook !== "assert_result") continue;
+          if (isActiveActionHandler(handler)) {
+            const invocation = await invokeActionHandlers(
+              [handler],
+              adapter,
+              result,
+              detachedContext,
+              { originatingResult: result },
+            );
+            effects.push(...invocation.effects);
+            actionRequests.push(...invocation.actionRequests);
+            continue;
+          }
+
+          const invocation = await invokeAssertions(
+            [handler],
+            adapter,
+            result,
+            detachedContext,
+            {
+              originatingResult: result,
+              continueAfterUnexpected: (failedHandler, error) => {
+                effects.push(present(
+                  handlerErrorMessage(failedHandler, error),
+                  "error",
+                ));
+              },
             },
-          },
-        );
-        executions.push(...invocation.executions);
-        if (invocation.unexpectedError !== undefined) {
-          effects.push(present(
-            `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
-              formatErrorDetail(invocation.unexpectedError)
-            }`,
-            "error",
-          ));
-          continue;
+          );
+          executions.push(...invocation.executions);
+          failures.push(...invocation.failures);
+          if (invocation.unexpectedError !== undefined) {
+            effects.push(present(
+              `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
+                formatErrorDetail(invocation.unexpectedError)
+              }`,
+              "error",
+            ));
+          }
         }
-        if (invocation.failures.length > 0) {
-          const handlerOutcome = adapter.outcome(invocation.failures, result);
+        if (failures.length > 0) {
+          const handlerOutcome = adapter.outcome(failures, result);
           effects.push(present(handlerOutcome.feedbackMessage, "error"));
         }
       } catch (error) {
@@ -322,7 +411,7 @@ export class HookEvaluation {
         ));
       }
     }
-    return { effects, executions };
+    return { effects, executions, actionRequests };
   }
 
   private appendOriginFeedback<E>(

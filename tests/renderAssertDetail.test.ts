@@ -138,6 +138,38 @@ describe("renderAssertDetail — preset branch", () => {
   });
 });
 
+describe("renderAssertDetail — Action Handler branch", () => {
+  it("renders action type, safe configuration, and when", () => {
+    const lines = renderAssertDetail(mockTheme(), 120, {
+      action: {
+        type: "message",
+        message: "Please review the block",
+        delivery: "followUp",
+        triggerTurn: true,
+      },
+      when: "test -f .needs-review",
+    });
+    const text = lines.join("\n");
+    assert.match(text, /action: message/);
+    assert.match(text, /delivery: followUp/);
+    assert.match(text, /triggerTurn: true/);
+    assert.match(text, /message: Please review the block/);
+    assert.match(text, /when: test -f \.needs-review/);
+    assert.ok(!text.includes("shell:"));
+  });
+
+  it("renders bounded JSON custom-event data in configuration detail", () => {
+    const lines = renderAssertDetail(mockTheme(), 120, {
+      action: {
+        type: "emit-custom-event",
+        name: "example:blocked",
+        data: { severity: "high" },
+      },
+    });
+    assert.match(lines.join("\n"), /data: \{"severity":"high"\}/);
+  });
+});
+
 describe("renderAssertDetail", () => {
   it("renders the shell label and command", () => {
     const lines = renderAssertDetail(mockTheme(), 80, { shell: "echo hello" });

@@ -1,7 +1,7 @@
 # pi-assert
 
-Shell-assertion guard for pi. Reads `asserts.json` to block tool calls that
-fail user-defined shell checks.
+Shell assertions and declarative Action Handlers for Pi hook events. Reads
+`asserts.json` to decide native guard outcomes and request supported Pi effects.
 
 ## Architecture
 
@@ -10,24 +10,28 @@ fail user-defined shell checks.
   context onto bounded scalar metadata, captures one Active Assertion Set,
   attributes and appends per-trigger execution entries, translates explicit
   Hook Evaluation outcomes into Pi callbacks, and delivers ordered semantic
-  effects best-effort. It owns no catalog or hook policy.
+  effects best-effort. It maps delivery-neutral Action Handler requests onto
+  ordinary Pi context/API operations; it owns no catalog or hook policy.
 - **`pi-assert/assertion-catalog/`** — the session-scoped deep Assertion Catalog
   module. Its facade exposes immutable `AssertionCatalog` snapshots, entries
   without storage paths, explicit `{ source, name }` identities, structured
   load/mutation results, and one domain-intent mutation union. Private format
   machinery owns authorized global/optional-project reads, complete validation,
   repository eligibility, whole-record source-preserving merge, provenance,
-  canonical persisted records, re-read-before-write mutations, local-default
-  preservation, and best-effort atomic replacement. Every successful mutation
+  canonical persisted Shell Assertion, Action Handler, and Preset records,
+  re-read-before-write mutations, local-default preservation, and best-effort
+  atomic replacement. Every successful mutation
   returns a fresh catalog; failures leave the caller's prior snapshot intact.
 - **`pi-assert/hook-evaluation/`** — the session-scoped deep Hook Evaluation
   module. Its facade exposes `HookEvaluation`, `createActiveAssertionSet`, the
   typed native event map, bounded execution context, explicit outcomes, and
   delivery-neutral effects. Private collaborators own the exhaustive adapter
   registry, candidate/filter/environment projection, filter → `when` → shell
-  Assertion Invocations, frozen synthetic `assert_result` dispatch, fail-closed
-  policy, transaction-local immutable execution reporting (including synthetic
-  handler-to-origin association), and corrective retry deduplication. Shells
+  Assertion Invocations, independent filter → `when` → action-request handling,
+  frozen synthetic `assert_result` dispatch, fail-closed shell policy,
+  transaction-local immutable execution reporting (including bounded action
+  accounting and synthetic handler-to-origin association), and corrective retry
+  deduplication. Shells
   run via real `child_process.exec`; no shell port exists solely for tests.
 - **`pi-assert/domain/entry.ts` / `domain/validation.ts`** — shared persisted
   entry types, canonical source/name key/ref parsing, `AssertIndex` lookups,
@@ -57,8 +61,9 @@ fail user-defined shell checks.
   confirm-on-select guard (`confirmOnSelect`).
 - **`pi-assert/ui/state.ts`** — session activation between Assertion Catalog
   and Hook Evaluation. It accepts fresh catalogs, reconciles source-qualified
-  saved/default activation, expands one preset level with deduplication, and
-  produces immutable Active Assertion Sets. Failed catalog mutations retain
+  saved/default activation, expands one preset level with deduplication across
+  Shell Assertions and Action Handlers, and produces immutable Active Assertion
+  Sets. Failed catalog mutations retain
   the known-good catalog and activation.
 - **`pi-assert/ui/install.ts`** — the install wizard (repo picker → file
   picker → entry picker). The entry picker is a tri-state `Enter`: not
@@ -84,7 +89,7 @@ fail user-defined shell checks.
   one panel-specific key (`Esc` = commit + back). Search, navigation, and
   toggle are inherited — no parallel path.
 - **`skills/pi-assert/SKILL.md`** — bundled skill describing the format, hooks,
-  filters, shell, env vars, and common patterns.
+  filters, Shell Assertions, Action Handlers, env vars, and common patterns.
 
 ## Key Design Decisions
 
@@ -92,7 +97,16 @@ fail user-defined shell checks.
   all work via `/bin/sh`.
 - Optional `when` precondition shell runs first; main `shell` only executes if
   `when` exits 0. Skip expensive asserts when they don't apply.
-- Default timeout of 5 seconds prevents hanging asserts.
+- Default timeout of 5 seconds prevents hanging asserts and action
+  preconditions. An Action Handler infrastructure failure reports and skips the
+  action; it never changes a native callback outcome.
+- Executable entries contain exactly one `shell` or structured `action`.
+  Native Action Handlers form an ordered reaction phase independent of shell
+  fail-fast traversal. Synthetic actions remain result-major/configured-handler
+  ordered, emit no recursive results, and cannot mutate the frozen origin.
+- Hook Evaluation returns immutable, delivery-neutral action requests. The thin
+  adapter maps them to `ctx.abort`, `ctx.shutdown`, `ctx.compact`, pi-assert
+  custom messages, or `pi.events.emit` and delivers siblings best-effort.
 - Tool hooks fail fast. `turn_end`, `agent_end`, `agent_settled`, and cancellable
   session guards aggregate every failure; Hook Evaluation's private adapter
   registry is the source of truth for each hook's action and feedback.
@@ -117,7 +131,8 @@ fail user-defined shell checks.
   stable while matches rank inside each section; empty sections drop out.
 - **Outdated detection excludes `default`.** The content signature
   (`entryContentSignature`) compares only repo-driven fields
-  (`description`, `hook`, `shell`, `filter`, `when`); `default` is a local
+  (`description`, `hook`, executable `shell`/`action`, `filter`, `when`);
+  `default` is a local
   toggle, never a repo-driven change. Catalog update intent preserves the
   current persisted preference.
 - **Outdated is per-file; orphaned is panel-wide.** The install wizard entry

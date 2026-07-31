@@ -74,6 +74,32 @@ describe("entryContentSignature", () => {
     assert.ok(!("default" in sig), "default must not appear in the signature");
   });
 
+  it("includes Action Handler configuration and excludes default", () => {
+    const sig = entryContentSignature({
+      description: "notify",
+      hook: "assert_result",
+      action: {
+        type: "message",
+        message: "blocked",
+        delivery: "followUp",
+      },
+      filter: { outcome: "block" },
+      when: "true",
+      default: true,
+    });
+    assert.deepEqual(sig, {
+      description: "notify",
+      hook: "assert_result",
+      action: {
+        type: "message",
+        message: "blocked",
+        delivery: "followUp",
+      },
+      filter: { outcome: "block" },
+      when: "true",
+    });
+  });
+
   it("never emits undefined-valued keys", () => {
     const sig = entryContentSignature({
       description: "d",
@@ -95,6 +121,24 @@ describe("entryContentSignature", () => {
 describe("entryNeedsUpdate", () => {
   it("returns false for identical entries", () => {
     assert.strictEqual(entryNeedsUpdate(base, with_({})), false);
+  });
+
+  it("returns true when an Action Handler's action changes", () => {
+    assert.equal(
+      entryNeedsUpdate(
+        {
+          description: "notify",
+          hook: "tool_call",
+          action: { type: "interrupt" },
+        },
+        {
+          description: "notify",
+          hook: "tool_call",
+          action: { type: "shutdown" },
+        },
+      ),
+      true,
+    );
   });
 
   it("returns false when only default differs (default is excluded)", () => {

@@ -53,6 +53,64 @@ export type ReadonlyEntryFilter = Readonly<
   Record<string, FilterScalar | readonly FilterScalar[]>
 >;
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+export interface InterruptAction {
+  readonly type: "interrupt";
+}
+
+export interface ShutdownAction {
+  readonly type: "shutdown";
+  readonly interrupt?: boolean;
+}
+
+export interface CompactAction {
+  readonly type: "compact";
+  readonly instructions?: string;
+}
+
+export interface MessageAction {
+  readonly type: "message";
+  readonly message: string;
+  readonly delivery: "steer" | "followUp" | "nextTurn";
+  readonly triggerTurn?: boolean;
+}
+
+export interface EmitCustomEventAction {
+  readonly type: "emit-custom-event";
+  readonly name: string;
+  readonly data?: JsonValue;
+}
+
+/** One declarative Pi operation requested by an Action Handler. */
+export type Action =
+  | InterruptAction
+  | ShutdownAction
+  | CompactAction
+  | MessageAction
+  | EmitCustomEventAction;
+
+export type ActionType = Action["type"];
+
+export const ACTION_TYPES = [
+  "interrupt",
+  "shutdown",
+  "compact",
+  "message",
+  "emit-custom-event",
+] as const satisfies readonly ActionType[];
+
+export function isActionType(value: unknown): value is ActionType {
+  return typeof value === "string" &&
+    (ACTION_TYPES as readonly string[]).includes(value);
+}
+
 export interface PersistedAssert {
   description: string;
   hook: Hook;
@@ -62,13 +120,93 @@ export interface PersistedAssert {
   default?: boolean;
 }
 
+export interface PersistedActionHandler {
+  description: string;
+  hook: Hook;
+  filter?: EntryFilter;
+  when?: string;
+  action: Action;
+  default?: boolean;
+}
+
 export interface PersistedPreset {
   description: string;
   preset: string[];
   default?: boolean;
 }
 
-export type PersistedEntry = PersistedAssert | PersistedPreset;
+export type PersistedEntry =
+  | PersistedAssert
+  | PersistedActionHandler
+  | PersistedPreset;
+
+/** Deep-copy JSON data without retaining caller-owned arrays or objects. */
+export function cloneJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(cloneJsonValue);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, cloneJsonValue(nested)]),
+    );
+  }
+  return value;
+}
+
+/** Copy one validated action configuration. */
+export function cloneAction(action: Action): Action {
+  switch (action.type) {
+    case "interrupt":
+      return { type: "interrupt" };
+    case "shutdown":
+      return {
+        type: "shutdown",
+        ...(action.interrupt === undefined ? {} : { interrupt: action.interrupt }),
+      };
+    case "compact":
+      return {
+        type: "compact",
+        ...(action.instructions === undefined
+          ? {}
+          : { instructions: action.instructions }),
+      };
+    case "message":
+      return {
+        type: "message",
+        message: action.message,
+        delivery: action.delivery,
+        ...(action.triggerTurn === undefined
+          ? {}
+          : { triggerTurn: action.triggerTurn }),
+      };
+    case "emit-custom-event":
+      return {
+        type: "emit-custom-event",
+        name: action.name,
+        ...(action.data === undefined ? {} : { data: cloneJsonValue(action.data) }),
+      };
+  }
+}
+
+/** Canonical action text shared by detail rendering and fuzzy search. */
+export function actionDetailText(action: Action): string {
+  switch (action.type) {
+    case "interrupt":
+      return "interrupt";
+    case "shutdown":
+      return `shutdown · interrupt: ${action.interrupt ?? false}`;
+    case "compact":
+      return action.instructions === undefined
+        ? "compact"
+        : `compact · instructions: ${action.instructions}`;
+    case "message":
+      return `message · delivery: ${action.delivery} · triggerTurn: ${
+        action.triggerTurn ?? false
+      } · message: ${action.message}`;
+    case "emit-custom-event":
+      return `emit-custom-event · name: ${action.name}${
+        action.data === undefined ? "" : ` · data: ${JSON.stringify(action.data)}`
+      }`;
+  }
+}
 
 /** Canonical identity. Names are unique only within a source. */
 export function entryKey(source: string, name: string): string {

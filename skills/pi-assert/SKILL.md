@@ -1,6 +1,6 @@
 ---
 name: pi-assert
-description: Define shell assertions and result handlers for Pi tool calls, results, turns, settled agents, and cancellable session changes.
+description: Define Shell Assertions and declarative Action Handlers for Pi tool calls, results, turns, settled agents, and cancellable session changes.
 ---
 
 # pi-assert
@@ -41,9 +41,11 @@ entries override global entries by **source and name**, not name alone.
 }
 ```
 
-## Assert fields
+## Executable rule fields
 
-Every shell assert requires `description`, `hook`, and `shell`.
+Every entry contains exactly one of `shell`, `action`, or `preset`. A Shell
+Assertion requires `description`, `hook`, and `shell`; an Action Handler uses
+the same trigger fields but replaces `shell` with one structured `action`.
 
 - `hook`: `tool_call`, `tool_result`, `turn_end`, `agent_end`,
   `agent_settled`, `session_before_switch`, `session_before_fork`, or the
@@ -69,14 +71,58 @@ Every shell assert requires `description`, `hook`, and `shell`.
   - Anchor exact strings: `"^bash$"` matches only `bash`, while unanchored
     `"bash"` also matches `mybash`. This is a migration change from the former
     strict-equality behavior.
-- `when`: optional shell precondition. A normal non-zero exit skips the rule;
-  timeout, abort, and spawn failure fail closed for guard hooks.
+- `when`: optional shell precondition. A normal non-zero exit skips the rule.
+  For Shell Assertions, timeout, abort, and spawn failure fail closed according
+  to hook policy. For Action Handlers, those infrastructure failures report an
+  error and skip the action without changing the native outcome.
 - `default`: optional boolean; enables the source-qualified entry for a new
   session.
 
-### Shell environment
+### Action Handlers
 
-Every matching rule receives:
+An Action Handler requests an effect after hook/filter matching and a successful
+optional `when`. It never decides or changes a native Shell Assertion outcome.
+Native actions are considered independently of shell fail-fast traversal;
+`assert_result` composes a reaction with a specific source-qualified decision.
+Handlers and deliveries are ordered and best-effort, so one failure does not
+suppress siblings.
+
+```json
+{
+  "local": {
+    "notify-on-block": {
+      "description": "Notify another extension about blocked operations",
+      "hook": "assert_result",
+      "filter": { "outcome": ["block", "patch", "cancel"] },
+      "action": {
+        "type": "emit-custom-event",
+        "name": "my-extension:guard-blocked",
+        "data": { "source": "pi-assert" }
+      }
+    }
+  }
+}
+```
+
+- `interrupt`: no extra fields; requests Pi abort (a harmless no-op when idle).
+- `shutdown`: optional boolean `interrupt` (default `false`); when true, abort
+  is requested before graceful shutdown. Print mode keeps Pi's shutdown no-op.
+- `compact`: optional string `instructions`; fire-and-forget through Pi's normal
+  compaction lifecycle.
+- `message`: requires string `message` and `delivery` (`steer`, `followUp`, or
+  `nextTurn`). Optional `triggerTurn` defaults false and cannot be true with
+  `nextTurn`. This creates a visible `pi-assert` custom message, not user input.
+- `emit-custom-event`: requires a non-whitespace `name` and accepts optional JSON
+  `data`. It uses only `pi.events`, so lifecycle-looking names do not invoke
+  native Pi hooks. Prefer namespaced event names.
+
+Action strings/data are static—there is no template, environment, stdout, or
+computed-payload expansion. Use one named handler per action and combine them
+with presets when needed.
+
+### Shell and precondition environment
+
+Every matching Shell Assertion and every Action Handler `when` receives:
 
 - session: `PI_SESSION_ID`, optional `PI_SESSION_FILE`, optional
   `PI_SESSION_NAME`, and optional `PI_SESSION_LEAF_ID`
@@ -89,8 +135,10 @@ Every matching rule receives:
   `PI_ASSERT_HOOK`, fresh UUID `PI_ASSERT_RUN_ID`, and `PI_CWD`
 
 Optional or unknown fields are unset, never empty or stringified
-`null`/`undefined`. A rule's `when` and main `shell` share the exact metadata
-snapshot and run ID. Other rules, events, repeated executions, and retries get
+`null`/`undefined`. A Shell Assertion's `when` and main `shell` share the exact
+metadata snapshot and run ID. An Action Handler uses one fresh ID for its
+optional precondition and action request. Other rules, events, repeated
+executions, and retries get
 fresh IDs; run IDs are correlation IDs, not idempotency keys.
 
 Tool hooks additionally expose `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, and JSON
@@ -106,7 +154,8 @@ spawning each shell, while preserving unrelated values such as `PATH` and
 
 ## Assertion-result handlers
 
-Use `assert_result` for report-only handling after another assertion decides:
+Use `assert_result` for Shell Assertion logging or Action Handler reactions
+after another Shell Assertion decides:
 
 ```json
 {
@@ -137,20 +186,25 @@ non-zero exit code/`null`. A `when` execution failure emits the hook action with
 handler, payload `assertionRef`/`runId` identify the originating rule and run;
 the handler's `PI_ASSERT_REF`/`PI_ASSERT_RUN_ID` identify the handler currently
 executing and therefore carry a separate run ID. Handlers retain the bounded
-session/model/runtime snapshot and are awaited in order without the originating
-abort signal. Their failures cannot change the already-computed originating
-decision, and they never emit recursive results.
+session/model/runtime snapshot and are awaited result-major, then in configured
+order, without the originating abort signal.
+Their failures and action requests cannot change the already-computed
+originating decision, and neither handler kind emits recursive results.
 
 ## Execution summaries
 
-Each concrete native event that starts at least one main assertion shell gets
-one durable, context-neutral transcript entry. Its inset collapsed form is
-`pi-assert ran N command(s) in Xms · <trigger> (ctrl+o to expand)`; the shown
+Each concrete native event that starts a main assertion shell or requests an
+action gets one durable, context-neutral transcript entry. Command-only wording
+remains `pi-assert ran N command(s) in Xms · <trigger>`; action-only and mixed
+summaries say `requested N action(s)`. The shown
 key reflects Pi's configured `app.tools.expand` binding (`Ctrl-O` by default).
 Expand it to reveal source-qualified refs, `✓`/`✗` status, per-shell durations,
 and the tool-call ID for tool events.
-Synthetic `assert_result` handler shells count and are nested with `↳` beneath
-the result they handled, including repeated executions of the same handler.
+Synthetic `assert_result` handler shells and actions are nested with `↳`
+beneath the result they handled. Action rows persist only handler identity,
+action type, run/hook identity, and origin association—not message text,
+instructions, or custom-event data. Actions and preconditions do not count as
+commands or contribute command duration.
 
 Filters and ordinary non-zero `when` skips produce no row. A passing `when`
 precondition is not counted separately, and an infrastructure failure during
@@ -167,7 +221,8 @@ agent message.
 ## Presets
 
 A preset has `description`, a `preset` array, and optional boolean `default`;
-it cannot contain shell-assert fields. Refs are `local/name` or
+it cannot contain executable fields. It can reference Shell Assertions and
+Action Handlers together. Refs are `local/name` or
 `owner/repo/name`.
 
 ```json

@@ -19,6 +19,7 @@ import {
   type SelectItem,
   type SizeValue,
 } from "@earendil-works/pi-tui";
+import { actionDetailText, type Action } from "../domain/entry.js";
 import { highlightSegments } from "./fuzzy.js";
 
 // ---------------------------------------------------------------------------
@@ -41,19 +42,19 @@ function bindingMatches(
 // aware implementation.  The detail-block helpers below build on those.
 
 /**
- * Detail-block source for {@link renderAssertDetail}: either a shell assert
- * (`shell`, optional `when`) or a preset (`preset` refs).  Both fields are
- * optional so a catalog shell assertion or preset is assignable directly;
- * {@link renderAssertDetail} dispatches on `preset` first.
+ * Detail-block source for {@link renderAssertDetail}: a Shell Assertion,
+ * Action Handler, or Preset. Fields are optional so catalog entries are
+ * assignable directly; rendering dispatches preset → action → shell.
  */
 export interface AssertDetailEntry {
   shell?: string;
   when?: string;
+  action?: Action;
   preset?: readonly string[];
 }
 
 /**
- * Render the `shell:` / `when:` (or `asserts:` for a preset) detail block used
+ * Render the `shell:` / `action:` / `when:` (or `asserts:`) detail block used
  * by both the /asserts panel and the install wizard's assert-entry picker.
  * `when` is only shown when present, matching the standard assert view.
  *
@@ -104,12 +105,17 @@ export function renderAssertDetail(
   };
 
   // Dispatch on `preset` first: a preset renders `asserts:` with its refs
-  // comma-joined.  The shell branch is only reached for a shell assert, whose
+  // comma-joined. The later branches distinguish actions from shells, whose
   // `shell` is always present — so `detailLines(entry.shell, …)` never
   // receives `undefined` at runtime.  The `!== undefined` guard is the
   // type-safe encoding of that invariant (no `!` needed).
   if (entry.preset !== undefined) {
     detailLines(entry.preset.join(", "), "asserts: ");
+    return fitLines(lines, width);
+  }
+  if (entry.action !== undefined) {
+    detailLines(actionDetailText(entry.action), "action: ");
+    if (entry.when) detailLines(entry.when, "when: ");
     return fitLines(lines, width);
   }
   if (entry.shell !== undefined) detailLines(entry.shell, "shell: ");

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
   "title": "pi-assert configuration",
-  "description": "Schema for .pi/asserts.json — shell-assertion guard configuration for pi.",
+  "description": "Schema for .pi/asserts.json — Shell Assertions, Action Handlers, and presets for pi.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -11,7 +11,7 @@
     },
     "local": {
       "type": "object",
-      "description": "User-defined assertions and presets. Removable via the /asserts UI.",
+      "description": "User-defined Shell Assertions, Action Handlers, and presets. Removable via the /asserts UI.",
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }
@@ -33,7 +33,7 @@
     "entry": {
       "oneOf": [
         {
-          "description": "A shell-based assert: `shell` (and optional `filter`/`when`) run on a hook.",
+          "description": "A Shell Assertion: `shell` (and optional `filter`/`when`) runs on a hook and decides its fixed native outcome.",
           "type": "object",
           "required": ["description", "hook", "shell"],
           "properties": {
@@ -91,7 +91,7 @@
             },
             "preset": {
               "not": {},
-              "description": "Mutual exclusivity: a shell assert must not carry `preset` (use a preset entry instead)."
+              "description": "Mutual exclusivity: a Shell Assertion must not carry `preset` or `action`."
             }
           },
           "allOf": [
@@ -110,7 +110,10 @@
           "additionalProperties": false
         },
         {
-          "description": "A preset: a named bundle of `source/name` refs expanded by activeList(). Presets and shell asserts are mutually exclusive.",
+          "$ref": "#/$defs/actionHandler"
+        },
+        {
+          "description": "A preset: a named bundle of `source/name` refs expanded by activeList(). Presets and executable entries are mutually exclusive.",
           "type": "object",
           "required": ["description", "preset"],
           "properties": {
@@ -120,7 +123,7 @@
             },
             "preset": {
               "type": "array",
-              "description": "Qualified \"source/name\" refs (local/name or owner/repo/name) expanded to their shell asserts when the preset is active. Empty array is valid. Ref shape is enforced at write time by validatePresetShape (REF_RE).",
+              "description": "Qualified \"source/name\" refs (local/name or owner/repo/name) expanded to Shell Assertions or Action Handlers when the preset is active. Empty array is valid. Ref shape is enforced at write time by validatePresetShape (REF_RE).",
               "items": {
                 "type": "string",
                 "pattern": "^(local/[A-Za-z0-9._-]+|(?!local/)[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"
@@ -146,6 +149,146 @@
             "filter": {
               "not": {},
               "description": "Mutual exclusivity: `filter` is assert-only."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "actionHandler": {
+      "description": "An Action Handler: after hook/filter matching and an optional successful when precondition, request exactly one supported Pi action.",
+      "type": "object",
+      "required": ["description", "hook", "action"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this Action Handler does. Required."
+        },
+        "hook": {
+          "type": "string",
+          "enum": ["tool_call", "tool_result", "turn_end", "agent_end", "agent_settled", "session_before_switch", "session_before_fork", "assert_result"],
+          "description": "Supported native or synthetic trigger. The Action Handler cannot change that hook's native outcome."
+        },
+        "filter": {
+          "type": "object",
+          "description": "The same bounded candidate and matching language used by Shell Assertions.",
+          "additionalProperties": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": ["number", "boolean", "null"] },
+              {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    { "type": "string" },
+                    { "type": ["number", "boolean", "null"] }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "when": {
+          "type": "string",
+          "description": "Optional shell precondition. Exit 0 requests the action; ordinary non-zero skips it; infrastructure failure reports an error and skips it."
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "default": {
+          "type": "boolean",
+          "description": "If true, this Action Handler is active by default for new sessions. Defaults to false.",
+          "default": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "hook": { "const": "assert_result" } },
+            "required": ["hook"]
+          },
+          "then": {
+            "properties": {
+              "filter": { "$ref": "#/$defs/assertResultFilter" }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "action": {
+      "description": "One declarative Pi operation. Static fields are not template-expanded.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "interrupt" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "shutdown" },
+            "interrupt": {
+              "type": "boolean",
+              "description": "Abort active work before requesting graceful shutdown. Defaults to false.",
+              "default": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "compact" },
+            "instructions": {
+              "type": "string",
+              "description": "Optional custom compaction instructions."
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "message", "delivery"],
+          "properties": {
+            "type": { "const": "message" },
+            "message": { "type": "string" },
+            "delivery": {
+              "type": "string",
+              "enum": ["steer", "followUp", "nextTurn"]
+            },
+            "triggerTurn": {
+              "type": "boolean",
+              "description": "When eligible and idle, trigger a model turn. Defaults to false and cannot be true for nextTurn.",
+              "default": false
+            }
+          },
+          "not": {
+            "properties": {
+              "delivery": { "const": "nextTurn" },
+              "triggerTurn": { "const": true }
+            },
+            "required": ["delivery", "triggerTurn"]
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "const": "emit-custom-event" },
+            "name": {
+              "type": "string",
+              "pattern": "\\S",
+              "description": "Non-empty inter-extension event-bus channel name."
+            },
+            "data": {
+              "description": "Optional JSON data forwarded to the custom event bus."
             }
           },
           "additionalProperties": false
@@ -197,7 +340,7 @@
     },
     "repo": {
       "type": "object",
-      "description": "Asserts installed from a specific repository (keyed by owner/repo). Removable via the /asserts UI.",
+      "description": "Rules installed from a specific repository (keyed by owner/repo). Removable via the /asserts UI.",
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }

@@ -59,12 +59,12 @@ function sortSources(sources: string[]): string[] {
 }
 
 /**
- * Group shell asserts by `source` (local first, then repos alpha).  Presets
- * are **not** hoisted — callers that want a Presets section build it
- * themselves (the `/asserts` panel does; the preset editor's assert picker
- * offers only shell asserts).  Shared so the two views agree on section order.
+ * Group executable entries by `source` (local first, then repos alpha).
+ * Presets are **not** hoisted — callers that want a Presets section build it
+ * themselves (the `/asserts` panel does; the preset editor offers executable
+ * entries). Shared so the two views agree on section order.
  */
-export function groupShellBySource(entries: readonly CatalogEntry[]): Group[] {
+export function groupExecutablesBySource(entries: readonly CatalogEntry[]): Group[] {
   const bySource = new Map<string, CatalogEntry[]>();
   for (const a of entries) {
     const list = bySource.get(a.source) ?? [];

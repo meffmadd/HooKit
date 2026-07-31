@@ -38,6 +38,22 @@ function makeAssert(
   };
 }
 
+function makeAction(name: string): CatalogEntry {
+  return {
+    name,
+    source: "local",
+    description: "integration notification",
+    hook: "assert_result",
+    action: {
+      type: "message",
+      message: "Please investigate",
+      delivery: "followUp",
+      triggerTurn: true,
+    },
+    default: false,
+  };
+}
+
 /** Build a `PresetAssert` (a `preset`-ref bundle) for `filterSection` tests. */
 function makePreset(
   name: string,
@@ -343,6 +359,15 @@ describe("filterSection", () => {
 
 // ── preset field (coerce) ─────────────────────────────────────────────
 //
+describe("filterSection — Action Handler field", () => {
+  it("matches action type and safe configuration at the body tier", () => {
+    const action = makeAction("notify");
+    assert.equal(filterSection("followUp", [action])[0]?.assert, action);
+    assert.equal(filterSection("investigate", [action])[0]?.assert, action);
+    assert.equal(filterSection("triggerTurn", [action])[0]?.assert, action);
+  });
+});
+
 // A preset's `preset` refs are a string array; `filterSection` coerces them
 // to a `", "`-joined string (matching `renderAssertDetail`'s `asserts:`
 // join, so highlight positions align with the rank) at the same tier as

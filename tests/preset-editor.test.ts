@@ -48,13 +48,28 @@ function makeAssert(
   };
 }
 
+function makeAction(name: string, source = "local"): CatalogEntry {
+  return {
+    name,
+    source,
+    description: `desc-${name}`,
+    hook: "tool_call",
+    action: {
+      type: "message",
+      message: "Review the result",
+      delivery: "followUp",
+    },
+    default: false,
+  };
+}
+
 function makePanel(
-  shellAsserts: CatalogEntry[],
+  executableEntries: CatalogEntry[],
   selected: Set<string> = new Set(),
   opts: { name?: string; description?: string } = {},
 ): PresetEditorPanel {
   const panel = new PresetEditorPanel(
-    shellAsserts,
+    executableEntries,
     opts.name ?? "my-preset",
     opts.description ?? "A preset.",
     selected,
@@ -78,7 +93,7 @@ function focusedLine(lines: string[]): string | undefined {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("PresetEditorPanel rendering", () => {
-  it("groups shell asserts by source (local first, then repos alpha)", () => {
+  it("groups executable rules by source (local first, then repos alpha)", () => {
     const panel = makePanel([
       makeAssert("zeta", "owner/repo"),
       makeAssert("alpha", "local"),
@@ -135,16 +150,26 @@ describe("PresetEditorPanel rendering", () => {
     );
   });
 
-  it("shows 'No shell asserts to select' when empty", () => {
+  it("renders Action Handlers as selectable executable rules", () => {
+    const panel = makePanel([makeAction("notify")]);
+    const lines = panel.render(100);
+    assert.ok(lines.some((line) => plain(line).includes("notify")));
+    assert.ok(
+      lines.some((line) => plain(line).includes("action: message")),
+      "detail identifies the Action Handler",
+    );
+  });
+
+  it("shows 'No executable rules to select' when empty", () => {
     const panel = makePanel([]);
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => plain(l).includes("No shell asserts to select")),
+      lines.some((l) => plain(l).includes("No executable rules to select")),
       "empty state message",
     );
   });
 
-  it("excludes presets from the picker (only shell asserts offered)", () => {
+  it("excludes presets while retaining both executable rule kinds", () => {
     const preset = {
       name: "other-preset",
       source: "local",
@@ -154,7 +179,8 @@ describe("PresetEditorPanel rendering", () => {
       path: "/tmp/p.json",
     } as unknown as CatalogEntry;
     const shell = makeAssert("guard");
-    const panel = makePanel([shell, preset]);
+    const action = makeAction("notify");
+    const panel = makePanel([shell, action, preset]);
     const lines = panel.render(80);
     assert.ok(
       !lines.some((l) => plain(l).includes("other-preset")),
@@ -162,7 +188,11 @@ describe("PresetEditorPanel rendering", () => {
     );
     assert.ok(
       lines.some((l) => plain(l).includes("guard")),
-      "shell assert is in the picker",
+      "Shell Assertion is in the picker",
+    );
+    assert.ok(
+      lines.some((l) => plain(l).includes("notify")),
+      "Action Handler is in the picker",
     );
   });
 });

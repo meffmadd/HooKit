@@ -1,5 +1,5 @@
 import type { EntryFilter, PersistedEntry } from "../domain/entry.js";
-import { entryKey } from "../domain/entry.js";
+import { cloneAction, entryKey } from "../domain/entry.js";
 import {
   iterSections,
   readSectionedFile,
@@ -8,6 +8,7 @@ import {
   type SectionedFile,
 } from "./format.js";
 import {
+  validateActionHandlerShape,
   validateEntryShape,
   validatePresetShape,
   validateRuleEntry,
@@ -25,11 +26,13 @@ import {
   type CatalogStorageLocations,
 } from "./types.js";
 
-export { isCatalogPreset } from "./types.js";
+export { isCatalogActionHandler, isCatalogPreset } from "./types.js";
 export type {
   AssertionIdentity,
+  CatalogActionHandler,
   CatalogDiagnostic,
   CatalogEntry,
+  CatalogExecutableEntry,
   CatalogFailure,
   CatalogInstallation,
   CatalogMutation,
@@ -180,6 +183,18 @@ function catalogEntry(
       default: definition.default ?? false,
     };
   }
+  if (validateActionHandlerShape(definition)) {
+    return {
+      source,
+      name,
+      description: definition.description,
+      hook: definition.hook,
+      ...(definition.filter === undefined ? {} : { filter: cloneFilter(definition.filter) }),
+      ...(definition.when === undefined ? {} : { when: definition.when }),
+      action: cloneAction(definition.action),
+      default: definition.default ?? false,
+    };
+  }
   return undefined;
 }
 
@@ -188,6 +203,16 @@ function persistedEntry(entry: PersistedEntry): Record<string, unknown> {
     return {
       description: entry.description,
       preset: entry.preset.slice(),
+      ...(entry.default === undefined ? {} : { default: entry.default }),
+    };
+  }
+  if ("action" in entry) {
+    return {
+      description: entry.description,
+      hook: entry.hook,
+      action: cloneAction(entry.action),
+      ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
+      ...(entry.when === undefined ? {} : { when: entry.when }),
       ...(entry.default === undefined ? {} : { default: entry.default }),
     };
   }
@@ -211,6 +236,16 @@ function withPreservedDefault(
     return {
       description: entry.description,
       preset: entry.preset.slice(),
+      ...(hasDefault ? { default: true } : {}),
+    };
+  }
+  if ("action" in entry) {
+    return {
+      description: entry.description,
+      hook: entry.hook,
+      action: cloneAction(entry.action),
+      ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
+      ...(entry.when === undefined ? {} : { when: entry.when }),
       ...(hasDefault ? { default: true } : {}),
     };
   }

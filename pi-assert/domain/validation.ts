@@ -1,6 +1,9 @@
 import {
   isAssertResultOutcome,
   isLifecycleHook,
+  type Action,
+  type JsonValue,
+  type PersistedActionHandler,
   type PersistedAssert,
   type PersistedPreset,
 } from "./entry.js";
@@ -13,7 +16,22 @@ const ASSERT_KEYS = new Set([
   "shell",
   "default",
 ]);
+const ACTION_HANDLER_KEYS = new Set([
+  "description",
+  "hook",
+  "filter",
+  "when",
+  "action",
+  "default",
+]);
 const PRESET_KEYS = new Set(["description", "preset", "default"]);
+const ACTION_KEYS: Readonly<Record<Action["type"], ReadonlySet<string>>> = {
+  interrupt: new Set(["type"]),
+  shutdown: new Set(["type", "interrupt"]),
+  compact: new Set(["type", "instructions"]),
+  message: new Set(["type", "message", "delivery", "triggerTurn"]),
+  "emit-custom-event": new Set(["type", "name", "data"]),
+};
 const ASSERT_RESULT_FILTER_KEYS = new Set([
   "event",
   "assertionRef",
@@ -77,6 +95,55 @@ function scalarOrArray(
   return Array.isArray(value) ? value.every(predicate) : predicate(value);
 }
 
+function validJsonValue(value: unknown, ancestors = new Set<object>()): value is JsonValue {
+  if (
+    value === null || typeof value === "string" || typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+  if (ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  let valid: boolean;
+  if (Array.isArray(value)) {
+    valid = value.every((item) => validJsonValue(item, ancestors));
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    valid = (prototype === Object.prototype || prototype === null) &&
+      Object.values(value).every((item) => validJsonValue(item, ancestors));
+  }
+  ancestors.delete(value);
+  return valid;
+}
+
+function validAction(value: unknown): value is Action {
+  if (!isPlainObject(value) || typeof value.type !== "string") return false;
+  if (!Object.prototype.hasOwnProperty.call(ACTION_KEYS, value.type)) return false;
+  const type = value.type as Action["type"];
+  if (Object.keys(value).some((key) => !ACTION_KEYS[type].has(key))) return false;
+
+  switch (type) {
+    case "interrupt":
+      return true;
+    case "shutdown":
+      return value.interrupt === undefined || typeof value.interrupt === "boolean";
+    case "compact":
+      return value.instructions === undefined || typeof value.instructions === "string";
+    case "message":
+      return typeof value.message === "string" &&
+        (value.delivery === "steer" ||
+          value.delivery === "followUp" ||
+          value.delivery === "nextTurn") &&
+        (value.triggerTurn === undefined || typeof value.triggerTurn === "boolean") &&
+        !(value.delivery === "nextTurn" && value.triggerTurn === true);
+    case "emit-custom-event":
+      return typeof value.name === "string" && value.name.trim().length > 0 &&
+        (value.data === undefined || validJsonValue(value.data));
+  }
+}
+
 function validAssertResultFilter(filter: unknown): boolean {
   if (!isPlainObject(filter)) return false;
   if (Object.keys(filter).some((key) => !ASSERT_RESULT_FILTER_KEYS.has(key))) {
@@ -108,13 +175,8 @@ function validAssertResultFilter(filter: unknown): boolean {
   return true;
 }
 
-export function validateEntryShape(
-  definition: unknown,
-): definition is PersistedAssert {
-  if (!isPlainObject(definition)) return false;
-  if (Object.keys(definition).some((key) => !ASSERT_KEYS.has(key))) return false;
+function validExecutableFields(definition: Record<string, unknown>): boolean {
   if (typeof definition.description !== "string" ||
-      typeof definition.shell !== "string" ||
       !isLifecycleHook(definition.hook)) {
     return false;
   }
@@ -135,7 +197,25 @@ export function validateEntryShape(
       return false;
     }
   }
-  return definition.preset === undefined;
+  return true;
+}
+
+export function validateEntryShape(
+  definition: unknown,
+): definition is PersistedAssert {
+  return isPlainObject(definition) &&
+    !Object.keys(definition).some((key) => !ASSERT_KEYS.has(key)) &&
+    typeof definition.shell === "string" &&
+    validExecutableFields(definition);
+}
+
+export function validateActionHandlerShape(
+  definition: unknown,
+): definition is PersistedActionHandler {
+  return isPlainObject(definition) &&
+    !Object.keys(definition).some((key) => !ACTION_HANDLER_KEYS.has(key)) &&
+    validAction(definition.action) &&
+    validExecutableFields(definition);
 }
 
 /** Qualified preset refs are `local/name` or `owner/repo/name`. */
@@ -157,10 +237,14 @@ export function validatePresetShape(
     );
 }
 
-export type RuleEntryKind = { kind: "assert" } | { kind: "preset" };
+export type RuleEntryKind =
+  | { kind: "assert" }
+  | { kind: "action" }
+  | { kind: "preset" };
 
 export function validateRuleEntry(definition: unknown): RuleEntryKind | null {
   if (validatePresetShape(definition)) return { kind: "preset" };
   if (validateEntryShape(definition)) return { kind: "assert" };
+  if (validateActionHandlerShape(definition)) return { kind: "action" };
   return null;
 }
