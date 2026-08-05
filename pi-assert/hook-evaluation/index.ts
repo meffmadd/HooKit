@@ -1,10 +1,5 @@
-import { entryRef, type AssertResultEvent, type NativeHook } from "../domain/entry.js";
-import {
-  isActiveActionHandler,
-  isActiveAssertion,
-  type ActiveAssertion,
-  type ActiveExecutable,
-} from "./assertions.js";
+import { entryRef, type NativeHook } from "../domain/entry.js";
+import type { ActiveAssertion } from "./assertions.js";
 import {
   assertionsIn,
   type ActiveAssertionSet,
@@ -16,12 +11,13 @@ import {
   type AssertionFailure,
   type HookAdapter,
 } from "./adapters.js";
-import { invokeActionHandlers } from "./actions.js";
-import { invokeAssertions } from "./invocations.js";
+import { requestOwnedAction } from "./actions.js";
+import { invokeAssertions, type InvocationError } from "./invocations.js";
 import type {
   ActionRequestExecution,
   AssertionExecution,
   AssertionExecutionReport,
+  AssertionResult,
   EvaluationEffect,
   EvaluationEventMap,
   HookEvaluationResult,
@@ -33,17 +29,14 @@ import type {
 
 export { createActiveAssertionSet } from "./active-set.js";
 export type { ActiveAssertionSet } from "./active-set.js";
-export type {
-  ActiveActionHandler,
-  ActiveAssertion,
-  ActiveExecutable,
-} from "./assertions.js";
+export type { ActiveAssertion } from "./assertions.js";
 export type {
   ActionRequestExecution,
   AgentEndEvent,
   AgentSettledEvent,
   AssertionExecution,
   AssertionExecutionReport,
+  AssertionResult,
   BlockEvaluationResult,
   CancelEvaluationResult,
   EvaluationEffect,
@@ -111,10 +104,12 @@ function freezeOutcome(outcome: AdapterOutcome): AdapterOutcome {
   return Object.freeze(base) as AdapterOutcome;
 }
 
-function freezeResults(
-  results: readonly AssertResultEvent[],
-): readonly AssertResultEvent[] {
-  return Object.freeze(results.map((result) => Object.freeze({ ...result })));
+function freezeNested<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) freezeNested(nested);
+  return Object.freeze(value);
 }
 
 function freezeOrigin(
@@ -127,6 +122,27 @@ function freezeOrigin(
         runId: origin.runId,
         outcome: origin.outcome,
       });
+}
+
+function freezeResults(
+  results: readonly AssertionResult[],
+): readonly AssertionResult[] {
+  return Object.freeze(results.map((result) => {
+    const action = result.action === undefined
+      ? undefined
+      : freezeNested({ ...result.action });
+    const originatingResult = freezeOrigin(result.originatingResult);
+    return Object.freeze({
+      event: "assert_result" as const,
+      assertionRef: result.assertionRef,
+      runId: result.runId,
+      hook: result.hook,
+      outcome: result.outcome,
+      code: result.code,
+      ...(action === undefined ? {} : { action }),
+      ...(originatingResult === undefined ? {} : { originatingResult }),
+    });
+  }));
 }
 
 function freezeExecutionReport(
@@ -152,6 +168,7 @@ function freezeExecutionReport(
       runId: request.runId,
       hook: request.hook,
       actionType: request.actionType,
+      outcome: request.outcome,
       ...(originatingResult === undefined ? {} : { originatingResult }),
     });
   }));
@@ -161,18 +178,20 @@ function freezeExecutionReport(
   });
 }
 
-function handlerErrorMessage(assertion: ActiveAssertion, error: unknown): string {
-  return `pi-assert: assert_result handler "${
-    entryRef(assertion.source, assertion.name)
-  }" failed to execute — ${formatErrorDetail(error)}`;
+function assertionErrorMessage(failure: InvocationError): string {
+  return `pi-assert: assertion "${
+    entryRef(failure.assertion.source, failure.assertion.name)
+  }" failed to execute — ${formatErrorDetail(failure.error)}`;
 }
 
-function freezeNested<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
-    return value;
-  }
-  for (const nested of Object.values(value)) freezeNested(nested);
-  return Object.freeze(value);
+function handlerErrorMessage(failure: InvocationError): string {
+  return `pi-assert: assert_result handler "${
+    entryRef(failure.assertion.source, failure.assertion.name)
+  }" failed to execute — ${formatErrorDetail(failure.error)}`;
+}
+
+function combinedUnexpectedError(errors: readonly InvocationError[]): Error {
+  return new Error(errors.map(assertionErrorMessage).join("; "));
 }
 
 function publicResult(
@@ -227,11 +246,7 @@ function publicResult(
 export class HookEvaluation {
   private correctiveFingerprints = new Map<NativeHook, string>();
 
-  /**
-   * Evaluate one native event against one captured Active Assertion Set.
-   * Valid typed requests always resolve; internal failures become fail-closed
-   * hook-specific outcomes.
-   */
+  /** Evaluate one native event against one captured Active Assertion Set. */
   async evaluate<H extends NativeHook>(
     hook: H,
     event: HookEventMap[H],
@@ -251,8 +266,6 @@ export class HookEvaluation {
         adapter,
       );
     } catch (error) {
-      // This outer boundary is the final guarantee that a valid request does
-      // not reject even if transaction setup itself fails unexpectedly.
       const fallbackAdapter = adapter ?? adapterFor(hook);
       const outcome = freezeOutcome(
         fallbackAdapter.internalError(error, event as EvaluationEventMap[H]),
@@ -267,65 +280,62 @@ export class HookEvaluation {
     hook: H,
     event: EvaluationEventMap[H],
     context: HookExecutionContext,
-    entries: readonly ActiveExecutable[],
+    assertions: readonly ActiveAssertion[],
     adapter: HookAdapter<EvaluationEventMap[H]>,
   ): Promise<HookEvaluationResult<H>> {
-    const assertions = entries.filter(isActiveAssertion);
-    const actionHandlers = entries.filter(isActiveActionHandler);
-    const invocation = await invokeAssertions(
-      assertions,
-      adapter,
-      event,
-      context,
-    );
+    const invocation = await invokeAssertions(assertions, adapter, event, context);
 
     let rawOutcome: AdapterOutcome | undefined;
     try {
-      rawOutcome = invocation.unexpectedError === undefined
-        ? invocation.failures.length === 0
-          ? undefined
-          : adapter.outcome(invocation.failures, event)
-        : adapter.internalError(invocation.unexpectedError, event);
+      if (invocation.failures.length > 0) {
+        const aggregate = adapter.outcome(invocation.failures, event);
+        rawOutcome = invocation.unexpectedErrors.length === 0
+          ? aggregate
+          : { ...aggregate, infrastructureError: true };
+      } else {
+        rawOutcome = invocation.unexpectedErrors.length > 0
+          ? adapter.internalError(
+              combinedUnexpectedError(invocation.unexpectedErrors),
+              event,
+            )
+          : undefined;
+      }
     } catch (error) {
-      // Formatting/aggregation is still part of originating evaluation. Keep
-      // completed records, replace partial policy output with one generic
-      // fail-closed decision, and continue into synthetic dispatch.
       rawOutcome = adapter.internalError(error, event);
     }
     const outcome = rawOutcome === undefined ? undefined : freezeOutcome(rawOutcome);
     const results = freezeResults(invocation.results);
 
-    // The originating decision and result events are frozen before either
-    // reaction phase starts. Action requests cannot alter the native outcome.
-    let nativeActions: Awaited<ReturnType<typeof invokeActionHandlers>> = {
-      effects: [],
-      actionRequests: [],
-    };
-    try {
-      nativeActions = await invokeActionHandlers(
-        actionHandlers,
-        adapter,
-        event,
+    // Freeze the aggregate decision and all origin results before reactions.
+    // Reactions are result-major: owned Action, then assert_result Assertions.
+    const effects: EvaluationEffect[] = [];
+    const executions: AssertionExecution[] = [...invocation.executions];
+    const actionRequests: ActionRequestExecution[] = [];
+    for (const result of results) {
+      const owned = requestOwnedAction(result);
+      effects.push(...owned.effects);
+      actionRequests.push(...owned.actionRequests);
+
+      const synthetic = await this.dispatchSyntheticResult(
+        assertions,
+        result,
         context,
       );
-    } catch (error) {
-      nativeActions.effects.push(present(
-        `pi-assert: ${hook} Action Handlers failed to execute — ${
-          formatErrorDetail(error)
-        }`,
-        "error",
-      ));
+      effects.push(...synthetic.effects);
+      executions.push(...synthetic.executions);
+      actionRequests.push(...synthetic.actionRequests);
     }
-    const synthetic = await this.dispatchSyntheticResults(
-      entries,
-      results,
-      context,
-    );
-    const executionReport = freezeExecutionReport(
-      [...invocation.executions, ...synthetic.executions],
-      [...nativeActions.actionRequests, ...synthetic.actionRequests],
-    );
-    const effects = [...nativeActions.effects, ...synthetic.effects];
+
+    // If ordinary failures already determine the native outcome, surface each
+    // unrelated implementation error separately. Otherwise internalError is
+    // itself the one fail-closed presentation/control outcome.
+    if (invocation.failures.length > 0) {
+      for (const failure of invocation.unexpectedErrors) {
+        effects.push(present(assertionErrorMessage(failure), "error"));
+      }
+    }
+
+    const executionReport = freezeExecutionReport(executions, actionRequests);
     this.appendOriginFeedback(hook, adapter, outcome, effects);
     return publicResult(
       outcome,
@@ -334,9 +344,9 @@ export class HookEvaluation {
     ) as HookEvaluationResult<H>;
   }
 
-  private async dispatchSyntheticResults(
-    entries: readonly ActiveExecutable[],
-    results: readonly AssertResultEvent[],
+  private async dispatchSyntheticResult(
+    assertions: readonly ActiveAssertion[],
+    result: AssertionResult,
     context: HookExecutionContext,
   ): Promise<{
     effects: EvaluationEffect[];
@@ -346,70 +356,48 @@ export class HookEvaluation {
     const effects: EvaluationEffect[] = [];
     const executions: AssertionExecution[] = [];
     const actionRequests: ActionRequestExecution[] = [];
+    const failures: AssertionFailure[] = [];
     const adapter = adapterFor("assert_result");
     const detachedContext: HookExecutionContext = Object.freeze({
       cwd: context.cwd,
       metadata: context.metadata,
     });
 
-    for (const result of results) {
-      try {
-        const failures: AssertionFailure[] = [];
-        for (const handler of entries) {
-          if (handler.hook !== "assert_result") continue;
-          if (isActiveActionHandler(handler)) {
-            const invocation = await invokeActionHandlers(
-              [handler],
-              adapter,
-              result,
-              detachedContext,
-              { originatingResult: result },
-            );
-            effects.push(...invocation.effects);
-            actionRequests.push(...invocation.actionRequests);
-            continue;
-          }
+    try {
+      for (const handler of assertions) {
+        if (handler.hook !== "assert_result") continue;
+        const invocation = await invokeAssertions(
+          [handler],
+          adapter,
+          result,
+          detachedContext,
+          { originatingResult: result },
+        );
+        executions.push(...invocation.executions);
+        failures.push(...invocation.failures);
+        for (const failure of invocation.unexpectedErrors) {
+          effects.push(present(handlerErrorMessage(failure), "error"));
+        }
 
-          const invocation = await invokeAssertions(
-            [handler],
-            adapter,
-            result,
-            detachedContext,
-            {
-              originatingResult: result,
-              continueAfterUnexpected: (failedHandler, error) => {
-                effects.push(present(
-                  handlerErrorMessage(failedHandler, error),
-                  "error",
-                ));
-              },
-            },
-          );
-          executions.push(...invocation.executions);
-          failures.push(...invocation.failures);
-          if (invocation.unexpectedError !== undefined) {
-            effects.push(present(
-              `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
-                formatErrorDetail(invocation.unexpectedError)
-              }`,
-              "error",
-            ));
-          }
+        // A handler's local result may select its own Action, but is never
+        // projected recursively as another assert_result event.
+        for (const localResult of freezeResults(invocation.results)) {
+          const owned = requestOwnedAction(localResult);
+          effects.push(...owned.effects);
+          actionRequests.push(...owned.actionRequests);
         }
-        if (failures.length > 0) {
-          const handlerOutcome = adapter.outcome(failures, result);
-          effects.push(present(handlerOutcome.feedbackMessage, "error"));
-        }
-      } catch (error) {
-        // Synthetic infrastructure is isolated from the frozen origin and the
-        // next result still dispatches.
-        effects.push(present(
-          `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
-            formatErrorDetail(error)
-          }`,
-          "error",
-        ));
       }
+      if (failures.length > 0) {
+        const handlerOutcome = adapter.outcome(failures, result);
+        effects.push(present(handlerOutcome.feedbackMessage, "error"));
+      }
+    } catch (error) {
+      effects.push(present(
+        `pi-assert: assert_result dispatch for "${result.assertionRef}" failed — ${
+          formatErrorDetail(error)
+        }`,
+        "error",
+      ));
     }
     return { effects, executions, actionRequests };
   }
@@ -427,8 +415,7 @@ export class HookEvaluation {
       return;
     }
 
-    // Native control outcomes carry their reason/patch to the Pi adapter,
-    // which owns native display and callback translation.
+    // Native control outcomes carry their reason/patch to the Pi adapter.
     if (outcome.action !== "report") return;
 
     if (outcome.infrastructureError || adapter.feedback === "present-error") {

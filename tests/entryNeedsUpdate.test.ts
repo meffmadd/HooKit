@@ -74,12 +74,13 @@ describe("entryContentSignature", () => {
     assert.ok(!("default" in sig), "default must not appear in the signature");
   });
 
-  it("includes Action Handler configuration and excludes default", () => {
+  it("includes canonical shell and owned Action configuration", () => {
     const sig = entryContentSignature({
       description: "notify",
       hook: "assert_result",
       action: {
         type: "message",
+        outcome: "pass",
         message: "blocked",
         delivery: "followUp",
       },
@@ -90,14 +91,29 @@ describe("entryContentSignature", () => {
     assert.deepEqual(sig, {
       description: "notify",
       hook: "assert_result",
+      shell: "true",
       action: {
         type: "message",
+        outcome: "pass",
         message: "blocked",
         delivery: "followUp",
       },
       filter: { outcome: "block" },
       when: "true",
     });
+  });
+
+  it("canonicalizes omitted and explicit true shells identically", () => {
+    const implicit = {
+      description: "notify",
+      hook: "tool_call",
+      action: { type: "interrupt", outcome: "pass" } as const,
+    };
+    assert.deepEqual(
+      entryContentSignature(implicit),
+      entryContentSignature({ ...implicit, shell: "true" }),
+    );
+    assert.equal(entryNeedsUpdate(implicit, { ...implicit, shell: "true" }), false);
   });
 
   it("never emits undefined-valued keys", () => {
@@ -123,18 +139,18 @@ describe("entryNeedsUpdate", () => {
     assert.strictEqual(entryNeedsUpdate(base, with_({})), false);
   });
 
-  it("returns true when an Action Handler's action changes", () => {
+  it("returns true when an owned Action changes", () => {
     assert.equal(
       entryNeedsUpdate(
         {
           description: "notify",
           hook: "tool_call",
-          action: { type: "interrupt" },
+          action: { type: "interrupt", outcome: "pass" },
         },
         {
           description: "notify",
           hook: "tool_call",
-          action: { type: "shutdown" },
+          action: { type: "shutdown", outcome: "pass" },
         },
       ),
       true,

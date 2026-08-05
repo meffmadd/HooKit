@@ -5,6 +5,7 @@ import {
   buildToolCallEnvironment,
   buildToolResultEnvironment,
   matchFilter,
+  matchResultSelector,
 } from "./environment.js";
 import type { ShellResult } from "./shell.js";
 import type {
@@ -16,7 +17,6 @@ import type {
 } from "./types.js";
 
 export type FailureAction = "block" | "patch" | "cancel" | "report";
-type FailureAggregation = "first" | "all";
 type FeedbackPolicy = "present-error" | "corrective-turn";
 
 export interface AssertionFailure {
@@ -65,7 +65,6 @@ export type AdapterOutcome =
 export interface HookAdapter<E> {
   readonly hook: Hook;
   readonly failureAction: FailureAction;
-  readonly aggregation: FailureAggregation;
   readonly feedback: FeedbackPolicy;
   readonly skipAssertionsIfAborted?: boolean;
   candidate(event: E): Record<string, unknown>;
@@ -168,30 +167,56 @@ function matchAssertResultFilter(
   candidate: Record<string, unknown>,
 ): boolean {
   if (!filter) return true;
-  const { outcome, ...shared } = filter;
-  if (!matchFilter(shared, candidate)) return false;
-  if (outcome === undefined) return true;
-  const actual = candidate.outcome;
-  return Array.isArray(outcome)
-    ? outcome.some((expected) => expected === actual)
-    : outcome === actual;
+  const { outcome, code, ...shared } = filter;
+  return matchFilter(shared, candidate) &&
+    matchResultSelector({ outcome, code }, {
+      outcome: candidate.outcome,
+      code: candidate.code,
+    });
+}
+
+function toolCallFailureReason(
+  failure: AssertionFailure,
+  event: ToolCallEvent,
+): string {
+  return failure.phase === "shell"
+    ? `pi-assert: assertion "${failure.assertion.name}" rejected ${event.toolName} — \`${failure.command}\``
+    : `pi-assert: assertion "${failure.assertion.name}" rejected ${event.toolName} during when — \`${failure.command}\``;
+}
+
+function toolResultFailureReason(
+  failure: AssertionFailure,
+  event: ToolResultEvent,
+): string {
+  return failure.phase === "shell"
+    ? `pi-assert: assertion "${failure.assertion.name}" blocked ${event.toolName} result — \`${failure.command}\``
+    : `pi-assert: assertion "${failure.assertion.name}" blocked ${event.toolName} result during when — \`${failure.command}\``;
+}
+
+function aggregateToolReasons(
+  label: string,
+  reasons: readonly string[],
+): string {
+  return reasons.length === 1
+    ? reasons[0]!
+    : `pi-assert: ${reasons.length} assertions ${label}:\n${
+      reasons.map((reason) => `- ${reason}`).join("\n")
+    }`;
 }
 
 const toolCallAdapter: HookAdapter<EvaluationEventMap["tool_call"]> = {
   hook: "tool_call",
   failureAction: "block",
-  aggregation: "first",
   feedback: "present-error",
   candidate: toolCandidate,
   buildEnvironment: buildToolCallEnvironment,
-  outcome: ([failure], event) => {
-    const reason = failure.phase === "shell"
-      ? `pi-assert: assertion "${failure.assertion.name}" rejected ${event.toolName} — \`${failure.command}\``
-      : `pi-assert: assertion "${failure.assertion.name}" rejected ${event.toolName} during when — \`${failure.command}\``;
+  outcome: (failures, event) => {
+    const messages = failures.map((failure) => toolCallFailureReason(failure, event));
+    const reason = aggregateToolReasons(`rejected ${event.toolName}`, messages);
     return {
       action: "block",
-      failures: [failure],
-      messages: [reason],
+      failures,
+      messages,
       reason,
       feedbackMessage: reason,
     };
@@ -213,18 +238,16 @@ const toolCallAdapter: HookAdapter<EvaluationEventMap["tool_call"]> = {
 const toolResultAdapter: HookAdapter<EvaluationEventMap["tool_result"]> = {
   hook: "tool_result",
   failureAction: "patch",
-  aggregation: "first",
   feedback: "present-error",
   candidate: toolCandidate,
   buildEnvironment: buildToolResultEnvironment,
-  outcome: ([failure], event) => {
-    const reason = failure.phase === "shell"
-      ? `pi-assert: assertion "${failure.assertion.name}" blocked ${event.toolName} result — \`${failure.command}\``
-      : `pi-assert: assertion "${failure.assertion.name}" blocked ${event.toolName} result during when — \`${failure.command}\``;
+  outcome: (failures, event) => {
+    const messages = failures.map((failure) => toolResultFailureReason(failure, event));
+    const reason = aggregateToolReasons(`blocked ${event.toolName} result`, messages);
     return {
       action: "patch",
-      failures: [failure],
-      messages: [reason],
+      failures,
+      messages,
       reason,
       feedbackMessage: reason,
       patch: {
@@ -262,7 +285,6 @@ const toolResultAdapter: HookAdapter<EvaluationEventMap["tool_result"]> = {
 const turnEndAdapter: HookAdapter<EvaluationEventMap["turn_end"]> = {
   hook: "turn_end",
   failureAction: "report",
-  aggregation: "all",
   feedback: "present-error",
   skipAssertionsIfAborted: true,
   candidate: turnEndCandidate,
@@ -282,7 +304,6 @@ const turnEndAdapter: HookAdapter<EvaluationEventMap["turn_end"]> = {
 const agentEndAdapter: HookAdapter<EvaluationEventMap["agent_end"]> = {
   hook: "agent_end",
   failureAction: "report",
-  aggregation: "all",
   feedback: "corrective-turn",
   skipAssertionsIfAborted: true,
   candidate: agentEndCandidate,
@@ -307,7 +328,6 @@ const agentEndAdapter: HookAdapter<EvaluationEventMap["agent_end"]> = {
 const agentSettledAdapter: HookAdapter<EvaluationEventMap["agent_settled"]> = {
   hook: "agent_settled",
   failureAction: "report",
-  aggregation: "all",
   feedback: "present-error",
   candidate: agentSettledCandidate,
   buildEnvironment: lifecycleBuilder("agent_settled", agentSettledCandidate),
@@ -344,7 +364,6 @@ const sessionSwitchAdapter: HookAdapter<
 > = {
   hook: "session_before_switch",
   failureAction: "cancel",
-  aggregation: "all",
   feedback: "present-error",
   candidate: sessionSwitchCandidate,
   buildEnvironment: lifecycleBuilder(
@@ -373,7 +392,6 @@ const sessionForkAdapter: HookAdapter<
 > = {
   hook: "session_before_fork",
   failureAction: "cancel",
-  aggregation: "all",
   feedback: "present-error",
   candidate: sessionForkCandidate,
   buildEnvironment: lifecycleBuilder("session_before_fork", sessionForkCandidate),
@@ -397,7 +415,6 @@ const sessionForkAdapter: HookAdapter<
 const assertResultAdapter: HookAdapter<EvaluationEventMap["assert_result"]> = {
   hook: "assert_result",
   failureAction: "report",
-  aggregation: "all",
   feedback: "present-error",
   candidate: assertResultCandidate,
   matchesFilter: matchAssertResultFilter,

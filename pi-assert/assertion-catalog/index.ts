@@ -8,7 +8,6 @@ import {
   type SectionedFile,
 } from "./format.js";
 import {
-  validateActionHandlerShape,
   validateEntryShape,
   validatePresetShape,
   validateRuleEntry,
@@ -26,19 +25,17 @@ import {
   type CatalogStorageLocations,
 } from "./types.js";
 
-export { isCatalogActionHandler, isCatalogPreset } from "./types.js";
+export { isCatalogPreset } from "./types.js";
 export type {
   AssertionIdentity,
-  CatalogActionHandler,
+  CatalogAssertion,
   CatalogDiagnostic,
   CatalogEntry,
-  CatalogExecutableEntry,
   CatalogFailure,
   CatalogInstallation,
   CatalogMutation,
   CatalogPreset,
   CatalogResult,
-  CatalogShellAssertion,
   CatalogStorage,
   CatalogStorageLocations,
   CatalogSuccess,
@@ -179,19 +176,8 @@ function catalogEntry(
       hook: definition.hook,
       ...(definition.filter === undefined ? {} : { filter: cloneFilter(definition.filter) }),
       ...(definition.when === undefined ? {} : { when: definition.when }),
-      shell: definition.shell,
-      default: definition.default ?? false,
-    };
-  }
-  if (validateActionHandlerShape(definition)) {
-    return {
-      source,
-      name,
-      description: definition.description,
-      hook: definition.hook,
-      ...(definition.filter === undefined ? {} : { filter: cloneFilter(definition.filter) }),
-      ...(definition.when === undefined ? {} : { when: definition.when }),
-      action: cloneAction(definition.action),
+      shell: definition.shell ?? "true",
+      ...(definition.action === undefined ? {} : { action: cloneAction(definition.action) }),
       default: definition.default ?? false,
     };
   }
@@ -206,20 +192,11 @@ function persistedEntry(entry: PersistedEntry): Record<string, unknown> {
       ...(entry.default === undefined ? {} : { default: entry.default }),
     };
   }
-  if ("action" in entry) {
-    return {
-      description: entry.description,
-      hook: entry.hook,
-      action: cloneAction(entry.action),
-      ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
-      ...(entry.when === undefined ? {} : { when: entry.when }),
-      ...(entry.default === undefined ? {} : { default: entry.default }),
-    };
-  }
   return {
     description: entry.description,
     hook: entry.hook,
-    shell: entry.shell,
+    shell: entry.shell ?? "true",
+    ...(entry.action === undefined ? {} : { action: cloneAction(entry.action) }),
     ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
     ...(entry.when === undefined ? {} : { when: entry.when }),
     ...(entry.default === undefined ? {} : { default: entry.default }),
@@ -239,20 +216,11 @@ function withPreservedDefault(
       ...(hasDefault ? { default: true } : {}),
     };
   }
-  if ("action" in entry) {
-    return {
-      description: entry.description,
-      hook: entry.hook,
-      action: cloneAction(entry.action),
-      ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
-      ...(entry.when === undefined ? {} : { when: entry.when }),
-      ...(hasDefault ? { default: true } : {}),
-    };
-  }
   return {
     description: entry.description,
     hook: entry.hook,
-    shell: entry.shell,
+    shell: entry.shell ?? "true",
+    ...(entry.action === undefined ? {} : { action: cloneAction(entry.action) }),
     ...(entry.filter === undefined ? {} : { filter: cloneFilter(entry.filter) }),
     ...(entry.when === undefined ? {} : { when: entry.when }),
     ...(hasDefault ? { default: true } : {}),

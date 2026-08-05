@@ -138,11 +138,13 @@ describe("renderAssertDetail — preset branch", () => {
   });
 });
 
-describe("renderAssertDetail — Action Handler branch", () => {
-  it("renders action type, safe configuration, and when", () => {
+describe("renderAssertDetail — owned Action", () => {
+  it("renders effective shell, selectors, safe configuration, and when", () => {
     const lines = renderAssertDetail(mockTheme(), 120, {
       action: {
         type: "message",
+        outcome: ["pass", "report"],
+        code: 0,
         message: "Please review the block",
         delivery: "followUp",
         triggerTurn: true,
@@ -150,18 +152,19 @@ describe("renderAssertDetail — Action Handler branch", () => {
       when: "test -f .needs-review",
     });
     const text = lines.join("\n");
-    assert.match(text, /action: message/);
+    assert.match(text, /shell: true/);
+    assert.match(text, /action: outcome: pass, report · code: 0 · type: message/);
     assert.match(text, /delivery: followUp/);
     assert.match(text, /triggerTurn: true/);
-    assert.match(text, /message: Please review the block/);
+    assert.match(text, /message: Please\s+review the block/);
     assert.match(text, /when: test -f \.needs-review/);
-    assert.ok(!text.includes("shell:"));
   });
 
   it("renders bounded JSON custom-event data in configuration detail", () => {
     const lines = renderAssertDetail(mockTheme(), 120, {
       action: {
         type: "emit-custom-event",
+        outcome: "pass",
         name: "example:blocked",
         data: { severity: "high" },
       },

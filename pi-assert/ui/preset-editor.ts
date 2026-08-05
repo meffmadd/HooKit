@@ -44,7 +44,7 @@ import {
 import { highlightSegments } from "./fuzzy.js";
 import {
   SectionedPanel,
-  groupExecutablesBySource,
+  groupAssertionsBySource,
   type Group,
 } from "./sectioned-panel.js";
 import type { AssertsState } from "./state.js";
@@ -72,23 +72,22 @@ export class PresetEditorPanel extends SectionedPanel {
   private selected: Set<string>;
   private _theme!: Theme;
 
-  private executableEntries: CatalogEntry[];
+  private assertions: CatalogEntry[];
   /** Original order preserves dangling/nested refs on an otherwise no-op edit. */
   private initialOrder: string[];
 
   constructor(
-    executableEntries: CatalogEntry[],
+    assertions: CatalogEntry[],
     private presetName: string,
     private description: string,
     selected: Iterable<string>,
   ) {
     super();
-    // Self-filter presets: the picker offers executable entries, so even if a
-    // caller passes the full catalog, nested presets never become pickable rows.
-    this.executableEntries = executableEntries.filter(
+    // Self-filter Presets so nested Presets never become pickable rows.
+    this.assertions = assertions.filter(
       (entry) => !isCatalogPreset(entry),
     );
-    this.groups = groupExecutablesBySource(this.executableEntries);
+    this.groups = groupAssertionsBySource(this.assertions);
     this.nav = new SectionNavigator(
       this.groups.map((g) => ({ items: g.asserts })),
     );
@@ -100,7 +99,7 @@ export class PresetEditorPanel extends SectionedPanel {
   }
 
   protected canSearch(): boolean {
-    return this.executableEntries.length > 0;
+    return this.assertions.length > 0;
   }
 
   protected get theme(): Theme {
@@ -122,7 +121,7 @@ export class PresetEditorPanel extends SectionedPanel {
     const originalSet = new Set(this.initialOrder);
     // Newly selected visible asserts append in picker order. Existing refs
     // retain their exact order, including dangling and nested-preset refs.
-    const added = this.executableEntries
+    const added = this.assertions
       .map((a) => this.refOf(a))
       .filter((ref) => this.selected.has(ref) && !originalSet.has(ref));
     return [...original, ...added];
@@ -142,7 +141,7 @@ export class PresetEditorPanel extends SectionedPanel {
   protected emptyBodyLines(_width: number): string[] {
     return [
       ...this.renderHeaderLines(),
-      this.theme.fg("warning", "  No executable rules to select"),
+      this.theme.fg("warning", "  No Assertions to select"),
     ];
   }
 
@@ -291,14 +290,14 @@ export async function runPresetEditor(
   preset: CatalogPreset,
   description: string,
 ): Promise<PresetEditorResult> {
-  const executableEntries = state.entries.filter(
+  const assertions = state.entries.filter(
     (entry) => !isCatalogPreset(entry),
   );
   const initial = new Set(preset.preset);
 
   return ctx.ui.custom<PresetEditorResult>((tui, theme, kb, done) => {
     const panel = new PresetEditorPanel(
-      executableEntries,
+      assertions,
       preset.name,
       description,
       initial,

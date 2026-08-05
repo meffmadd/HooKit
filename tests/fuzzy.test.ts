@@ -44,8 +44,10 @@ function makeAction(name: string): CatalogEntry {
     source: "local",
     description: "integration notification",
     hook: "assert_result",
+    shell: "true",
     action: {
       type: "message",
+      outcome: "pass",
       message: "Please investigate",
       delivery: "followUp",
       triggerTurn: true,
@@ -359,7 +361,7 @@ describe("filterSection", () => {
 
 // ── preset field (coerce) ─────────────────────────────────────────────
 //
-describe("filterSection — Action Handler field", () => {
+describe("filterSection — owned Action field", () => {
   it("matches action type and safe configuration at the body tier", () => {
     const action = makeAction("notify");
     assert.equal(filterSection("followUp", [action])[0]?.assert, action);

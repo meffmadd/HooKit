@@ -1,6 +1,7 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type {
   Action,
+  ActionRequest,
   ActionType,
   AssertResultEvent,
   AssertResultOutcome,
@@ -112,8 +113,15 @@ export type EvaluationEffect =
       readonly type: "request-action";
       readonly assertionRef: string;
       readonly runId: string;
-      readonly action: Action;
+      readonly action: ActionRequest;
     };
+
+/** Immutable result shared by aggregation, Actions, reporting, and dispatch. */
+export interface AssertionResult extends AssertResultEvent {
+  readonly hook: Hook;
+  readonly action?: Action;
+  readonly originatingResult?: OriginatingAssertionResult;
+}
 
 /** Result identity that causally associates a synthetic handler execution. */
 export interface OriginatingAssertionResult {
@@ -138,6 +146,8 @@ export interface ActionRequestExecution {
   readonly runId: string;
   readonly hook: Hook;
   readonly actionType: ActionType;
+  /** The individual owner result that selected this Action. */
+  readonly outcome: AssertResultOutcome;
   readonly originatingResult?: OriginatingAssertionResult;
 }
 

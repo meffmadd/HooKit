@@ -1,338 +1,274 @@
 # pi-assert
 
-Shell assertions and declarative Action Handlers for Pi tool and lifecycle
-events. Rules are loaded from project `.pi/asserts.json` and global
-`~/.pi/asserts.json`; a project entry overrides a
-global entry only when both its **source section and name** match.
+Assertions for Pi hook events. An Assertion runs a shell decision and may own one
+outcome-selected Pi Action. Configuration lives in `asserts.json`; `/asserts`
+manages installation, activation, defaults, Presets, and search.
 
-## Quick start
+## Configuration
 
-```bash
-pi install ./path/to/pi-assert
-```
-
-Create `.pi/asserts.json`:
+Project configuration is `.pi/asserts.json`. Global configuration is
+`~/.pi/agent/asserts.json`. Project entries are read only after Pi trusts the
+project. `local` contains authored entries; `owner/repo` sections contain
+installed entries; `repos` lists repositories available to the installer.
 
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
-  "local": {
-    "unmodified": {
-      "description": "Block direct writes",
-      "hook": "tool_call",
-      "filter": { "toolName": "^write$" },
-      "shell": "false"
-    },
-    "no-rm-rf": {
-      "description": "Block dangerous shell removal",
-      "hook": "tool_call",
-      "filter": {
-        "toolName": "^bash$",
-        "command": "(^|[;&|]\\s*)rm\\s+-rf(?:\\s|$)"
-      },
-      "shell": "false"
-    }
-  }
-}
-```
-
-## Format
-
-The top-level object is sectioned by source. `local` contains hand-written
-rules; an `owner/repo` section contains installed rules. `repos` declares repo
-sources available to the installer.
-
-```json
-{
   "repos": ["owner/rules"],
   "local": {
-    "check-tree": {
-      "description": "Require a clean tree at turn end",
-      "hook": "agent_end",
-      "shell": "git diff --quiet",
+    "protect-env": {
+      "description": "Block writes to dotenv files",
+      "hook": "tool_call",
+      "filter": {
+        "toolName": "^write$",
+        "path": "(^|/)\\.env$"
+      },
+      "shell": "false",
+      "action": {
+        "type": "message",
+        "outcome": "block",
+        "code": 1,
+        "message": "A dotenv write was blocked by pi-assert.",
+        "delivery": "followUp"
+      },
       "default": true
+    },
+    "announce-settled": {
+      "description": "Notify another extension after the agent settles",
+      "hook": "agent_settled",
+      "action": {
+        "type": "emit-custom-event",
+        "outcome": "pass",
+        "name": "example:agent-settled",
+        "data": { "source": "pi-assert" }
+      }
     }
   },
   "owner/rules": {
-    "hide-secrets": {
-      "description": "Redact secret-looking read results",
-      "hook": "tool_result",
-      "filter": { "toolName": "^read$" },
-      "shell": "grep -q SECRET \"$PI_TOOL_RESULT\" && exit 1 || exit 0"
+    "clean-turn": {
+      "description": "Require a clean worktree after each turn",
+      "hook": "turn_end",
+      "shell": "git diff --quiet"
     }
   }
 }
 ```
 
-Every entry contains exactly one of `shell`, `action`, or `preset`. Shell
-Assertions require `description`, a supported `hook`, and `shell`. Action
-Handlers replace `shell` with one structured `action`. Both executable kinds
-support optional `filter`, `when`, and boolean `default`. Presets replace the
-executable field with a `preset` array.
+An executable entry is always an **Assertion**:
 
-For a Shell Assertion, `when` only skips on an ordinary non-zero exit—timeouts
-and execution failures apply the hook's fail-closed policy. For an Action
-Handler, ordinary non-zero also skips, but timeout, abort, or spawn failure is
-reported and the action is not requested; a precondition can never create a
-native block, patch, cancellation, or report outcome. Shells and preconditions
-run with `PWD` and `PI_CWD` set to the Pi project directory.
+- `description` and `hook` are required.
+- At least one of `shell` or `action` is required. They may be used together.
+- Omitted `shell` is normalized to the canonical string `"true"` before the
+  entry enters the Assertion Catalog.
+- `filter`, `when`, and `default` are optional.
+- `action` is optional and singular.
+- A Preset uses `description`, `preset`, and optional `default`; it cannot carry
+  executable fields.
 
-Supported hooks are `tool_call`, `tool_result`, `turn_end`, `agent_end`,
-`agent_settled`, `session_before_switch`, `session_before_fork`, and the
-synthetic `assert_result` hook. Unknown hook names fail configuration loading
-with the supported list. `session_shutdown` is intentionally unsupported
-because Pi does not provide a way for an extension to cancel shutdown.
+Boolean shell values are invalid. An entry with neither shell nor Action is
+invalid. Standalone Action records without `outcome` are invalid.
 
-### Action Handlers
+## Evaluation pipeline
 
-An Action Handler requests an effect after its hook and filter match and its
-optional `when` exits successfully. It does not decide the hook's native
-outcome. Native-hook actions are considered in Active Assertion Set order in a
-separate reaction phase, even when a Shell Assertion failed fast. One bad
-handler or delivery does not suppress later handlers, and action failures
-cannot weaken a block, patch, cancellation, report, or pass.
+For each event, pi-assert captures one immutable Active Assertion Set and one
+bounded callback metadata snapshot. Matching Assertions run sequentially in
+that deterministic set order:
+
+1. Match the Assertion's hook and `filter`.
+2. Run optional `when`.
+3. Run the effective `shell` and create one immutable individual Assertion
+   Result.
+4. Match the owned Action against that individual result.
+5. Expose the result to configured `assert_result` Assertions.
+
+A filter miss runs nothing. An ordinary non-zero `when` skips the shell, result,
+Action, and execution entry. A precondition timeout, abort, or spawn failure
+fails closed with code `null`, so an owned failure Action can select it.
+
+The aggregate native outcome is frozen before Actions or `assert_result`
+Assertions run. Delivery cannot weaken a block, patch, cancellation, or report.
+Actions are returned as immutable delivery-neutral requests and delivered by
+the thin Pi adapter in order, best-effort.
+
+### Shell shortcuts
+
+Exact `shell` strings `"true"` and `"false"` are optimized without spawning a
+subprocess. They still behave and render as ordinary commands:
+
+- exact `"true"` → pass, code `0`
+- exact `"false"` → hook-specific failure, code `1`
+
+The same shortcut applies to exact `when` strings. No trimming or parsing is
+performed: `" true"`, `"true "`, `"true && echo ok"`, and every other string
+still execute through the real local shell. Pipes, redirects, `&&`, and `||`
+therefore retain normal `/bin/sh` behavior.
+
+Shortcuts honor an already-aborted signal. Already-aborted `turn_end` and
+`agent_end` evaluations skip Assertions before traversal. Abort after a real
+shell starts yields code `null` and the hook-specific failure outcome.
+
+## Hooks and outcomes
+
+| Hook | Individual result | Aggregate native behavior |
+|---|---|---|
+| `tool_call` | `pass` or `block` | Runs all matches; aggregates failures into one block |
+| `tool_result` | `pass` or `patch` | Runs all matches; aggregates failures into one replacement patch |
+| `turn_end` | `pass` or `report` | Aggregates and presents failures |
+| `agent_end` | `pass` or `report` | Aggregates; requests one deduplicated corrective turn |
+| `agent_settled` | `pass` or `report` | Aggregates and presents failures |
+| `session_before_switch` | `pass` or `cancel` | Aggregates and cancels on failure |
+| `session_before_fork` | `pass` or `cancel` | Aggregates and cancels on failure |
+| `assert_result` | local `pass` or `report` | Handles one originating result; cannot alter it |
+
+All tool Assertions run even after one fails. An Action observes only its
+owner's individual result, not the aggregate: a passing Assertion may request a
+pass Action even when a sibling blocks the event.
+
+## Owned Actions
+
+Every Action requires `outcome`. It accepts one outcome or a non-empty list.
+Optional `code` accepts one number, `null`, or a non-empty list. Fields are
+ANDed; array members are any-of and matching is strict. The same matching
+implementation handles `outcome` and `code` in `assert_result` filters.
+
+Validation rejects outcomes impossible for the configured hook and selectors
+with no possible outcome/code pairing. Pass results use code `0`; failure
+results use a non-zero code or `null`.
+
+`outcome` and `code` select the result; they are removed from the delivered
+Action Request. Supported payloads are:
+
+| `type` | Payload |
+|---|---|
+| `interrupt` | Calls Pi's supported abort operation |
+| `shutdown` | Optional `interrupt: true`, then graceful Pi shutdown |
+| `compact` | Optional static `instructions` passed to Pi compaction |
+| `message` | Static `message`, `delivery` (`steer`, `followUp`, or `nextTurn`), and optional `triggerTurn` (`true` is invalid with `nextTurn`) |
+| `emit-custom-event` | Non-empty event `name` and optional JSON `data` |
+
+Action strings and data are static. They do not interpolate environment
+variables, templates, shell output, or event fields. Multiple message requests
+stay distinct; Pi's steering and follow-up settings own batching. Message,
+compact, interrupt, and shutdown Actions can intentionally cause later Pi
+events, so broad rules can create continuation loops.
+
+An Action that should run unconditionally after a native event can omit shell
+and select `pass`; it becomes an optimized canonical `shell: "true"` Assertion.
+It still emits an ordinary `assert_result` event.
+
+## Filters and `assert_result`
+
+Filters are implicit AND across fields. String values are JavaScript regular
+expression sources; anchor them with `^`/`$` for exact matching. Numbers,
+booleans, and `null` use strict equality. Arrays are any-of. Dot-separated keys
+resolve nested tool input fields.
+
+Tool candidates are `{ ...event.input, toolName }`. Lifecycle candidates expose
+only documented bounded scalars. `assert_result` exposes:
+
+```text
+{ event: "assert_result", assertionRef, runId, outcome, code }
+```
+
+Its filter is limited to `event`, source-qualified `assertionRef`, `runId`,
+`outcome`, and `code`. Identity fields use regex matching; outcome/code use the
+exact selector semantics above.
 
 ```json
 {
   "local": {
-    "notify-on-block": {
-      "description": "Ask for a follow-up after a local guard blocks",
+    "audit-blocks": {
+      "description": "Audit every block from local/protect-env",
       "hook": "assert_result",
       "filter": {
-        "assertionRef": "^local/",
-        "outcome": "block"
+        "assertionRef": "^local/protect-env$",
+        "outcome": "block",
+        "code": [1, null]
       },
+      "shell": "./scripts/audit-assert-result.sh",
       "action": {
-        "type": "message",
-        "message": "A local guard blocked an operation. Review the reason.",
-        "delivery": "followUp"
+        "type": "emit-custom-event",
+        "outcome": ["pass", "report"],
+        "name": "example:assert-audited"
       }
     }
   }
 }
 ```
 
-Supported actions:
+For each native result, its owned Action is considered first, followed by
+configured `assert_result` Assertions in Active Assertion Set order. A result
+Assertion gets its own local pass/report result and may select its own Action.
+That local result is never redispatched, bounding synthetic handling to one
+level. Origin identity remains available separately for accounting and shell
+environment projection.
 
-| `action.type` | Fields and behavior |
-| --- | --- |
-| `interrupt` | No additional fields. Calls Pi's supported abort operation; harmless when idle. |
-| `shutdown` | Optional `interrupt` boolean (default `false`). When true, abort is requested before graceful shutdown. Pi defers shutdown until supported and treats it as a no-op in print mode. |
-| `compact` | Optional string `instructions`, passed as Pi custom compaction instructions. The request is fire-and-forget; asynchronous failure is reported separately. |
-| `message` | Requires string `message` and `delivery`: `steer`, `followUp`, or `nextTurn`. Optional `triggerTurn` defaults to `false`; it cannot be true with `nextTurn`. Sends a visible `pi-assert` custom message, never impersonated user input. |
-| `emit-custom-event` | Requires a non-whitespace `name` and accepts optional JSON `data`. Emits only through `pi.events`; even a lifecycle-looking name cannot forge a native Pi hook. Namespaced names are recommended. |
+## Shell environment
 
-Action fields are static: pi-assert does not expand environment variables,
-templates, shell stdout, or computed event data inside them. Use multiple named
-Action Handlers (or a preset) to request multiple independently auditable
-actions.
+Every reached `when` and main shell receives inherited environment plus bounded
+Pi metadata and invocation fields:
 
-### Filters
+- `PI_ASSERT_REF`, `PI_ASSERT_HOOK`, `PI_ASSERT_RUN_ID`
+- `PI_EVENT`, `PI_CWD`
+- tool hooks: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`; tool results
+  also receive `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`
+- lifecycle hooks: bounded JSON `PI_EVENT_PAYLOAD`
+- captured metadata such as session, model, provider, reasoning, trust, and
+  context-window values when available
 
-Tool-hook filters match `{ ...event.input, toolName }`, with the trusted
-`toolName` taking precedence. Other adapters expose bounded candidates:
+A `when` and its main shell share one run ID. Owned Actions share that same
+source-qualified ref and run ID. Managed keys are cleared from the ambient
+environment before each real shell so stale parent values cannot leak in.
 
-- `turn_end`: `{ event: "turn_end", turnIndex }`
-- `agent_end` / `agent_settled`: `{ event }`
-- `session_before_switch`: `{ event, reason, targetSessionFile? }`
-- `session_before_fork`: `{ event, entryId, position }`
-- `assert_result`: `{ event: "assert_result", assertionRef, runId, outcome, code }`
+## Presets, sources, and updates
 
-Every filter key is implicitly ANDed. Dot-separated keys resolve nested input
-fields:
+Presets contain qualified refs (`local/name` or `owner/repo/name`) and expand one
+level in ref order. They reference Assertions uniformly; nested Presets are not
+expanded. Duplicate members are removed by source-qualified identity.
 
 ```json
 {
   "local": {
-    "protect-nested-env": {
-      "description": "Block a custom writer targeting an environment file",
-      "hook": "tool_call",
-      "filter": {
-        "toolName": "_write$",
-        "request.target.path": "(^|/)\\.env.*$"
-      },
-      "shell": "false"
+    "guarded-workflow": {
+      "description": "Enable the local and repository policies together",
+      "preset": [
+        "local/protect-env",
+        "owner/rules/clean-turn"
+      ],
+      "default": true
     }
   }
 }
 ```
 
-Every string filter value is a JavaScript regular-expression **source**, tested
-with `RegExp.test()` against a string candidate. This same matcher applies to
-tool names, paths, commands, and any other string field. Regex literals and
-flags are not supported; write the source as a JSON string and escape
-backslashes for JSON. Invalid patterns make the source-qualified configuration
-entry fail to load.
-
-Numbers, booleans, and `null` use strict equality without coercion. Arrays mean
-“any of”: string members use regex matching while non-string members retain
-strict equality. An empty array matches nothing. For example,
-`{ "toolName": ["^write$", "^edit$"] }` matches either exact tool name.
-
-**Migration:** string filters previously used strict equality and are now
-unanchored regexes. Add `^` and `$` to retain exact matching: `"bash"` also
-matches `"mybash"`, while `"^bash$"` matches only `"bash"`.
-
-### Assertion-result handlers
-
-`assert_result` runs Shell Assertion or Action Handler reactions after a
-non-`assert_result` Shell Assertion makes a decision:
-
-```json
-{
-  "local": {
-    "handle-local-results": {
-      "description": "Handle selected local assertion results",
-      "hook": "assert_result",
-      "filter": {
-        "assertionRef": "^local/",
-        "outcome": ["pass", "block", "cancel"]
-      },
-      "shell": "./scripts/handle-result.sh"
-    }
-  }
-}
-```
-
-`assertionRef` is the canonical `source/name` identity and uses the normal
-JavaScript regex matcher. `runId` is the originating assertion invocation's
-UUID and uses that same regex matcher. `outcome` is exact (not regex) and
-accepts one value or an any-of list containing `pass`, `block`, `patch`,
-`cancel`, or `report`. `code` uses strict number-or-`null` matching. A pass has
-code `0`; an ordinary failure has its non-zero shell exit code; timeout, abort,
-spawn failure, and a `when` execution failure currently use `null`.
-
-Filter misses and ordinary non-zero `when` skips emit no result. Fail-fast hooks
-emit preceding passes and their first failure; aggregate hooks emit every
-result in execution order. Handlers are awaited without the originating abort
-signal, run result-major and then in configured order, and fail open relative to
-the already-computed
-native decision. Shell handler results and action requests never emit another
-`assert_result`, preventing recursion. This is the explicit way to compose a
-Shell Assertion decision with an effect while keeping the check and reaction
-independently reusable.
-
-A preset replaces executable fields with a `preset` array of qualified refs:
-
-```json
-{
-  "local": {
-    "safe-writes": {
-      "description": "My write safeguards",
-      "preset": ["local/unmodified", "owner/rules/protect-env"]
-    }
-  }
-}
-```
-
-### Hook failure policies
-
-| Hook | Aggregation | Failure behavior and feedback |
-| --- | --- | --- |
-| `tool_call` | first failure | blocks the call and reports the reason |
-| `tool_result` | first failure | replaces the result with a redacted error and reports the reason |
-| `turn_end` | all failures | report-only UI notification; cannot alter the completed turn |
-| `agent_end` | all failures | sends one corrective message; an identical repeat stops automatic retry |
-| `agent_settled` | all failures | report-only UI notification; does not start another run |
-| `session_before_switch` | all failures | cancels `/new` or `/resume` and reports one aggregate |
-| `session_before_fork` | all failures | cancels `/fork` or `/clone` and reports one aggregate |
-| `assert_result` | all matching handlers | Shell handlers are report-only; Action Handlers request effects; neither changes the originating assertion decision |
-
-Use `/asserts` to install, enable, disable, and manage rules and presets.
+Trusted project entries replace global entries only when source and name both
+match, and whole records replace rather than field-merging. Repository install
+and update canonicalize omitted shell to `"true"`. Content comparison includes
+description, hook, canonical shell, owned Action, filter, and precondition, but
+excludes local `default` preference. Updates preserve that preference.
 
 ## Execution summaries
 
-After each concrete native event, pi-assert appends a durable execution summary
-when at least one assertion main shell ran or at least one action was requested.
-Command-only collapsed wording is unchanged; action-only and mixed examples are:
+A durable context-neutral transcript entry is appended when at least one main
+command is recorded or one Action is requested. Exact shortcuts count as normal
+commands with normal duration presentation. Passing preconditions are not
+counted separately; a failure before the main command does not invent a command
+row.
 
-```text
- pi-assert requested 1 action · tool_call bash (ctrl+o to expand)
- pi-assert ran 2 commands in 8ms and requested 1 action · turn_end 2 (ctrl+o to expand)
-```
+Expanded summaries show source-qualified Assertion refs, pass/fail status,
+duration, and requested Action type. Owned Actions nest beneath their local
+Assertion result; `assert_result` activity remains associated with its origin.
+Persisted Action accounting contains only bounded identity, type, hook/run,
+outcome, and origin metadata. Message bodies, compaction instructions,
+custom-event data, rich callback objects, and storage paths are not persisted.
 
-The collapsed summary is inset and styled like Pi's other transcript messages;
-its hint reflects Pi's global `app.tools.expand` binding (`Ctrl-O` by default).
-Expanded rows show `✓`/`✗`, the canonical `source/name` assertion
-reference, and each shell's duration. Tool summaries also show the tool-call ID
-only when expanded. Expanded action rows show the source-qualified handler and
-action type and say `requested` rather than claiming completion. `assert_result`
-handler shells and actions appear with an indented `↳` beneath the originating
-assertion result; the same handler can therefore appear repeatedly.
+## Commands and trust
 
-Only started main `shell` commands are listed and counted. Action requests and
-all `when` preconditions are excluded from command counts and duration. Filter
-misses, ordinary non-zero `when` skips, and assertions not reached by fail-fast
-shell policy are omitted. Shell-precondition infrastructure failures remain on
-the fail-closed path; Action Handler precondition failures report and skip.
-Execution history stores only action type, source-qualified handler identity,
-run ID, hook, and originating-result association—not message bodies, compaction
-instructions, or custom-event data.
+- `/asserts` opens activation, search, Preset, default, remove, and install UI.
+- Installed repository entries are updateable and removable like local entries.
+- Orphaned repository entries are marked when repository lookup succeeds.
+- Untrusted project storage is neither read nor written.
 
-Execution summaries are custom session entries: they persist across resume,
-reload, fork, and tree navigation but never enter model context. They supplement
-rather than replace block reasons, patched results, cancellation feedback,
-report-only errors, corrective turns, or handler-failure notifications. Pi's
-custom-entry interface is append-only, so summaries for parallel tools can
-appear together after a batch; the trigger suffix and expanded tool-call ID
-provide attribution. Print, JSON, and RPC modes receive no duplicate agent
-message for these summaries.
-
-## Environment
-
-Every matching Shell Assertion or Action Handler precondition receives the
-following shared variables. Optional values are genuinely unset when Pi does
-not know them; they are never the
-strings `"null"`/`"undefined"` or an empty placeholder.
-
-| Variable | Meaning |
-| --- | --- |
-| `PI_SESSION_ID` | Current Pi session ID |
-| `PI_SESSION_FILE` | Current session JSONL path; unset for ephemeral sessions |
-| `PI_SESSION_NAME` | Current display name; unset for unnamed sessions |
-| `PI_SESSION_LEAF_ID` | Current branch leaf; unset at the session root |
-| `PI_PROVIDER` | Selected model provider; unset without a selected model |
-| `PI_MODEL` | Selected model ID; unset without a selected model |
-| `PI_REASONING_LEVEL` | Current effective reasoning level when available |
-| `PI_MODE` | Pi mode: `tui`, `rpc`, `json`, or `print` |
-| `PI_PROJECT_TRUSTED` | `true` or `false` for current project trust |
-| `PI_CONTEXT_TOKENS` | Current context token count when known |
-| `PI_CONTEXT_WINDOW` | Active model context-window size when context usage is available |
-| `PI_CONTEXT_PERCENT` | Current context percentage when known |
-| `PI_CWD` | Current Pi project directory |
-| `PI_EVENT` | Current hook name, including `tool_call` and `tool_result` |
-| `PI_ASSERT_REF` | Canonical `source/name` of the rule currently executing |
-| `PI_ASSERT_HOOK` | That rule's configured hook |
-| `PI_ASSERT_RUN_ID` | Fresh UUID for this one assertion invocation |
-
-A Shell Assertion's `when` and main `shell` receive the same metadata snapshot
-and `PI_ASSERT_RUN_ID`. An Action Handler uses one fresh run ID for its optional
-precondition and action-request accounting. Every other rule, event invocation,
-retry, or repeated execution gets a fresh run ID. It is an
-observability/correlation ID, not an idempotency key or stable retry identifier.
-
-Hook-specific variables remain available:
-
-- `tool_call`: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, and JSON `PI_TOOL_INPUT`
-- `tool_result`: all tool-call variables plus text `PI_TOOL_RESULT` and boolean
-  string `PI_TOOL_IS_ERROR`
-- lifecycle and synthetic hooks: JSON `PI_EVENT_PAYLOAD`, containing exactly
-  the adapter's bounded filter candidate rather than the native event
-
-For `assert_result`, `PI_EVENT_PAYLOAD` contains
-`{ event, assertionRef, runId, outcome, code }`. The payload's `assertionRef`
-and `runId` identify the **originating** rule invocation. The handler's own
-`PI_ASSERT_REF` and `PI_ASSERT_RUN_ID` identify the **currently executing
-handler**, so its run ID is different. Handler execution retains the bounded
-session/model/runtime snapshot but remains detached from the originating abort
-signal.
-
-All commands execute with `PWD` set to `PI_CWD`. Before spawning a shell,
-pi-assert removes inherited values for every variable it manages and overlays
-only current values, preventing a parent Pi session from leaking stale
-metadata. Unrelated ambient variables such as `PATH` and the process marker
-`PI_CODING_AGENT` remain inherited.
-
-## License
-
-MIT
+Treat repository rules as executable code: ordinary shell strings run locally
+with your Pi process permissions. The 5-second default timeout bounds commands
+and preconditions but is not a sandbox.

@@ -59,12 +59,11 @@ function sortSources(sources: string[]): string[] {
 }
 
 /**
- * Group executable entries by `source` (local first, then repos alpha).
+ * Group Assertions by `source` (local first, then repositories alpha).
  * Presets are **not** hoisted — callers that want a Presets section build it
- * themselves (the `/asserts` panel does; the preset editor offers executable
- * entries). Shared so the two views agree on section order.
+ * themselves. Shared so the two views agree on section order.
  */
-export function groupExecutablesBySource(entries: readonly CatalogEntry[]): Group[] {
+export function groupAssertionsBySource(entries: readonly CatalogEntry[]): Group[] {
   const bySource = new Map<string, CatalogEntry[]>();
   for (const a of entries) {
     const list = bySource.get(a.source) ?? [];

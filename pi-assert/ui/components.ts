@@ -42,9 +42,9 @@ function bindingMatches(
 // aware implementation.  The detail-block helpers below build on those.
 
 /**
- * Detail-block source for {@link renderAssertDetail}: a Shell Assertion,
- * Action Handler, or Preset. Fields are optional so catalog entries are
- * assignable directly; rendering dispatches preset → action → shell.
+ * Detail-block source for {@link renderAssertDetail}: an Assertion or Preset.
+ * Fields are optional so normalized catalog and external repository entries
+ * are both assignable; an omitted Assertion shell renders as canonical true.
  */
 export interface AssertDetailEntry {
   shell?: string;
@@ -54,14 +54,12 @@ export interface AssertDetailEntry {
 }
 
 /**
- * Render the `shell:` / `action:` / `when:` (or `asserts:`) detail block used
+ * Render the `shell:` / `when:` / `action:` (or `asserts:`) detail block used
  * by both the /asserts panel and the install wizard's assert-entry picker.
  * `when` is only shown when present, matching the standard assert view.
  *
- * Dispatches on `preset` first so the shell branch is only reached for a shell
- * assert (whose `shell` is always present) — `detailLines(entry.shell, …)`
- * never receives `undefined` at runtime.  A preset renders `asserts:` with its
- * refs comma-joined, wrapped ANSI-aware so long ref lists carry across lines.
+ * A Preset renders `asserts:` with its refs comma-joined. Every Assertion
+ * renders its effective shell first, then its precondition and owned Action.
  */
 export function renderAssertDetail(
   theme: Theme,
@@ -104,23 +102,16 @@ export function renderAssertDetail(
     }
   };
 
-  // Dispatch on `preset` first: a preset renders `asserts:` with its refs
-  // comma-joined. The later branches distinguish actions from shells, whose
-  // `shell` is always present — so `detailLines(entry.shell, …)` never
-  // receives `undefined` at runtime.  The `!== undefined` guard is the
-  // type-safe encoding of that invariant (no `!` needed).
   if (entry.preset !== undefined) {
     detailLines(entry.preset.join(", "), "asserts: ");
     return fitLines(lines, width);
   }
+
+  detailLines(entry.shell ?? "true", "shell: ");
+  if (entry.when) detailLines(entry.when, "when: ");
   if (entry.action !== undefined) {
     detailLines(actionDetailText(entry.action), "action: ");
-    if (entry.when) detailLines(entry.when, "when: ");
-    return fitLines(lines, width);
   }
-  if (entry.shell !== undefined) detailLines(entry.shell, "shell: ");
-  if (entry.when) detailLines(entry.when, "when: ");
-
   return fitLines(lines, width);
 }
 

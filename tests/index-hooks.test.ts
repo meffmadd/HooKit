@@ -365,6 +365,7 @@ describe("index execution entries", () => {
             hook: "tool_call",
             action: {
               type: "message",
+              outcome: "pass",
               message: "NATIVE_SECRET",
               delivery: "followUp",
             },
@@ -375,6 +376,7 @@ describe("index execution entries", () => {
             hook: "assert_result",
             action: {
               type: "message",
+              outcome: "pass",
               message: "SYNTHETIC_SECRET",
               delivery: "nextTurn",
             },
@@ -405,14 +407,14 @@ describe("index execution entries", () => {
         ctx,
       );
 
-      assert.equal(harness.messages.length, 2);
+      assert.equal(harness.messages.length, 3);
       assert.equal(harness.entries.length, 1);
       const persisted = JSON.stringify(harness.entries[0]?.data);
       assert.ok(!persisted.includes("NATIVE_SECRET"));
       assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
       assert.match(
         renderEntry(harness, 0, false),
-        /ran 1 command in \d+ms and requested 2 actions · tool_call bash/,
+        /ran 4 commands in \d+ms and requested 3 actions · tool_call bash/,
       );
       assert.match(
         renderEntry(harness, 0, true),
@@ -723,7 +725,7 @@ describe("index effect and outcome translation", () => {
   });
 });
 
-describe("index Action Handler delivery", () => {
+describe("index owned Action delivery", () => {
   it("maps every action onto supported Pi APIs in configured order", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-assert-index-actions-"));
     const previousHome = process.env.HOME;
@@ -737,31 +739,35 @@ describe("index Action Handler delivery", () => {
           interrupt: {
             description: "stop work",
             hook: "tool_call",
-            action: { type: "interrupt" },
+            action: { type: "interrupt", outcome: "pass" },
             default: true,
           },
           shutdown: {
             description: "exit",
             hook: "tool_call",
-            action: { type: "shutdown", interrupt: true },
+            action: { type: "shutdown", outcome: "pass", interrupt: true },
             default: true,
           },
           drain: {
             description: "exit without interrupting",
             hook: "tool_call",
-            action: { type: "shutdown" },
+            action: { type: "shutdown", outcome: "pass" },
             default: true,
           },
           compact: {
             description: "summarize",
             hook: "tool_call",
-            action: { type: "compact", instructions: "Keep decisions" },
+            action: {
+              type: "compact",
+              outcome: "pass",
+              instructions: "Keep decisions",
+            },
             default: true,
           },
           compactDefault: {
             description: "summarize with defaults",
             hook: "tool_call",
-            action: { type: "compact" },
+            action: { type: "compact", outcome: "pass" },
             default: true,
           },
           steer: {
@@ -769,6 +775,7 @@ describe("index Action Handler delivery", () => {
             hook: "tool_call",
             action: {
               type: "message",
+              outcome: "pass",
               message: "steer now",
               delivery: "steer",
               triggerTurn: true,
@@ -780,6 +787,7 @@ describe("index Action Handler delivery", () => {
             hook: "tool_call",
             action: {
               type: "message",
+              outcome: "pass",
               message: "follow later",
               delivery: "followUp",
             },
@@ -790,6 +798,7 @@ describe("index Action Handler delivery", () => {
             hook: "tool_call",
             action: {
               type: "message",
+              outcome: "pass",
               message: "next prompt",
               delivery: "nextTurn",
             },
@@ -800,6 +809,7 @@ describe("index Action Handler delivery", () => {
             hook: "tool_call",
             action: {
               type: "emit-custom-event",
+              outcome: "pass",
               name: "session_start",
               data: { safe: true },
             },
@@ -884,7 +894,7 @@ describe("index Action Handler delivery", () => {
         executions: unknown[];
         actionRequests: Array<{ actionType: string }>;
       };
-      assert.deepEqual(data.executions, []);
+      assert.equal(data.executions.length, 9);
       assert.deepEqual(data.actionRequests.map((request) => request.actionType), [
         "interrupt",
         "shutdown",
@@ -898,7 +908,7 @@ describe("index Action Handler delivery", () => {
       ]);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert requested 9 actions · tool_call bash/,
+        /pi-assert ran 9 commands in \d+ms and requested 9 actions · tool_call bash/,
       );
       assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested/);
 
@@ -929,13 +939,22 @@ describe("index Action Handler delivery", () => {
           broken: {
             description: "broken message",
             hook: "tool_call",
-            action: { type: "message", message: "x", delivery: "steer" },
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "x",
+              delivery: "steer",
+            },
             default: true,
           },
           sibling: {
             description: "still emitted",
             hook: "tool_call",
-            action: { type: "emit-custom-event", name: "test:sibling" },
+            action: {
+              type: "emit-custom-event",
+              outcome: "pass",
+              name: "test:sibling",
+            },
             default: true,
           },
         },

@@ -1,7 +1,7 @@
 {
   "name": "pi-assert",
   "version": "0.1.0",
-  "description": "Shell assertions and declarative Action Handlers for Pi tool and lifecycle events.",
+  "description": "Shell Assertions with outcome-selected Pi Actions for tool and lifecycle events.",
   "type": "module",
   "main": "./pi-assert/index.ts",
   "files": [

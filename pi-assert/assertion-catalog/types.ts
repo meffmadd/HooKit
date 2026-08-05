@@ -16,20 +16,14 @@ interface CatalogEntryBase extends AssertionIdentity {
   readonly default: boolean;
 }
 
-/** A validated shell assertion available to session activation. */
-export interface CatalogShellAssertion extends CatalogEntryBase {
+/** A validated, normalized Assertion available to session activation. */
+export interface CatalogAssertion extends CatalogEntryBase {
   readonly hook: Hook;
   readonly filter?: ReadonlyEntryFilter;
   readonly when?: string;
+  /** Always present; an omitted persisted shell is canonicalized to `true`. */
   readonly shell: string;
-}
-
-/** A validated declarative Action Handler available to session activation. */
-export interface CatalogActionHandler extends CatalogEntryBase {
-  readonly hook: Hook;
-  readonly filter?: ReadonlyEntryFilter;
-  readonly when?: string;
-  readonly action: Action;
+  readonly action?: Action;
 }
 
 /** A validated one-level preset available to session activation. */
@@ -37,17 +31,10 @@ export interface CatalogPreset extends CatalogEntryBase {
   readonly preset: readonly string[];
 }
 
-export type CatalogExecutableEntry = CatalogShellAssertion | CatalogActionHandler;
-export type CatalogEntry = CatalogExecutableEntry | CatalogPreset;
+export type CatalogEntry = CatalogAssertion | CatalogPreset;
 
 export function isCatalogPreset(entry: CatalogEntry): entry is CatalogPreset {
   return "preset" in entry;
-}
-
-export function isCatalogActionHandler(
-  entry: CatalogEntry,
-): entry is CatalogActionHandler {
-  return "action" in entry;
 }
 
 /** Filesystem locations authorized before catalog creation. */

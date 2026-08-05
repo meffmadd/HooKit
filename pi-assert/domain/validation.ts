@@ -2,9 +2,10 @@ import {
   isAssertResultOutcome,
   isLifecycleHook,
   type Action,
+  type AssertResultOutcome,
+  type Hook,
   type JsonValue,
-  type PersistedActionHandler,
-  type PersistedAssert,
+  type PersistedAssertion,
   type PersistedPreset,
 } from "./entry.js";
 
@@ -14,23 +15,23 @@ const ASSERT_KEYS = new Set([
   "filter",
   "when",
   "shell",
-  "default",
-]);
-const ACTION_HANDLER_KEYS = new Set([
-  "description",
-  "hook",
-  "filter",
-  "when",
   "action",
   "default",
 ]);
 const PRESET_KEYS = new Set(["description", "preset", "default"]);
 const ACTION_KEYS: Readonly<Record<Action["type"], ReadonlySet<string>>> = {
-  interrupt: new Set(["type"]),
-  shutdown: new Set(["type", "interrupt"]),
-  compact: new Set(["type", "instructions"]),
-  message: new Set(["type", "message", "delivery", "triggerTurn"]),
-  "emit-custom-event": new Set(["type", "name", "data"]),
+  interrupt: new Set(["type", "outcome", "code"]),
+  shutdown: new Set(["type", "outcome", "code", "interrupt"]),
+  compact: new Set(["type", "outcome", "code", "instructions"]),
+  message: new Set([
+    "type",
+    "outcome",
+    "code",
+    "message",
+    "delivery",
+    "triggerTurn",
+  ]),
+  "emit-custom-event": new Set(["type", "outcome", "code", "name", "data"]),
 };
 const ASSERT_RESULT_FILTER_KEYS = new Set([
   "event",
@@ -40,6 +41,17 @@ const ASSERT_RESULT_FILTER_KEYS = new Set([
   "code",
 ]);
 
+const OUTCOMES_BY_HOOK: Readonly<Record<Hook, readonly AssertResultOutcome[]>> = {
+  tool_call: ["pass", "block"],
+  tool_result: ["pass", "patch"],
+  turn_end: ["pass", "report"],
+  agent_end: ["pass", "report"],
+  agent_settled: ["pass", "report"],
+  session_before_switch: ["pass", "cancel"],
+  session_before_fork: ["pass", "cancel"],
+  assert_result: ["pass", "report"],
+};
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -48,7 +60,7 @@ function isFilterValue(value: unknown): boolean {
   const scalar = (item: unknown): boolean =>
     item === null ||
     typeof item === "string" ||
-    typeof item === "number" ||
+    (typeof item === "number" && Number.isFinite(item)) ||
     typeof item === "boolean";
   return scalar(value) || (Array.isArray(value) && value.every(scalar));
 }
@@ -95,6 +107,15 @@ function scalarOrArray(
   return Array.isArray(value) ? value.every(predicate) : predicate(value);
 }
 
+function nonEmptyScalarOrArray(
+  value: unknown,
+  predicate: (item: unknown) => boolean,
+): boolean {
+  return Array.isArray(value)
+    ? value.length > 0 && value.every(predicate)
+    : predicate(value);
+}
+
 function validJsonValue(value: unknown, ancestors = new Set<object>()): value is JsonValue {
   if (
     value === null || typeof value === "string" || typeof value === "boolean"
@@ -118,11 +139,45 @@ function validJsonValue(value: unknown, ancestors = new Set<object>()): value is
   return valid;
 }
 
-function validAction(value: unknown): value is Action {
+function possibleActionSelector(
+  hook: Hook,
+  outcomeValue: unknown,
+  codeValue: unknown,
+): boolean {
+  const outcomes = (Array.isArray(outcomeValue)
+    ? outcomeValue
+    : [outcomeValue]) as AssertResultOutcome[];
+  const allowed = OUTCOMES_BY_HOOK[hook];
+  if (outcomes.some((outcome) => !allowed.includes(outcome))) return false;
+  if (codeValue === undefined) return true;
+
+  const codes = (Array.isArray(codeValue) ? codeValue : [codeValue]) as Array<
+    number | null
+  >;
+  return outcomes.some((outcome) =>
+    codes.some((code) =>
+      outcome === "pass" ? code === 0 : code === null || code !== 0
+    )
+  );
+}
+
+function validAction(value: unknown, hook: Hook): value is Action {
   if (!isPlainObject(value) || typeof value.type !== "string") return false;
   if (!Object.prototype.hasOwnProperty.call(ACTION_KEYS, value.type)) return false;
   const type = value.type as Action["type"];
   if (Object.keys(value).some((key) => !ACTION_KEYS[type].has(key))) return false;
+  if (!nonEmptyScalarOrArray(value.outcome, isAssertResultOutcome)) return false;
+  if (
+    value.code !== undefined &&
+    !nonEmptyScalarOrArray(
+      value.code,
+      (item) => item === null ||
+        (typeof item === "number" && Number.isFinite(item)),
+    )
+  ) {
+    return false;
+  }
+  if (!possibleActionSelector(hook, value.outcome, value.code)) return false;
 
   switch (type) {
     case "interrupt":
@@ -168,7 +223,8 @@ function validAssertResultFilter(filter: unknown): boolean {
   if (filter.code !== undefined &&
       !scalarOrArray(
         filter.code,
-        (value) => value === null || typeof value === "number",
+        (value) => value === null ||
+          (typeof value === "number" && Number.isFinite(value)),
       )) {
     return false;
   }
@@ -200,22 +256,20 @@ function validExecutableFields(definition: Record<string, unknown>): boolean {
   return true;
 }
 
+/** Validate the single persisted executable shape before catalog normalization. */
 export function validateEntryShape(
   definition: unknown,
-): definition is PersistedAssert {
-  return isPlainObject(definition) &&
-    !Object.keys(definition).some((key) => !ASSERT_KEYS.has(key)) &&
-    typeof definition.shell === "string" &&
-    validExecutableFields(definition);
-}
-
-export function validateActionHandlerShape(
-  definition: unknown,
-): definition is PersistedActionHandler {
-  return isPlainObject(definition) &&
-    !Object.keys(definition).some((key) => !ACTION_HANDLER_KEYS.has(key)) &&
-    validAction(definition.action) &&
-    validExecutableFields(definition);
+): definition is PersistedAssertion {
+  if (!isPlainObject(definition) ||
+      Object.keys(definition).some((key) => !ASSERT_KEYS.has(key)) ||
+      !validExecutableFields(definition)) {
+    return false;
+  }
+  const hasShell = definition.shell !== undefined;
+  const hasAction = definition.action !== undefined;
+  if (!hasShell && !hasAction) return false;
+  if (hasShell && typeof definition.shell !== "string") return false;
+  return !hasAction || validAction(definition.action, definition.hook as Hook);
 }
 
 /** Qualified preset refs are `local/name` or `owner/repo/name`. */
@@ -237,14 +291,10 @@ export function validatePresetShape(
     );
 }
 
-export type RuleEntryKind =
-  | { kind: "assert" }
-  | { kind: "action" }
-  | { kind: "preset" };
+export type RuleEntryKind = { kind: "assert" } | { kind: "preset" };
 
 export function validateRuleEntry(definition: unknown): RuleEntryKind | null {
   if (validatePresetShape(definition)) return { kind: "preset" };
   if (validateEntryShape(definition)) return { kind: "assert" };
-  if (validateActionHandlerShape(definition)) return { kind: "action" };
   return null;
 }

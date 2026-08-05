@@ -35,6 +35,24 @@ function matchScalar(expected: unknown, actual: unknown): boolean {
   return actual === expected;
 }
 
+/** Exact, ANDed result-selector semantics shared by filters and Actions. */
+export function matchResultSelector(
+  selector: { readonly outcome?: unknown; readonly code?: unknown },
+  result: { readonly outcome: unknown; readonly code: unknown },
+): boolean {
+  for (const field of ["outcome", "code"] as const) {
+    const expected = selector[field];
+    if (expected === undefined) continue;
+    const actual = result[field];
+    if (Array.isArray(expected)) {
+      if (!expected.some((value) => value === actual)) return false;
+    } else if (expected !== actual) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Shared filter semantics for native and synthetic assertion candidates. */
 export function matchFilter(
   filter: ReadonlyEntryFilter | undefined,

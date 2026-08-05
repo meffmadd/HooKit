@@ -203,11 +203,7 @@ async function promptAssertEntry(
       title: "Remove rule",
       message: (item) => {
         const e = entries[item.value];
-        const kind = e && "preset" in e
-          ? "preset"
-          : e && "action" in e
-          ? "Action Handler"
-          : "assert";
+        const kind = e && "preset" in e ? "preset" : "assert";
         return `  Remove "${item.value}" ${kind}?`;
       },
     },

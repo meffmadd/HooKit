@@ -12,9 +12,7 @@ import { join } from "node:path";
 
 import type { Hook, NativeHook } from "../pi-assert/domain/entry.js";
 import type {
-  ActiveActionHandler,
   ActiveAssertion,
-  ActiveExecutable,
 } from "../pi-assert/hook-evaluation/index.js";
 import {
   HookEvaluation,
@@ -59,18 +57,21 @@ function assertion(
   };
 }
 
-function actionHandler(
+function assertionWithAction(
   name: string,
   hook: Hook,
-  action: ActiveActionHandler["action"],
-  extra: Partial<ActiveActionHandler> = {},
-): ActiveActionHandler {
+  action: Omit<NonNullable<ActiveAssertion["action"]>, "outcome"> & {
+    outcome?: NonNullable<ActiveAssertion["action"]>["outcome"];
+  },
+  extra: Partial<ActiveAssertion> = {},
+): ActiveAssertion {
   return {
     name,
     source: "local",
-    description: "test Action Handler",
+    description: "test Assertion with Action",
     hook,
-    action,
+    shell: "true",
+    action: { outcome: "pass", ...action } as NonNullable<ActiveAssertion["action"]>,
     ...extra,
   };
 }
@@ -102,7 +103,7 @@ async function evaluate<H extends NativeHook>(
   evaluator: HookEvaluation,
   hook: H,
   event: HookEventMap[H],
-  assertions: readonly ActiveExecutable[],
+  assertions: readonly ActiveAssertion[],
   cwd = root,
   executionContext: HookExecutionContext = context(cwd),
 ): Promise<HookEvaluationResult> {
@@ -121,7 +122,7 @@ function presentationMessages(result: HookEvaluationResult): string[] {
 }
 
 describe("Hook Evaluation native outcomes", () => {
-  it("fails fast and blocks a matching tool call", async () => {
+  it("aggregates a block while continuing matching tool-call Assertions", async () => {
     const cwd = caseDirectory("tool-call-block");
     const result = await evaluate(
       new HookEvaluation(),
@@ -142,7 +143,7 @@ describe("Hook Evaluation native outcomes", () => {
         'pi-assert: assertion "blocks" rejected bash — `exit 7`',
       );
     }
-    assert.equal(existsSync(join(cwd, "not-run")), false);
+    assert.equal(existsSync(join(cwd, "not-run")), true);
     assert.deepEqual(
       result.executionReport?.executions.map(({ assertionRef, passed }) => ({
         assertionRef,
@@ -151,8 +152,44 @@ describe("Hook Evaluation native outcomes", () => {
       [
         { assertionRef: "local/passes", passed: true },
         { assertionRef: "local/blocks", passed: false },
+        { assertionRef: "local/not-run", passed: true },
       ],
     );
+  });
+
+  it("includes every tool failure in one block or replacement patch", async () => {
+    const call = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [
+        assertion("first", "tool_call", "false"),
+        assertion("second", "tool_call", "exit 7"),
+      ],
+    );
+    assert.equal(call.outcome, "block");
+    if (call.outcome === "block") {
+      assert.match(call.reason, /2 assertions rejected bash/);
+      assert.match(call.reason, /assertion "first"/);
+      assert.match(call.reason, /assertion "second"/);
+    }
+
+    const toolOutput = await evaluate(
+      new HookEvaluation(),
+      "tool_result",
+      toolResult,
+      [
+        assertion("first", "tool_result", "false"),
+        assertion("second", "tool_result", "exit 9"),
+      ],
+    );
+    assert.equal(toolOutput.outcome, "patch");
+    if (toolOutput.outcome === "patch") {
+      const text = toolOutput.patch.content?.[0];
+      assert.ok(text?.type === "text");
+      assert.match(text.text, /assertion "first"/);
+      assert.match(text.text, /assertion "second"/);
+    }
   });
 
   it("passes when filters miss or matching shells pass", async () => {
@@ -654,16 +691,16 @@ describe("Active Assertion Set", () => {
   });
 });
 
-describe("Action Handler evaluation", () => {
-  it("still requests ungated actions and reports aborted preconditions on aborted hooks", async () => {
+describe("owned Action evaluation", () => {
+  it("skips already-aborted turn-end Assertions before traversal", async () => {
     const signal = AbortSignal.abort();
     const result = await evaluate(
       new HookEvaluation(),
       "turn_end",
       { turnIndex: 1 },
       [
-        actionHandler("always", "turn_end", { type: "interrupt" }),
-        actionHandler("gated", "turn_end", { type: "shutdown" }, {
+        assertionWithAction("always", "turn_end", { type: "interrupt" }),
+        assertionWithAction("gated", "turn_end", { type: "shutdown" }, {
           when: "true",
         }),
       ],
@@ -672,16 +709,8 @@ describe("Action Handler evaluation", () => {
     );
 
     assert.equal(result.outcome, "pass");
-    assert.deepEqual(
-      result.effects
-        .filter((effect) => effect.type === "request-action")
-        .map((effect) => effect.assertionRef),
-      ["local/always"],
-    );
-    assert.match(
-      presentationMessages(result)[0] ?? "",
-      /local\/gated.*precondition did not complete/,
-    );
+    assert.deepEqual(result.effects, []);
+    assert.equal(result.executionReport, undefined);
   });
 
   it("shares one fresh identity between each passing precondition and action request", async () => {
@@ -697,11 +726,11 @@ describe("Action Handler evaluation", () => {
       "tool_call",
       toolCall,
       [
-        actionHandler("first", "tool_call", { type: "interrupt" }, {
+        assertionWithAction("first", "tool_call", { type: "interrupt" }, {
           filter: { toolName: "^bash$" },
           when: identityCheck("first"),
         }),
-        actionHandler("second", "tool_call", { type: "shutdown" }, {
+        assertionWithAction("second", "tool_call", { type: "shutdown" }, {
           when: identityCheck("second"),
         }),
       ],
@@ -715,10 +744,13 @@ describe("Action Handler evaluation", () => {
     assert.match(effects[0]?.runId ?? "", UUID_PATTERN);
     assert.match(effects[1]?.runId ?? "", UUID_PATTERN);
     assert.notEqual(effects[0]?.runId, effects[1]?.runId);
-    assert.deepEqual(result.executionReport?.executions, []);
+    assert.deepEqual(
+      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      ["local/first", "local/second"],
+    );
   });
 
-  it("requests every matching native action independently of shell fail-fast", async () => {
+  it("requests each matching owned Action after aggregate traversal", async () => {
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
@@ -726,18 +758,18 @@ describe("Action Handler evaluation", () => {
       [
         assertion("blocks", "tool_call", "false"),
         assertion("not-run", "tool_call", "true"),
-        actionHandler("message", "tool_call", {
+        assertionWithAction("message", "tool_call", {
           type: "message",
           message: "blocked",
           delivery: "followUp",
         }),
-        actionHandler("miss", "tool_call", { type: "interrupt" }, {
+        assertionWithAction("miss", "tool_call", { type: "interrupt" }, {
           filter: { toolName: "^read$" },
         }),
-        actionHandler("skip", "tool_call", { type: "shutdown" }, {
+        assertionWithAction("skip", "tool_call", { type: "shutdown" }, {
           when: "false",
         }),
-        actionHandler("interrupt", "tool_call", { type: "interrupt" }),
+        assertionWithAction("interrupt", "tool_call", { type: "interrupt" }),
       ],
     );
 
@@ -760,34 +792,150 @@ describe("Action Handler evaluation", () => {
     assert.ok(Object.isFrozen(result.executionReport?.actionRequests));
   });
 
-  it("reports a precondition infrastructure failure and skips the action", async () => {
+  it("lets a failure Action select a precondition infrastructure result", async () => {
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
       [
-        actionHandler("broken-when", "tool_call", { type: "interrupt" }, {
+        assertionWithAction("broken-when", "tool_call", {
+          type: "interrupt",
+          outcome: "block",
+          code: null,
+        }, {
           when: "bad\0command",
         }),
-        actionHandler("sibling", "tool_call", { type: "shutdown" }),
+        assertionWithAction("sibling", "tool_call", { type: "shutdown" }),
       ],
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.outcome, "block");
     assert.deepEqual(result.effects.map((effect) => effect.type), [
-      "present",
+      "request-action",
       "request-action",
     ]);
     assert.deepEqual(
-      result.executionReport?.actionRequests.map((request) => request.assertionRef),
-      ["local/sibling"],
+      result.executionReport?.actionRequests.map((request) => ({
+        ref: request.assertionRef,
+        outcome: request.outcome,
+      })),
+      [
+        { ref: "local/broken-when", outcome: "block" },
+        { ref: "local/sibling", outcome: "pass" },
+      ],
     );
-    assert.match(presentationMessages(result)[0] ?? "", /broken-when.*precondition/);
   });
 
-  it("can react separately to every originating Shell Assertion outcome", async () => {
+  it("uses exact true/false as ordinary accounted command results", async () => {
+    const cwd = caseDirectory("shortcut-results");
+    const result = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 4 },
+      [
+        assertionWithAction("exact-true", "turn_end", {
+          type: "interrupt",
+          code: 0,
+        }),
+        assertionWithAction("exact-false", "turn_end", {
+          type: "shutdown",
+          outcome: "report",
+          code: 1,
+        }, { shell: "false" }),
+        assertion("compound", "turn_end", "false || true"),
+        assertion("not-trimmed", "turn_end", " true && touch ordinary-shell"),
+      ],
+      cwd,
+    );
+
+    assert.equal(result.outcome, "report");
+    assert.equal(existsSync(join(cwd, "ordinary-shell")), true);
+    assert.deepEqual(
+      result.executionReport?.executions.map(({ assertionRef, passed }) => ({
+        assertionRef,
+        passed,
+      })),
+      [
+        { assertionRef: "local/exact-true", passed: true },
+        { assertionRef: "local/exact-false", passed: false },
+        { assertionRef: "local/compound", passed: true },
+        { assertionRef: "local/not-trimmed", passed: true },
+      ],
+    );
+    const requested = result.effects.filter(
+      (effect) => effect.type === "request-action",
+    );
+    assert.deepEqual(
+      requested.map((effect) => ({ ref: effect.assertionRef, action: effect.action })),
+      [
+        { ref: "local/exact-true", action: { type: "interrupt" } },
+        { ref: "local/exact-false", action: { type: "shutdown" } },
+      ],
+      "selector metadata is not part of Action Requests",
+    );
+  });
+
+  it("fails an already-aborted shortcut with code null and selects its failure Action", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [assertionWithAction("aborted", "tool_call", {
+        type: "interrupt",
+        outcome: "block",
+        code: null,
+      })],
+      root,
+      context(root, { signal: AbortSignal.abort() }),
+    );
+
+    assert.equal(result.outcome, "block");
+    assert.equal(result.executionReport?.executions.length, 0);
+    assert.deepEqual(
+      result.executionReport?.actionRequests.map(({ assertionRef, outcome }) => ({
+        assertionRef,
+        outcome,
+      })),
+      [{ assertionRef: "local/aborted", outcome: "block" }],
+    );
+  });
+
+  it("ANDs scalar/list outcome and code selectors against each local result", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [
+        assertionWithAction("matches", "tool_call", {
+          type: "interrupt",
+          outcome: ["pass", "block"],
+          code: [0, 1],
+        }, { shell: "false" }),
+        assertionWithAction("wrong-code", "tool_call", {
+          type: "shutdown",
+          outcome: "block",
+          code: null,
+        }, { shell: "false" }),
+        assertionWithAction("pass-but-code-misses", "tool_call", {
+          type: "compact",
+          outcome: ["pass", "block"],
+          code: [1, null],
+        }),
+      ],
+    );
+
+    assert.equal(result.outcome, "block");
+    assert.deepEqual(
+      result.effects
+        .filter((effect) => effect.type === "request-action")
+        .map((effect) => effect.assertionRef),
+      ["local/matches"],
+    );
+  });
+
+  it("can react separately to every originating Assertion outcome", async () => {
     const watcher = (outcome: "pass" | "block" | "patch" | "cancel" | "report") =>
-      actionHandler("watch", "assert_result", { type: "interrupt" }, {
+      assertionWithAction("watch", "assert_result", { type: "interrupt" }, {
         filter: { outcome },
       });
     const cases = [
@@ -844,8 +992,8 @@ describe("Action Handler evaluation", () => {
       [
         assertion("passes", "turn_end", "true"),
         assertion("fails", "turn_end", "false"),
-        actionHandler("first", "assert_result", { type: "interrupt" }),
-        actionHandler("second", "assert_result", {
+        assertionWithAction("first", "assert_result", { type: "interrupt" }),
+        assertionWithAction("second", "assert_result", {
           type: "emit-custom-event",
           name: "test:event",
           data: { value: 1 },
@@ -954,7 +1102,7 @@ describe("synthetic assert_result phase", () => {
         assertion("wrong-code", "assert_result", "touch bad", {
           filter: { code: 8 },
         }),
-        actionHandler("matching-action", "assert_result", { type: "interrupt" }, {
+        assertionWithAction("matching-action", "assert_result", { type: "interrupt" }, {
           filter: {
             assertionRef: "^local/fails$",
             runId: "^[0-9a-f-]+$",
@@ -962,7 +1110,7 @@ describe("synthetic assert_result phase", () => {
             code: 7,
           },
         }),
-        actionHandler("wrong-action", "assert_result", { type: "shutdown" }, {
+        assertionWithAction("wrong-action", "assert_result", { type: "shutdown" }, {
           filter: { outcome: "r.*" },
         }),
       ],
@@ -990,7 +1138,7 @@ describe("synthetic assert_result phase", () => {
       [
         assertion("origin", "tool_call", "true"),
         assertion("handler", "assert_result", "touch handled"),
-        actionHandler("action", "assert_result", { type: "interrupt" }, {
+        assertionWithAction("action", "assert_result", { type: "interrupt" }, {
           when: "true",
         }),
       ],
@@ -1045,10 +1193,10 @@ describe("synthetic assert_result phase", () => {
         }),
         assertion("fails", "assert_result", "false"),
         assertion("sibling", "assert_result", "touch sibling"),
-        actionHandler("bad-action-filter", "assert_result", { type: "interrupt" }, {
+        assertionWithAction("bad-action-filter", "assert_result", { type: "interrupt" }, {
           filter: { assertionRef: "[" },
         }),
-        actionHandler("action-sibling", "assert_result", { type: "shutdown" }),
+        assertionWithAction("action-sibling", "assert_result", { type: "shutdown" }),
       ],
       cwd,
     );
@@ -1142,7 +1290,7 @@ describe("session policy state", () => {
       toolCall,
       [
         assertion("tool", "tool_call", "true"),
-        actionHandler("tool-action", "tool_call", { type: "interrupt" }),
+        assertionWithAction("tool-action", "tool_call", { type: "interrupt" }),
       ],
     );
     const end = await evaluate(
@@ -1151,16 +1299,16 @@ describe("session policy state", () => {
       {},
       [
         assertion("end", "agent_end", "true"),
-        actionHandler("end-action", "agent_end", { type: "shutdown" }),
+        assertionWithAction("end-action", "agent_end", { type: "shutdown" }),
       ],
     );
     assert.deepEqual(
       tool.executionReport?.executions.map((execution) => execution.assertionRef),
-      ["local/tool"],
+      ["local/tool", "local/tool-action"],
     );
     assert.deepEqual(
       end.executionReport?.executions.map((execution) => execution.assertionRef),
-      ["local/end"],
+      ["local/end", "local/end-action"],
     );
     assert.deepEqual(
       tool.executionReport?.actionRequests.map((request) => request.assertionRef),
@@ -1185,7 +1333,7 @@ describe("session policy state", () => {
         { ...toolCall, toolCallId: "parallel-a" },
         [
           assertion("a", "tool_call", waitFor("a.started", "b.started")),
-          actionHandler("action-a", "tool_call", { type: "interrupt" }),
+          assertionWithAction("action-a", "tool_call", { type: "interrupt" }),
         ],
         cwd,
       ),
@@ -1195,7 +1343,7 @@ describe("session policy state", () => {
         { ...toolCall, toolCallId: "parallel-b" },
         [
           assertion("b", "tool_call", waitFor("b.started", "a.started")),
-          actionHandler("action-b", "tool_call", { type: "shutdown" }),
+          assertionWithAction("action-b", "tool_call", { type: "shutdown" }),
         ],
         cwd,
       ),
@@ -1205,11 +1353,11 @@ describe("session policy state", () => {
     assert.equal(second.outcome, "pass");
     assert.deepEqual(
       first.executionReport?.executions.map((execution) => execution.assertionRef),
-      ["local/a"],
+      ["local/a", "local/action-a"],
     );
     assert.deepEqual(
       second.executionReport?.executions.map((execution) => execution.assertionRef),
-      ["local/b"],
+      ["local/b", "local/action-b"],
     );
     assert.deepEqual(
       first.executionReport?.actionRequests.map((request) => request.assertionRef),
@@ -1234,6 +1382,7 @@ describe("unexpected failures fail closed", () => {
       [
         assertion("completed", "tool_call", "true"),
         assertion("crashes", "tool_call", "true", { filter: invalidFilter }),
+        assertion("later-sibling", "tool_call", "true"),
         assertion(
           "handler",
           "assert_result",
@@ -1247,8 +1396,10 @@ describe("unexpected failures fail closed", () => {
       assert.match(result.reason, /guard failed to execute; call blocked/);
     }
     const records = readFileSync(join(cwd, "completed.log"), "utf8").trim().split("\n");
-    assert.equal(records.length, 1);
+    assert.equal(records.length, 2);
     assert.match(records[0] ?? "", /"assertionRef":"local\/completed"/);
+    assert.match(records[1] ?? "", /"assertionRef":"local\/later-sibling"/);
+    assert.ok(!records.some((record) => record.includes("local/crashes")));
   });
 
   it("suppresses tool results", async () => {

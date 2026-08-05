@@ -61,6 +61,20 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+export type ResultOutcomeSelector =
+  | AssertResultOutcome
+  | readonly AssertResultOutcome[];
+export type ResultCodeSelector =
+  | number
+  | null
+  | readonly (number | null)[];
+
+/** Result fields shared by owned Actions and `assert_result` filters. */
+export interface ReadonlyResultSelector {
+  readonly outcome: ResultOutcomeSelector;
+  readonly code?: ResultCodeSelector;
+}
+
 export interface InterruptAction {
   readonly type: "interrupt";
 }
@@ -88,15 +102,18 @@ export interface EmitCustomEventAction {
   readonly data?: JsonValue;
 }
 
-/** One declarative Pi operation requested by an Action Handler. */
-export type Action =
+/** Delivery payload exposed after an owned Action's selectors are removed. */
+export type ActionRequest =
   | InterruptAction
   | ShutdownAction
   | CompactAction
   | MessageAction
   | EmitCustomEventAction;
 
-export type ActionType = Action["type"];
+/** One outcome-selected Pi operation owned by an Assertion. */
+export type Action = ActionRequest & ReadonlyResultSelector;
+
+export type ActionType = ActionRequest["type"];
 
 export const ACTION_TYPES = [
   "interrupt",
@@ -111,21 +128,14 @@ export function isActionType(value: unknown): value is ActionType {
     (ACTION_TYPES as readonly string[]).includes(value);
 }
 
-export interface PersistedAssert {
+export interface PersistedAssertion {
   description: string;
   hook: Hook;
   filter?: EntryFilter;
   when?: string;
-  shell: string;
-  default?: boolean;
-}
-
-export interface PersistedActionHandler {
-  description: string;
-  hook: Hook;
-  filter?: EntryFilter;
-  when?: string;
-  action: Action;
+  /** Omission is normalized to the canonical `true` command by the catalog. */
+  shell?: string;
+  action?: Action;
   default?: boolean;
 }
 
@@ -135,10 +145,7 @@ export interface PersistedPreset {
   default?: boolean;
 }
 
-export type PersistedEntry =
-  | PersistedAssert
-  | PersistedActionHandler
-  | PersistedPreset;
+export type PersistedEntry = PersistedAssertion | PersistedPreset;
 
 /** Deep-copy JSON data without retaining caller-owned arrays or objects. */
 export function cloneJsonValue(value: JsonValue): JsonValue {
@@ -151,8 +158,12 @@ export function cloneJsonValue(value: JsonValue): JsonValue {
   return value;
 }
 
-/** Copy one validated action configuration. */
-export function cloneAction(action: Action): Action {
+function cloneSelector<T>(value: T | readonly T[]): T | T[] {
+  return Array.isArray(value) ? value.slice() as T[] : value as T;
+}
+
+/** Copy one delivery payload without selector metadata. */
+export function actionRequest(action: Action): ActionRequest {
   switch (action.type) {
     case "interrupt":
       return { type: "interrupt" };
@@ -186,23 +197,39 @@ export function cloneAction(action: Action): Action {
   }
 }
 
-/** Canonical action text shared by detail rendering and fuzzy search. */
+/** Copy one validated owned Action, including its result selectors. */
+export function cloneAction(action: Action): Action {
+  return {
+    ...actionRequest(action),
+    outcome: cloneSelector(action.outcome),
+    ...(action.code === undefined ? {} : { code: cloneSelector(action.code) }),
+  } as Action;
+}
+
+function selectorText<T>(value: T | readonly T[]): string {
+  return Array.isArray(value) ? value.join(", ") : String(value);
+}
+
+/** Canonical Action text shared by detail rendering and fuzzy search. */
 export function actionDetailText(action: Action): string {
+  const selector = `outcome: ${selectorText(action.outcome)}${
+    action.code === undefined ? "" : ` · code: ${selectorText(action.code)}`
+  } · type: `;
   switch (action.type) {
     case "interrupt":
-      return "interrupt";
+      return `${selector}interrupt`;
     case "shutdown":
-      return `shutdown · interrupt: ${action.interrupt ?? false}`;
+      return `${selector}shutdown · interrupt: ${action.interrupt ?? false}`;
     case "compact":
       return action.instructions === undefined
-        ? "compact"
-        : `compact · instructions: ${action.instructions}`;
+        ? `${selector}compact`
+        : `${selector}compact · instructions: ${action.instructions}`;
     case "message":
-      return `message · delivery: ${action.delivery} · triggerTurn: ${
+      return `${selector}message · delivery: ${action.delivery} · triggerTurn: ${
         action.triggerTurn ?? false
       } · message: ${action.message}`;
     case "emit-custom-event":
-      return `emit-custom-event · name: ${action.name}${
+      return `${selector}emit-custom-event · name: ${action.name}${
         action.data === undefined ? "" : ` · data: ${JSON.stringify(action.data)}`
       }`;
   }

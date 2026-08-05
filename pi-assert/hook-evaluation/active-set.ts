@@ -1,6 +1,6 @@
-import type { ActiveExecutable } from "./assertions.js";
+import type { ActiveAssertion } from "./assertions.js";
 
-const assertionsBySet = new WeakMap<ActiveAssertionSet, readonly ActiveExecutable[]>();
+const assertionsBySet = new WeakMap<ActiveAssertionSet, readonly ActiveAssertion[]>();
 const activeSetBrand: unique symbol = Symbol("pi-assert.active-set");
 
 /**
@@ -35,13 +35,13 @@ function cloneNested<T>(value: T, seen = new Map<object, unknown>()): T {
   return Object.freeze(copy) as T;
 }
 
-function copyAssertion(assertion: ActiveExecutable): ActiveExecutable {
+function copyAssertion(assertion: ActiveAssertion): ActiveAssertion {
   return cloneNested({ ...assertion });
 }
 
 /** Copy and runtime-freeze one deterministic Active Assertion Set. */
 export function createActiveAssertionSet(
-  assertions: readonly ActiveExecutable[],
+  assertions: readonly ActiveAssertion[],
 ): ActiveAssertionSet {
   const copied = Object.freeze(assertions.map(copyAssertion));
   const set = Object.freeze({
@@ -55,7 +55,7 @@ export function createActiveAssertionSet(
 /** Private implementation access; not re-exported by the module facade. */
 export function assertionsIn(
   set: ActiveAssertionSet,
-): readonly ActiveExecutable[] {
+): readonly ActiveAssertion[] {
   const assertions = assertionsBySet.get(set);
   if (!assertions) throw new TypeError("Invalid Active Assertion Set");
   return assertions;

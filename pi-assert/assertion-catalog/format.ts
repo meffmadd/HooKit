@@ -81,7 +81,7 @@ export function validateSectionedFile(file: SectionedFile): string | null {
         return `entry ${JSON.stringify(`${source}/${name}`)} ${location} has invalid regex ` +
           `${JSON.stringify(invalidRegex.pattern)}: ${invalidRegex.reason}`;
       }
-      return `entry "${source}/${name}" does not match the shell assertion, Action Handler, or preset schema`;
+      return `entry "${source}/${name}" does not match the Assertion or Preset schema`;
     }
   }
   return null;

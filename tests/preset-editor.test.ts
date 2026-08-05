@@ -54,8 +54,10 @@ function makeAction(name: string, source = "local"): CatalogEntry {
     source,
     description: `desc-${name}`,
     hook: "tool_call",
+    shell: "true",
     action: {
       type: "message",
+      outcome: "pass",
       message: "Review the result",
       delivery: "followUp",
     },
@@ -64,12 +66,12 @@ function makeAction(name: string, source = "local"): CatalogEntry {
 }
 
 function makePanel(
-  executableEntries: CatalogEntry[],
+  assertions: CatalogEntry[],
   selected: Set<string> = new Set(),
   opts: { name?: string; description?: string } = {},
 ): PresetEditorPanel {
   const panel = new PresetEditorPanel(
-    executableEntries,
+    assertions,
     opts.name ?? "my-preset",
     opts.description ?? "A preset.",
     selected,
@@ -93,7 +95,7 @@ function focusedLine(lines: string[]): string | undefined {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("PresetEditorPanel rendering", () => {
-  it("groups executable rules by source (local first, then repos alpha)", () => {
+  it("groups Assertions by source (local first, then repos alpha)", () => {
     const panel = makePanel([
       makeAssert("zeta", "owner/repo"),
       makeAssert("alpha", "local"),
@@ -150,26 +152,26 @@ describe("PresetEditorPanel rendering", () => {
     );
   });
 
-  it("renders Action Handlers as selectable executable rules", () => {
+  it("renders Assertions with owned Actions as selectable", () => {
     const panel = makePanel([makeAction("notify")]);
     const lines = panel.render(100);
     assert.ok(lines.some((line) => plain(line).includes("notify")));
     assert.ok(
-      lines.some((line) => plain(line).includes("action: message")),
-      "detail identifies the Action Handler",
+      lines.some((line) => plain(line).includes("type: message")),
+      "detail identifies the owned Action",
     );
   });
 
-  it("shows 'No executable rules to select' when empty", () => {
+  it("shows 'No Assertions to select' when empty", () => {
     const panel = makePanel([]);
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => plain(l).includes("No executable rules to select")),
+      lines.some((l) => plain(l).includes("No Assertions to select")),
       "empty state message",
     );
   });
 
-  it("excludes presets while retaining both executable rule kinds", () => {
+  it("excludes Presets while retaining all Assertions", () => {
     const preset = {
       name: "other-preset",
       source: "local",
@@ -188,11 +190,11 @@ describe("PresetEditorPanel rendering", () => {
     );
     assert.ok(
       lines.some((l) => plain(l).includes("guard")),
-      "Shell Assertion is in the picker",
+      "shell Assertion is in the picker",
     );
     assert.ok(
       lines.some((l) => plain(l).includes("notify")),
-      "Action Handler is in the picker",
+      "Assertion with an Action is in the picker",
     );
   });
 });

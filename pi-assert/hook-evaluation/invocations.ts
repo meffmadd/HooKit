@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { entryRef, type AssertResultEvent } from "../domain/entry.js";
-import type { ActiveAssertion, ActiveExecutable } from "./assertions.js";
+import { entryRef } from "../domain/entry.js";
+import type { ActiveAssertion } from "./assertions.js";
 import type {
   AssertionFailure,
   HookAdapter,
@@ -9,27 +9,29 @@ import { matchFilter } from "./environment.js";
 import { evaluateShell } from "./shell.js";
 import type {
   AssertionExecution,
+  AssertionResult,
   HookExecutionContext,
   OriginatingAssertionResult,
 } from "./types.js";
 
+export interface InvocationError {
+  readonly assertion: ActiveAssertion;
+  readonly error: unknown;
+}
+
 export interface InvocationBatch {
   readonly executions: AssertionExecution[];
   readonly failures: AssertionFailure[];
-  readonly results: AssertResultEvent[];
-  readonly unexpectedError?: unknown;
+  readonly results: AssertionResult[];
+  readonly unexpectedErrors: InvocationError[];
 }
 
 interface InvocationOptions {
   readonly originatingResult?: OriginatingAssertionResult;
-  readonly continueAfterUnexpected?: (
-    assertion: ActiveAssertion,
-    error: unknown,
-  ) => void | Promise<void>;
 }
 
 export function invocationEnvironment<E>(
-  assertion: Pick<ActiveExecutable, "source" | "name" | "hook">,
+  assertion: Pick<ActiveAssertion, "source" | "name" | "hook">,
   runId: string,
   adapter: HookAdapter<E>,
   event: E,
@@ -47,19 +49,23 @@ export function invocationEnvironment<E>(
 function assertionResult(
   assertion: ActiveAssertion,
   runId: string,
-  outcome: AssertResultEvent["outcome"],
+  outcome: AssertionResult["outcome"],
   code: number | null,
-): AssertResultEvent {
+  originatingResult: OriginatingAssertionResult | undefined,
+): AssertionResult {
   return {
     event: "assert_result",
     assertionRef: entryRef(assertion.source, assertion.name),
     runId,
+    hook: assertion.hook,
     outcome,
     code,
+    ...(assertion.action === undefined ? {} : { action: assertion.action }),
+    ...(originatingResult === undefined ? {} : { originatingResult }),
   };
 }
 
-/** Execute configured Assertion Invocations in deterministic assertion order. */
+/** Execute Assertion Invocations sequentially in deterministic set order. */
 export async function invokeAssertions<E>(
   assertions: readonly ActiveAssertion[],
   adapter: HookAdapter<E>,
@@ -68,21 +74,25 @@ export async function invokeAssertions<E>(
   options: InvocationOptions = {},
 ): Promise<InvocationBatch> {
   if (adapter.skipAssertionsIfAborted && context.signal?.aborted) {
-    return { executions: [], failures: [], results: [] };
+    return {
+      executions: [],
+      failures: [],
+      results: [],
+      unexpectedErrors: [],
+    };
   }
 
   const executions: AssertionExecution[] = [];
   const failures: AssertionFailure[] = [];
-  const results: AssertResultEvent[] = [];
-  const emitsResults = adapter.hook !== "assert_result";
+  const results: AssertionResult[] = [];
+  const unexpectedErrors: InvocationError[] = [];
 
   for (const assertion of assertions) {
     if (assertion.hook !== adapter.hook) continue;
 
     try {
-      const candidate = adapter.candidate(event);
       const matches = adapter.matchesFilter ?? matchFilter;
-      if (!matches(assertion.filter, candidate)) continue;
+      if (!matches(assertion.filter, adapter.candidate(event))) continue;
 
       const runId = randomUUID();
       const env = invocationEnvironment(
@@ -107,17 +117,13 @@ export async function invokeAssertions<E>(
             command: assertion.when,
             result: whenResult,
           });
-          if (emitsResults) {
-            results.push(assertionResult(
-              assertion,
-              runId,
-              adapter.failureAction,
-              null,
-            ));
-          }
-          if (adapter.aggregation === "first") {
-            return { executions, failures, results };
-          }
+          results.push(assertionResult(
+            assertion,
+            runId,
+            adapter.failureAction,
+            null,
+            options.originatingResult,
+          ));
           continue;
         }
         if (!whenResult.passed) continue;
@@ -143,14 +149,13 @@ export async function invokeAssertions<E>(
         });
       }
 
-      if (emitsResults) {
-        results.push(assertionResult(
-          assertion,
-          runId,
-          shellResult.passed ? "pass" : adapter.failureAction,
-          shellResult.code,
-        ));
-      }
+      results.push(assertionResult(
+        assertion,
+        runId,
+        shellResult.passed ? "pass" : adapter.failureAction,
+        shellResult.code,
+        options.originatingResult,
+      ));
 
       if (!shellResult.passed) {
         failures.push({
@@ -159,21 +164,13 @@ export async function invokeAssertions<E>(
           command: assertion.shell,
           result: shellResult,
         });
-        if (adapter.aggregation === "first") {
-          return { executions, failures, results };
-        }
       }
     } catch (error) {
-      if (!options.continueAfterUnexpected) {
-        return { executions, failures, results, unexpectedError: error };
-      }
-      try {
-        await options.continueAfterUnexpected(assertion, error);
-      } catch {
-        // Handler-error presentation is best-effort and siblings still run.
-      }
+      // A broken Assertion has no invented result or Action, but cannot stop
+      // deterministic sibling traversal.
+      unexpectedErrors.push({ assertion, error });
     }
   }
 
-  return { executions, failures, results };
+  return { executions, failures, results, unexpectedErrors };
 }

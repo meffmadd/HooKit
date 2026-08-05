@@ -281,6 +281,7 @@ describe("fetchRuleFile", () => {
           hook: "assert_result",
           action: {
             type: "emit-custom-event",
+            outcome: "pass",
             name: "example:guard-result",
             data: { installed: true },
           },
@@ -303,6 +304,7 @@ describe("fetchRuleFile", () => {
           hook: "assert_result",
           action: {
             type: "emit-custom-event",
+            outcome: "pass",
             name: "example:guard-result",
             data: { installed: true },
           },

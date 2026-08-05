@@ -98,7 +98,7 @@ export async function fetchRuleFiles(
 /**
  * Fetch and parse a single rules/*.json file from a GitHub repo.
  *
- * Returns only schema-valid Shell Assertions, Action Handlers, and Presets.
+ * Returns only schema-valid Assertions and Presets.
  */
 export async function fetchRuleFile(
   repo: string,
@@ -229,23 +229,14 @@ export function clearRepoEntriesCache(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal shape needed to compute a Shell Assertion content signature.
- * Repository entries and catalog assertions satisfy it, so outdated detection
- * stays independent of persistence.
+ * Minimal shape needed to compute a normalized Assertion content signature.
+ * Repository entries may omit shell; catalog assertions always provide it.
  */
-interface SignableAssert {
+interface SignableAssertion {
   description: string;
   hook: string;
-  shell: string;
-  filter?: Record<string, unknown>;
-  when?: string;
-}
-
-/** Minimal shape needed to compute an Action Handler's content signature. */
-interface SignableActionHandler {
-  description: string;
-  hook: string;
-  action: Action;
+  shell?: string;
+  action?: Action;
   filter?: Record<string, unknown>;
   when?: string;
 }
@@ -257,18 +248,15 @@ interface SignablePreset {
 }
 
 /** Union type for content signatures of every catalog entry kind. */
-export type SignableEntry =
-  | SignableAssert
-  | SignableActionHandler
-  | SignablePreset;
+export type SignableEntry = SignableAssertion | SignablePreset;
 
 /**
  * Canonical content signature of an entry, used for outdated detection.
  *
  * Excludes `default` (a local-only preference, never a repo-driven change)
- * and includes only repo-driven fields. Shell Assertions include
- * `description`, `hook`, `shell`, and optional `filter`/`when`; Action Handlers
- * substitute `action` for `shell`; presets include `description` and `preset`.
+ * and includes only repo-driven fields. Assertions include `description`,
+ * `hook`, canonical `shell`, optional owned `action`, `filter`, and `when`;
+ * presets include `description` and `preset`.
  *
  * Omitted optional fields are dropped entirely (never emitted as `undefined`)
  * so a deep-equal of two signatures treats "absent" on both sides as equal.
@@ -294,8 +282,9 @@ export function entryContentSignature(
   const sig: Record<string, unknown> = {
     description: entry.description,
     hook: entry.hook,
-    ...("action" in entry ? { action: entry.action } : { shell: entry.shell }),
+    shell: entry.shell ?? "true",
   };
+  if (entry.action !== undefined) sig.action = entry.action;
   if (entry.filter !== undefined) sig.filter = entry.filter;
   if (entry.when !== undefined) sig.when = entry.when;
   return sig;

@@ -212,7 +212,7 @@ describe("session state Active Assertion Set", () => {
     assert.equal(readFileSync(log, "utf8"), "b\na\n");
   });
 
-  it("expands Action Handlers through presets alongside Shell Assertions", async () => {
+  it("expands Assertions with owned Actions through presets", async () => {
     const { root, global, project, state } = setup("preset-action");
     writeJson(project, {
       local: {
@@ -220,7 +220,7 @@ describe("session state Active Assertion Set", () => {
         notify: {
           description: "notify",
           hook: "tool_call",
-          action: { type: "interrupt" },
+          action: { type: "interrupt", outcome: "pass" },
         },
         bundle: {
           description: "bundle",

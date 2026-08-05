@@ -35,7 +35,7 @@ import {
 import { highlightSegments } from "./fuzzy.js";
 import {
   SectionedPanel,
-  groupExecutablesBySource,
+  groupAssertionsBySource,
   type Group,
 } from "./sectioned-panel.js";
 import {
@@ -54,17 +54,17 @@ import { runPresetEditor } from "./preset-editor.js";
 const PRESETS_SOURCE = "Presets";
 function groupBySource(asserts: CatalogEntry[]): Group[] {
   const presets = asserts.filter(isCatalogPreset);
-  const executable = asserts.filter((a) => !isCatalogPreset(a));
+  const assertions = asserts.filter((a) => !isCatalogPreset(a));
   return [{
     source: PRESETS_SOURCE,
     asserts: presets,
-  }, ...groupExecutablesBySource(executable)];
+  }, ...groupAssertionsBySource(assertions)];
 }
 
 // ---------------------------------------------------------------------------
 // Preset coverage — the reverse of session activation's preset expansion.
 //
-// For each executable rule that is a member of an **active** preset, this maps
+// For each Assertion that is a member of an **active** Preset, this maps
 // `source\x00name` → the names of the active presets that reference it.
 // Mirrors session activation exactly: only active presets contribute, dangling
 // and nested-preset refs are skipped, refs split on the last `/`.  Used by
@@ -138,7 +138,7 @@ export class AssertsPanel extends SectionedPanel {
 
   /**
    * Reverse lookup for dangling-ref detection: `"source/name"` → the installed
-   * executable entry at that ref (presets excluded — a ref to a preset is a
+   * Assertion at that ref (Presets excluded — a ref to a Preset is a
    * nested-preset ref, always dangling for v1).  Lazy-computed once: the
    * panel is recreated after every reload (install/remove/create), and within
    * a panel instance `state.entries` (which asserts exist) never changes —
@@ -158,7 +158,7 @@ export class AssertsPanel extends SectionedPanel {
   }
 
   /**
-   * The refs of preset `a` that don't resolve to an installed executable entry.
+   * The refs of Preset `a` that do not resolve to an installed Assertion.
    * Empty for non-presets and for presets whose every ref resolves.  A preset
    * is `§` (dangling) iff this is non-empty.  Refs split on the last `/`
    * (matches session expansion), but the lookup key is the full `"source/name"`
@@ -627,7 +627,7 @@ export class AssertsPanel extends SectionedPanel {
   /**
    * Contextual warning line shown in the detail block under a focused preset
    * with one or more dangling refs (`§` badge) — lists the refs that don't
-   * resolve to an installed executable entry. Returns `[]` for non-presets and
+   * resolve to an installed Assertion. Returns `[]` for non-Presets and
    * for presets whose every ref resolves, so the detail block is unchanged.
    */
   private danglingDetailLines(a: CatalogEntry): string[] {

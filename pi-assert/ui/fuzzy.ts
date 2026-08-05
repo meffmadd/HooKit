@@ -10,10 +10,9 @@
  */
 
 import type {
-  CatalogActionHandler,
+  CatalogAssertion,
   CatalogEntry,
   CatalogPreset,
-  CatalogShellAssertion,
 } from "../assertion-catalog/index.js";
 import { actionDetailText } from "../domain/entry.js";
 
@@ -206,7 +205,7 @@ export function highlightSegments(query: string, target: string): Segment[] | nu
  * `renderAssertDetail` joins a preset's refs with the same `", "`.
  */
 const FIELDS: {
-  field: keyof CatalogShellAssertion | keyof CatalogActionHandler | keyof CatalogPreset;
+  field: keyof CatalogAssertion | keyof CatalogPreset;
   tier: number;
   coerce?: (v: unknown) => string;
 }[] = [
@@ -217,7 +216,7 @@ const FIELDS: {
   { field: "when", tier: 10_000 },
   { field: "action", tier: 10_000, coerce: (v) =>
     typeof v === "object" && v !== null
-      ? actionDetailText(v as CatalogActionHandler["action"])
+      ? actionDetailText(v as NonNullable<CatalogAssertion["action"]>)
       : "" },
   // A preset's `preset` refs are a string array; `coerce` joins them (with
   // `", "`, matching `renderAssertDetail`'s `asserts:` join) so a search for a

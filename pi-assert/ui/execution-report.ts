@@ -17,7 +17,7 @@ import type {
 } from "../hook-evaluation/index.js";
 
 export const EXECUTION_ENTRY_TYPE = "pi-assert-execution";
-const EXECUTION_ENTRY_VERSION = 2;
+const EXECUTION_ENTRY_VERSION = 3;
 const MAX_LABEL_LENGTH = 512;
 const MAX_ID_LENGTH = 256;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
@@ -43,17 +43,21 @@ export type ExecutionTrigger =
     };
 
 export interface ExecutionEntryData {
-  readonly version: 2;
+  readonly version: 3;
   readonly trigger: ExecutionTrigger;
   readonly executions: readonly AssertionExecution[];
   readonly actionRequests: readonly ActionRequestExecution[];
 }
 
+type ParsedActionRequest = Omit<ActionRequestExecution, "outcome"> & {
+  readonly outcome?: ActionRequestExecution["outcome"];
+};
+
 interface ParsedExecutionEntryData {
-  readonly version: 1 | 2;
+  readonly version: 1 | 2 | 3;
   readonly trigger: ExecutionTrigger;
   readonly executions: readonly AssertionExecution[];
-  readonly actionRequests: readonly ActionRequestExecution[];
+  readonly actionRequests: readonly ParsedActionRequest[];
 }
 
 function cleanText(value: string, maximum: number): string {
@@ -131,6 +135,7 @@ function snapshotActionRequest(
     runId: cleanText(request.runId, MAX_ID_LENGTH) || "unknown",
     hook: request.hook,
     actionType: request.actionType,
+    outcome: request.outcome,
     ...(request.originatingResult === undefined
       ? {}
       : { originatingResult: snapshotOrigin(request.originatingResult) }),
@@ -231,7 +236,10 @@ function parseExecution(value: unknown): AssertionExecution | undefined {
   };
 }
 
-function parseActionRequest(value: unknown): ActionRequestExecution | undefined {
+function parseActionRequest(
+  value: unknown,
+  version: 2 | 3,
+): ParsedActionRequest | undefined {
   if (!isRecord(value)) return undefined;
   const assertionRef = requiredText(value.assertionRef, MAX_LABEL_LENGTH);
   const runId = requiredText(value.runId, MAX_ID_LENGTH);
@@ -247,18 +255,21 @@ function parseActionRequest(value: unknown): ActionRequestExecution | undefined 
     originatingResult = parseOrigin(value.originatingResult);
     if (originatingResult === undefined) return undefined;
   }
+  if (version === 3 && !isAssertResultOutcome(value.outcome)) return undefined;
   return {
     assertionRef,
     runId,
     hook: value.hook,
     actionType: value.actionType,
+    ...(isAssertResultOutcome(value.outcome) ? { outcome: value.outcome } : {}),
     ...(originatingResult === undefined ? {} : { originatingResult }),
   };
 }
 
 function parseEntryData(value: unknown): ParsedExecutionEntryData | undefined {
   if (
-    !isRecord(value) || (value.version !== 1 && value.version !== 2) ||
+    !isRecord(value) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
     !Array.isArray(value.executions)
   ) {
     return undefined;
@@ -275,9 +286,9 @@ function parseEntryData(value: unknown): ParsedExecutionEntryData | undefined {
     if (parsed === undefined) return undefined;
     executions.push(parsed);
   }
-  const actionRequests: ActionRequestExecution[] = [];
+  const actionRequests: ParsedActionRequest[] = [];
   for (const action of actionValues) {
-    const parsed = parseActionRequest(action);
+    const parsed = parseActionRequest(action, value.version as 2 | 3);
     if (parsed === undefined) return undefined;
     actionRequests.push(parsed);
   }
@@ -312,25 +323,28 @@ function executionKey(assertionRef: string, runId: string): string {
 
 interface ExecutionRow {
   readonly execution: AssertionExecution;
-  readonly nested: boolean;
+  readonly depth: number;
 }
 
 interface ActionRow {
-  readonly action: ActionRequestExecution;
-  readonly nested: boolean;
+  readonly action: ParsedActionRequest;
+  readonly depth: number;
 }
 
-interface OriginRow {
-  readonly origin: OriginatingAssertionResult;
+interface ResultRow {
+  readonly result: OriginatingAssertionResult;
+  readonly depth: number;
 }
 
-type ExpandedRow = ExecutionRow | ActionRow | OriginRow;
+type ExpandedRow = ExecutionRow | ActionRow | ResultRow;
 
 function expandedRows(
   executions: readonly AssertionExecution[],
-  actionRequests: readonly ActionRequestExecution[],
+  actionRequests: readonly ParsedActionRequest[],
 ): ExpandedRow[] {
   const executionHandlers = new Map<string, AssertionExecution[]>();
+  const actionHandlers = new Map<string, ParsedActionRequest[]>();
+  const ownedActions = new Map<string, ParsedActionRequest[]>();
   for (const execution of executions) {
     const origin = execution.originatingResult;
     if (origin === undefined) continue;
@@ -339,38 +353,60 @@ function expandedRows(
     group.push(execution);
     executionHandlers.set(key, group);
   }
-  const actionHandlers = new Map<string, ActionRequestExecution[]>();
   for (const action of actionRequests) {
+    const ownKey = executionKey(action.assertionRef, action.runId);
+    const owned = ownedActions.get(ownKey) ?? [];
+    owned.push(action);
+    ownedActions.set(ownKey, owned);
     const origin = action.originatingResult;
     if (origin === undefined) continue;
-    const key = executionKey(origin.assertionRef, origin.runId);
-    const group = actionHandlers.get(key) ?? [];
-    group.push(action);
-    actionHandlers.set(key, group);
+    const originKey = executionKey(origin.assertionRef, origin.runId);
+    const handlers = actionHandlers.get(originKey) ?? [];
+    handlers.push(action);
+    actionHandlers.set(originKey, handlers);
   }
 
   const rows: ExpandedRow[] = [];
-  const consumed = new Set<string>();
+  const consumedOrigins = new Set<string>();
+  const consumedActions = new Set<ParsedActionRequest>();
+  const appendOwnedActions = (key: string, depth: number): void => {
+    for (const action of ownedActions.get(key) ?? []) {
+      rows.push({ action, depth });
+      consumedActions.add(action);
+    }
+  };
   const appendHandlers = (key: string): void => {
     for (const execution of executionHandlers.get(key) ?? []) {
-      rows.push({ execution, nested: true });
+      rows.push({ execution, depth: 1 });
+      appendOwnedActions(
+        executionKey(execution.assertionRef, execution.runId),
+        2,
+      );
     }
     for (const action of actionHandlers.get(key) ?? []) {
-      rows.push({ action, nested: true });
+      if (consumedActions.has(action)) continue;
+      if (action.outcome !== undefined) {
+        rows.push({
+          result: {
+            assertionRef: action.assertionRef,
+            runId: action.runId,
+            outcome: action.outcome,
+          },
+          depth: 1,
+        });
+      }
+      rows.push({ action, depth: action.outcome === undefined ? 1 : 2 });
+      consumedActions.add(action);
     }
   };
 
   for (const execution of executions) {
     if (execution.originatingResult !== undefined) continue;
-    rows.push({ execution, nested: false });
+    rows.push({ execution, depth: 0 });
     const key = executionKey(execution.assertionRef, execution.runId);
+    appendOwnedActions(key, 1);
     appendHandlers(key);
-    consumed.add(key);
-  }
-  for (const action of actionRequests) {
-    if (action.originatingResult === undefined) {
-      rows.push({ action, nested: false });
-    }
+    consumedOrigins.add(key);
   }
 
   const origins = [
@@ -379,10 +415,30 @@ function expandedRows(
   ];
   for (const origin of origins) {
     const key = executionKey(origin.assertionRef, origin.runId);
-    if (consumed.has(key)) continue;
-    rows.push({ origin });
+    if (consumedOrigins.has(key)) continue;
+    rows.push({ result: origin, depth: 0 });
     appendHandlers(key);
-    consumed.add(key);
+    consumedOrigins.add(key);
+  }
+
+  // A precondition infrastructure result can request an Action without a
+  // main command row. Preserve that causal result rather than inventing one.
+  for (const action of actionRequests) {
+    if (consumedActions.has(action)) continue;
+    if (action.outcome !== undefined) {
+      rows.push({
+        result: {
+          assertionRef: action.assertionRef,
+          runId: action.runId,
+          outcome: action.outcome,
+        },
+        depth: 0,
+      });
+      rows.push({ action, depth: 1 });
+    } else {
+      rows.push({ action, depth: 0 });
+    }
+    consumedActions.add(action);
   }
   return rows;
 }
@@ -393,12 +449,14 @@ function isExecutionRow(row: ExpandedRow): row is ExecutionRow {
 
 function renderExpandedRows(
   executions: readonly AssertionExecution[],
-  actionRequests: readonly ActionRequestExecution[],
+  actionRequests: readonly ParsedActionRequest[],
   theme: Theme,
 ): string[] {
   const rows = expandedRows(executions, actionRequests);
-  const labels = rows.filter(isExecutionRow).map(({ execution, nested }) =>
-    `${nested ? "  ↳ " : ""}${execution.passed ? "✓" : "✗"} ${execution.assertionRef}`
+  const prefixFor = (depth: number): string =>
+    depth === 0 ? "" : `${"  ".repeat(depth)}↳ `;
+  const labels = rows.filter(isExecutionRow).map(({ execution, depth }) =>
+    `${prefixFor(depth)}${execution.passed ? "✓" : "✗"} ${execution.assertionRef}`
   );
   const durationColumn = labels.reduce(
     (maximum, label) => Math.max(maximum, visibleWidth(label)),
@@ -407,22 +465,23 @@ function renderExpandedRows(
 
   let labelIndex = 0;
   return rows.map((row) => {
-    if ("origin" in row) {
+    if ("result" in row) {
+      const prefix = prefixFor(row.depth);
       return theme.fg(
         "dim",
-        `  ${row.origin.assertionRef} · ${row.origin.outcome} result`,
+        `${prefix}${row.result.assertionRef} · ${row.result.outcome} result`,
       );
     }
     if ("action" in row) {
-      const prefix = row.nested ? "  ↳ " : "";
+      const prefix = prefixFor(row.depth);
       return `${prefix}${theme.fg("accent", "→")} ${
         theme.fg("text", row.action.assertionRef)
       }${theme.fg("dim", ` · ${row.action.actionType} requested`)}`;
     }
 
-    const { execution, nested } = row;
+    const { execution, depth } = row;
     const plainLabel = labels[labelIndex++]!;
-    const prefix = nested ? "  ↳ " : "";
+    const prefix = prefixFor(depth);
     const glyph = execution.passed
       ? theme.fg("success", "✓")
       : theme.fg("error", "✗");

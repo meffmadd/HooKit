@@ -32,17 +32,30 @@ const MANAGED_ENVIRONMENT_KEYS = [
 export interface ShellResult {
   readonly passed: boolean;
   readonly code: number | null;
-  /** Whether /bin/sh actually spawned, as opposed to setup failing first. */
+  /** Whether the command started for execution accounting (virtual or real). */
   readonly started: boolean;
 }
 
-/** Execute through the real local /bin/sh with bounded runtime. */
+/**
+ * Evaluate one command. Exact `true` and `false` are normal, accounted
+ * command results that avoid spawning /bin/sh; every other string uses exec.
+ */
 export function evaluateShell(
   shell: string,
   env: Record<string, string>,
   signal: AbortSignal | undefined,
   cwd: string,
 ): Promise<ShellResult> {
+  if (signal?.aborted) {
+    return Promise.resolve({ passed: false, code: null, started: false });
+  }
+  if (shell === "true") {
+    return Promise.resolve({ passed: true, code: 0, started: true });
+  }
+  if (shell === "false") {
+    return Promise.resolve({ passed: false, code: 1, started: true });
+  }
+
   return new Promise<ShellResult>((resolve) => {
     const inherited = { ...process.env };
     for (const key of MANAGED_ENVIRONMENT_KEYS) delete inherited[key];

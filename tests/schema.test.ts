@@ -32,23 +32,24 @@ describe("schema self-validation", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// Runtime/schema parity for Action Handlers
+// Runtime/schema parity for owned Actions
 // ═══════════════════════════════════════════════════════════════════
 
-describe("Action Handler runtime/schema parity", () => {
+describe("owned Action runtime/schema parity", () => {
   const actionCases: Array<{ action: unknown; expected: boolean }> = [
-    { action: { type: "interrupt" }, expected: true },
-    { action: { type: "shutdown" }, expected: true },
-    { action: { type: "shutdown", interrupt: true }, expected: true },
-    { action: { type: "compact" }, expected: true },
-    { action: { type: "compact", instructions: "Keep decisions" }, expected: true },
+    { action: { type: "interrupt", outcome: "pass" }, expected: true },
+    { action: { type: "shutdown", outcome: ["pass", "block"], code: [0, 1] }, expected: true },
+    { action: { type: "shutdown", outcome: "block", code: null, interrupt: true }, expected: true },
+    { action: { type: "compact", outcome: "pass" }, expected: true },
+    { action: { type: "compact", outcome: "pass", instructions: "Keep decisions" }, expected: true },
     {
-      action: { type: "message", message: "Now", delivery: "steer" },
+      action: { type: "message", outcome: "pass", message: "Now", delivery: "steer" },
       expected: true,
     },
     {
       action: {
         type: "message",
+        outcome: "pass",
         message: "Later",
         delivery: "followUp",
         triggerTurn: true,
@@ -56,28 +57,36 @@ describe("Action Handler runtime/schema parity", () => {
       expected: true,
     },
     {
-      action: { type: "message", message: "Next", delivery: "nextTurn" },
+      action: { type: "message", outcome: "pass", message: "Next", delivery: "nextTurn" },
       expected: true,
     },
     {
       action: {
         type: "emit-custom-event",
+        outcome: "pass",
         name: "example:event",
         data: { nested: [true, 1, null] },
       },
       expected: true,
     },
+    { action: { type: "interrupt" }, expected: false },
+    { action: { type: "interrupt", outcome: [] }, expected: false },
+    { action: { type: "interrupt", outcome: "pass", code: [] }, expected: false },
+    { action: { type: "interrupt", outcome: "patch" }, expected: false },
+    { action: { type: "interrupt", outcome: "pass", code: 1 }, expected: false },
+    { action: { type: "interrupt", outcome: "block", code: 0 }, expected: false },
     {
       action: {
         type: "message",
+        outcome: "pass",
         message: "Invalid",
         delivery: "nextTurn",
         triggerTurn: true,
       },
       expected: false,
     },
-    { action: { type: "interrupt", extra: true }, expected: false },
-    { action: { type: "emit-custom-event", name: "   " }, expected: false },
+    { action: { type: "interrupt", outcome: "pass", extra: true }, expected: false },
+    { action: { type: "emit-custom-event", outcome: "pass", name: "   " }, expected: false },
   ];
 
   for (const [index, { action, expected }] of actionCases.entries()) {
@@ -88,7 +97,7 @@ describe("Action Handler runtime/schema parity", () => {
         action,
       };
       const schemaAccepts = validate({ local: { rule: entry } });
-      const runtimeAccepts = validateRuleEntry(entry)?.kind === "action";
+      const runtimeAccepts = validateRuleEntry(entry)?.kind === "assert";
       assert.equal(schemaAccepts, expected, JSON.stringify(validate.errors));
       assert.equal(runtimeAccepts, expected);
     });
@@ -623,7 +632,7 @@ describe("validate", () => {
       expected: false,
     },
 
-    // ── Action Handler entries ──────────────────────────────────────
+    // ── Assertions with owned Actions ───────────────────────────────
 
     ...[
       { type: "interrupt" },
@@ -646,7 +655,7 @@ describe("validate", () => {
         data: { nested: [true, 2, null] },
       },
     ].map((action, index) => ({
-      label: `accepts Action Handler variant ${index}`,
+      label: `accepts owned Action variant ${index}`,
       config: {
         local: {
           action: {
@@ -654,7 +663,7 @@ describe("validate", () => {
             hook: "tool_call",
             filter: { toolName: "^bash$" },
             when: "true",
-            action,
+            action: { outcome: "pass", ...action },
             default: true,
           },
         },
@@ -670,6 +679,7 @@ describe("validate", () => {
             hook: "tool_call",
             action: {
               type: "message",
+              outcome: "pass",
               message: "bad",
               delivery: "nextTurn",
               triggerTurn: true,
@@ -686,7 +696,7 @@ describe("validate", () => {
           action: {
             description: "d",
             hook: "tool_call",
-            action: { type: "interrupt", extra: true },
+            action: { type: "interrupt", outcome: "pass", extra: true },
           },
         },
       },
@@ -699,25 +709,29 @@ describe("validate", () => {
           action: {
             description: "d",
             hook: "tool_call",
-            action: { type: "emit-custom-event", name: "   " },
+            action: {
+              type: "emit-custom-event",
+              outcome: "pass",
+              name: "   ",
+            },
           },
         },
       },
       expected: false,
     },
     {
-      label: "rejects an entry carrying both shell and action",
+      label: "accepts one Assertion carrying both shell and Action",
       config: {
         local: {
           ambiguous: {
             description: "d",
             hook: "tool_call",
             shell: "true",
-            action: { type: "interrupt" },
+            action: { type: "interrupt", outcome: "pass" },
           },
         },
       },
-      expected: false,
+      expected: true,
     },
     {
       label: "rejects an inert entry without shell, action, or preset",
@@ -727,14 +741,14 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "accepts an assert_result Action Handler",
+      label: "accepts an assert_result Assertion with an owned Action",
       config: {
         local: {
           action: {
             description: "d",
             hook: "assert_result",
             filter: { outcome: ["block", "patch"], code: [1, null] },
-            action: { type: "interrupt" },
+            action: { type: "interrupt", outcome: "pass" },
           },
         },
       },

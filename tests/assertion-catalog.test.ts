@@ -75,7 +75,7 @@ function localAction(
   return {
     description: "Local action",
     hook: "tool_call",
-    action,
+    action: { outcome: "pass", ...action },
     ...extra,
   };
 }
@@ -149,10 +149,11 @@ describe("Assertion Catalog creation", () => {
     assert.equal("path" in shared, false, "storage provenance is not exposed");
   });
 
-  it("loads and clones validated Action Handlers without storage provenance", () => {
+  it("loads and clones normalized Assertions with owned Actions", () => {
     const paths = locations("actions");
     const action = {
       type: "emit-custom-event" as const,
+      outcome: "pass" as const,
       name: "test:event",
       data: { nested: [1, true] },
     };
@@ -173,6 +174,7 @@ describe("Assertion Catalog creation", () => {
     const handler = find(loaded, id("local", "handler"));
     assert.ok(handler && "action" in handler);
     assert.deepEqual(handler.action, action);
+    assert.equal(handler.shell, "true");
     assert.notStrictEqual(handler.action, action);
     assert.equal(handler.default, true);
     assert.equal("path" in handler, false);
@@ -337,6 +339,30 @@ describe("Assertion Catalog mutations", () => {
     );
   });
 
+  it("canonicalizes an omitted shell to true in snapshots and persistence", () => {
+    const paths = locations("canonical-action-shell");
+    writeJson(paths.project!, {});
+    const initial = catalog(AssertionCatalog.open(paths));
+    const actionOnly = localAction({ type: "interrupt" });
+
+    const fresh = catalog(initial.mutate({
+      type: "install",
+      entries: [{ identity: id("local", "notify"), entry: actionOnly }],
+    }));
+    const installed = find(fresh, id("local", "notify"));
+    assert.ok(installed && "shell" in installed && "action" in installed);
+    assert.equal(installed.shell, "true");
+    assert.deepEqual(
+      (readJson(paths.project!).local as Record<string, unknown>).notify,
+      {
+        description: "Local action",
+        hook: "tool_call",
+        shell: "true",
+        action: { type: "interrupt", outcome: "pass" },
+      },
+    );
+  });
+
   it("independently validates mutation inputs and leaves disk unchanged on failure", () => {
     const paths = locations("input-validation");
     writeJson(paths.project!, { local: { keep: localShell() } });
@@ -483,12 +509,17 @@ describe("Assertion Catalog mutations", () => {
     assert.deepEqual((project.local as Record<string, unknown>).handler, {
       description: "Local action",
       hook: "tool_call",
-      action: { type: "shutdown", interrupt: true },
+      shell: "true",
+      action: { type: "shutdown", outcome: "pass", interrupt: true },
       default: true,
     });
     const handler = find(current, id("local", "handler"));
     assert.ok(handler && "action" in handler);
-    assert.deepEqual(handler.action, { type: "shutdown", interrupt: true });
+    assert.deepEqual(handler.action, {
+      type: "shutdown",
+      outcome: "pass",
+      interrupt: true,
+    });
     assert.equal(handler.default, true);
   });
 
