@@ -7,6 +7,7 @@ import { clearRepoEntriesCache } from "./installer.js";
 import type { NativeHook } from "./domain/entry.js";
 import {
   HookEvaluation,
+  type AssertionExecutionReport,
   type EvaluationEffect,
   type HookEvaluationResult,
   type HookEventMap,
@@ -16,7 +17,7 @@ import {
 import { registerAssertsCommand } from "./ui/asserts.js";
 import {
   EXECUTION_ENTRY_TYPE,
-  executionEntryData,
+  ExecutionReporter,
   renderExecutionEntry,
   type ExecutionTrigger,
 } from "./ui/execution-report.js";
@@ -141,6 +142,12 @@ function executionTrigger(
 export default function (pi: ExtensionAPI) {
   const state = new AssertsState(pi);
   const hookEvaluation = new HookEvaluation();
+  const executionReporter = new ExecutionReporter({
+    now: () => performance.now(),
+    append: (entry) => {
+      pi.appendEntry(EXECUTION_ENTRY_TYPE, entry);
+    },
+  });
 
   try {
     pi.registerEntryRenderer(EXECUTION_ENTRY_TYPE, renderExecutionEntry);
@@ -185,6 +192,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_tree", (_event, ctx) => {
     state.restore(ctx);
     state.updateStatus(ctx);
+  });
+
+  pi.on("session_shutdown", () => {
+    executionReporter.flush();
   });
 
   registerAssertsCommand(pi, state);
@@ -301,26 +312,25 @@ export default function (pi: ExtensionAPI) {
     event: HookEventMap[H],
     ctx: PiExtensionContext,
   ): Promise<HookEvaluationResult<H>> {
-    // Both values are captured synchronously at callback entry. Activation or
-    // rich Pi-context changes during awaits apply only to the next evaluation.
-    const activeSet = state.activeAssertionSet();
-    const context = assertionContext(pi, ctx);
-    const result = await hookEvaluation.evaluate(hook, event, context, activeSet);
-    if (result.executionReport !== undefined) {
-      try {
-        pi.appendEntry(
-          EXECUTION_ENTRY_TYPE,
-          executionEntryData(
-            executionTrigger(hook, event),
-            result.executionReport,
-          ),
-        );
-      } catch {
-        // Durable observability is best-effort; ordered feedback still follows.
-      }
+    // The observation opens at callback entry and covers every pi-assert owned
+    // blocking step: capture, Evaluation, effect delivery, and feedback.
+    const observation = executionReporter.begin(hook, executionTrigger(hook, event));
+    let result: HookEvaluationResult<H>;
+    let accounting: AssertionExecutionReport | undefined;
+    try {
+      // Both values are captured synchronously at callback entry. Activation or
+      // rich Pi-context changes during awaits apply only to the next evaluation.
+      const activeSet = state.activeAssertionSet();
+      const context = assertionContext(pi, ctx);
+      result = await hookEvaluation.evaluate(hook, event, context, activeSet);
+      accounting = result.executionReport;
+      await deliverEffects(result.effects, ctx);
+      await displayControlOutcome(result, ctx);
+    } finally {
+      // Completion must also happen on an unexpected escape so an open
+      // observation can never poison later reporting.
+      executionReporter.complete(observation, accounting);
     }
-    await deliverEffects(result.effects, ctx);
-    await displayControlOutcome(result, ctx);
     return result;
   }
 

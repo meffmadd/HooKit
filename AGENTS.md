@@ -8,9 +8,10 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
 - **`pi-assert/index.ts`** — thin Pi adapter. Authorizes catalog storage after
   checking project trust, loads session state, snapshots Pi's rich callback
   context onto bounded scalar metadata, captures one Active Assertion Set,
-  attributes and appends per-trigger execution entries, translates explicit
-  Hook Evaluation outcomes into Pi callbacks, and delivers ordered semantic
-  effects best-effort. It maps delivery-neutral Action Requests onto ordinary
+  brackets each native callback with the session ExecutionReporter (wave
+  collection + late append), translates explicit Hook Evaluation outcomes into
+  Pi callbacks, and delivers ordered semantic effects best-effort. It maps
+  delivery-neutral Action Requests onto ordinary
   Pi context/API operations; it owns no catalog or hook policy.
 - **`pi-assert/assertion-catalog/`** — the session-scoped deep Assertion Catalog
   module. Its facade exposes immutable `AssertionCatalog` snapshots, entries
@@ -46,11 +47,19 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   pure outdated classification and picker helpers. It performs no local
   persistence; fetched entries are submitted to Assertion Catalog mutations.
 - **`pi-assert/ui/execution-report.ts`** — the one defensive custom-entry
-  payload snapshot and renderer for durable context-neutral per-trigger
-  execution summaries. It owns the inset custom-message box, configured-key
-  collapsed hint, expanded presentation, bounded persisted trigger metadata,
-  duration alignment, and synthetic-handler nesting; Pi owns the global
-  expansion binding and session history.
+  module for durable context-neutral Execution Reports. It owns the
+  session-scoped `ExecutionReporter` (brackets every callback with
+  `begin`/`complete`, assigns segment order at `begin`, collects consecutive
+  Hook Evaluations for the same tool hook into one Execution Wave that flushes
+  a single report at the next hook's entry, appends ordinary hooks immediately, waits
+  for `session_shutdown` to flush a pending wave, and calculates the
+  non-negative critical-path interval as the serial union for `tool_call`, the
+  `max(end) − max(start)` tail for `tool_result`, and `end − start` otherwise)
+  plus the shared defensive renderer (per-tool collapsed breakdown using
+  first-seen tool order, per-segment dim headers, `✓/✗` nested rows,
+  synthetic-handler nesting, configured-key collapsed hint, inset custom
+  message box). Pi owns the global expansion binding and session history; the
+  thin adapter wires the append callback and flushes on shutdown.
 - **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail and an

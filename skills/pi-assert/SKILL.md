@@ -198,9 +198,13 @@ comparison includes canonical shell and the owned Action but excludes local
 
 ## Reporting
 
-Every event that records a main command or requests an Action appends one
-bounded execution summary. Optimized commands count and render normally;
-preconditions do not count separately. Owned Actions nest beneath their local
-result, while synthetic work remains associated with its origin. Durable Action
+Every event that records a main command or requests an Action is observed.
+Consecutive Hook Evaluations for `tool_call` or `tool_result` in one Execution
+Wave are combined into a single bounded Execution Report that flushes at the
+next hook's entry; ordinary hooks append their report immediately. Optimized commands
+count and render
+normally; preconditions do not count separately. Owned Actions nest beneath
+their local result, while synthetic work remains associated with its origin.
+Durable Action
 rows retain only bounded identity/type/hook/run/outcome/origin metadata—not
 message bodies, instructions, event data, rich Pi objects, or storage paths.

@@ -108,13 +108,66 @@ function renderEntry(
   return component.render(width).map((line) => line.trimEnd()).join("\n");
 }
 
+function catalogCtx(cwd: string): ExtensionContext {
+  return {
+    cwd,
+    hasUI: true,
+    isProjectTrusted: () => true,
+    sessionManager: { getBranch: () => [] },
+    ui: {
+      theme: { fg: (_color: string, text: string) => text },
+      setStatus: () => {},
+      notify: () => {},
+    },
+  } as unknown as ExtensionContext;
+}
+
+function toolCallEvent(toolName: string, toolCallId: string): Record<string, unknown> {
+  return { toolName, toolCallId, input: {} };
+}
+
+function toolResultEvent(
+  toolName: string,
+  toolCallId: string,
+  content: Array<{ type: "text"; text: string }> = [{ type: "text", text: "ok" }],
+): Record<string, unknown> {
+  return { toolName, toolCallId, input: {}, content, isError: false, details: {} };
+}
+
+async function startSession(
+  harness: ExtensionHarness,
+  ctx: ExtensionContext,
+  entries: unknown,
+): Promise<void> {
+  const path = projectFilePath(ctx.cwd as string);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(entries));
+  registerExtension(harness.pi);
+  await harness.handler("session_start")(
+    { type: "session_start", reason: "startup" },
+    ctx,
+  );
+}
+
+async function withTemporaryHome(
+  prefix: string,
+  run: (root: string) => Promise<void>,
+): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const previousHome = process.env.HOME;
+  process.env.HOME = root;
+  try {
+    await run(root);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("index catalog authorization", () => {
   it("omits untrusted project storage before catalog creation", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-untrusted-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-untrusted-", async (root) => {
       const cwd = join(root, "workspace");
       const globalPath = globalFilePath();
       mkdirSync(dirname(globalPath), { recursive: true });
@@ -166,24 +219,183 @@ describe("index catalog authorization", () => {
       assert.ok(!notifications.some((message) => message.includes("failed to parse")));
       assert.ok(notifications.some((message) => message.includes("rejected bash")));
       assert.equal(readFileSync(projectPath, "utf8"), "{ malformed and untrusted");
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
 
 describe("index execution entries", () => {
-  it("appends one context-neutral, expandable entry per tool-call event", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-executions-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
+  it("appends one Execution Report for a tool_call Execution Wave before result processing", async () => {
+    await withTemporaryHome("pi-assert-index-wave-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          passes: {
+            description: "observe successful checks",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          "tool-result": {
+            description: "observe result checks",
+            hook: "tool_result",
+            shell: "true",
+            default: true,
+          },
+        },
+      });
 
-    try {
-      const path = projectFilePath(root);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify({
+      // Five tool_call Hook Evaluations form one Execution Wave before any result.
+      for (const toolCallId of ["call-1", "call-2", "call-3", "call-4", "call-5"]) {
+        const result = await harness.handler("tool_call")(
+          toolCallEvent("read", toolCallId),
+          ctx,
+        );
+        assert.equal(result, undefined);
+      }
+      // The wave stays pending: nothing is appended yet.
+      assert.equal(harness.entries.length, 0);
+      assert.equal(harness.messages.length, 0);
+
+      // The first tool_result callback flushes one call report.
+      const result = await harness.handler("tool_result")(
+        toolResultEvent("read", "call-1"),
+        ctx,
+      );
+      assert.equal(result, undefined);
+
+      assert.equal(harness.entries.length, 1);
+      const callData = harness.entries[0]?.data as {
+        hook: string;
+        criticalPathMs: number;
+        segments: Array<{
+          trigger: { event: string; toolName: string; toolCallId: string };
+          executions: Array<{ assertionRef: string; passed: boolean }>;
+          actionRequests: unknown[];
+        }>;
+      };
+      assert.equal(callData.hook, "tool_call");
+      assert.equal(typeof callData.criticalPathMs, "number");
+      assert.equal(callData.segments.length, 5);
+      assert.deepEqual(
+        callData.segments.map((segment) => segment.trigger.toolCallId),
+        ["call-1", "call-2", "call-3", "call-4", "call-5"],
+      );
+      for (const segment of callData.segments) {
+        assert.equal(segment.trigger.event, "tool_call");
+        assert.equal(segment.executions.length, 1);
+        assert.equal(segment.executions[0]?.assertionRef, "local/passes");
+        assert.equal(segment.executions[0]?.passed, true);
+      }
+
+      const collapsed = renderEntry(harness, 0, false);
+      assert.match(collapsed, /pi-assert ran 5 commands in \d+ms · tool_call read ×5/);
+      assert.ok(!collapsed.includes("local/passes"), "collapsed omits refs");
+      assert.ok(!collapsed.includes("call-1"), "collapsed omits call ids");
+      assert.match(collapsed, /\(ctrl\+o to expand\)/);
+
+      const expanded = renderEntry(harness, 0, true);
+      assert.match(expanded, /tool_call read · id call-1/);
+      assert.match(expanded, /tool_call read · id call-5/);
+      assert.match(expanded, /✓ local\/passes\s+\d+ms/);
+      assert.ok(!expanded.includes("to expand"));
+    });
+  });
+
+  it("flushes a tool_result Execution Wave at a turn_end boundary", async () => {
+    await withTemporaryHome("pi-assert-index-results-wave-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          redact: {
+            description: "observe successful result checks",
+            hook: "tool_result",
+            shell: "true",
+            default: true,
+          },
+        },
+      });
+
+      for (const toolCallId of ["r1", "r2", "r3"]) {
+        const result = await harness.handler("tool_result")(
+          toolResultEvent("bash", toolCallId),
+          ctx,
+        );
+        assert.equal(result, undefined);
+      }
+      assert.equal(harness.entries.length, 0);
+
+      // turn_end has no matching assertion here but still flushes the wave.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
+      assert.equal(harness.entries.length, 1);
+      const data = harness.entries[0]?.data as {
+        hook: string;
+        segments: Array<{ trigger: { toolCallId: string } }>;
+      };
+      assert.equal(data.hook, "tool_result");
+      assert.deepEqual(
+        data.segments.map((segment) => segment.trigger.toolCallId),
+        ["r1", "r2", "r3"],
+      );
+      assert.match(
+        renderEntry(harness, 0, false),
+        /pi-assert ran 3 commands in \d+ms · tool_result bash ×3/,
+      );
+    });
+  });
+
+  it("keeps alternating sequential tool_call/tool_result callbacks as separate reports", async () => {
+    await withTemporaryHome("pi-assert-index-alternating-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          "call-check": {
+            description: "observe calls",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          "result-check": {
+            description: "observe results",
+            hook: "tool_result",
+            shell: "true",
+            default: true,
+          },
+        },
+      });
+
+      for (const toolCallId of ["c1", "c2"]) {
+        await harness.handler("tool_call")(toolCallEvent("bash", toolCallId), ctx);
+        await harness.handler("tool_result")(
+          toolResultEvent("bash", toolCallId),
+          ctx,
+        );
+      }
+      // The final tool_result wave is still pending until the next boundary.
+      assert.equal(harness.entries.length, 3);
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
+
+      assert.equal(harness.entries.length, 4);
+      const hooks = harness.entries.map((entry) => (entry.data as { hook: string }).hook);
+      assert.deepEqual(hooks, [
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+      ]);
+      for (const entry of harness.entries) {
+        assert.equal((entry.data as { segments: unknown[] }).segments.length, 1);
+      }
+    });
+  });
+
+  it("renders a lone tool report and an ordinary turn_end report with the common shape", async () => {
+    await withTemporaryHome("pi-assert-index-shapes-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
         local: {
           passes: {
             description: "observe successful checks",
@@ -204,100 +416,44 @@ describe("index execution entries", () => {
             default: true,
           },
         },
-      }));
-      const ctx = {
-        cwd: root,
-        hasUI: true,
-        isProjectTrusted: () => true,
-        sessionManager: { getBranch: () => [] },
-        ui: {
-          theme: { fg: (_color: string, text: string) => text },
-          setStatus: () => {},
-          notify: () => {},
-        },
-      } as unknown as ExtensionContext;
+      });
 
-      const harness = extensionHarness();
-      registerExtension(harness.pi);
-      await harness.handler("session_start")(
-        { type: "session_start", reason: "startup" },
+      const callResult = await harness.handler("tool_call")(
+        toolCallEvent("read", "call-1"),
         ctx,
       );
-
-      for (const toolCallId of ["call-1", "call-2"]) {
-        const result = await harness.handler("tool_call")(
-          { toolName: "bash", toolCallId, input: { command: "echo hi" } },
-          ctx,
-        );
-        assert.equal(result, undefined);
-      }
-
-      assert.equal(harness.entries.length, 2);
-      assert.equal(harness.messages.length, 0);
-      const firstData = harness.entries[0]?.data as {
-        trigger: { event: string; toolName: string; toolCallId: string };
-        executions: Array<{
-          assertionRef: string;
-          durationMs: number;
-          passed: boolean;
-        }>;
-      };
-      assert.deepEqual(firstData.trigger, {
-        event: "tool_call",
-        toolName: "bash",
-        toolCallId: "call-1",
-      });
-      assert.equal(firstData.executions.length, 1);
-      assert.equal(firstData.executions[0]?.assertionRef, "local/passes");
-      assert.equal(firstData.executions[0]?.passed, true);
-      assert.ok((firstData.executions[0]?.durationMs ?? -1) >= 0);
-
-      const collapsed = renderEntry(harness, 0, false);
-      assert.match(
-        collapsed,
-        /^\n pi-assert ran 1 command in \d+ms · tool_call bash \(ctrl\+o to expand\)\n$/,
-      );
-      assert.ok(!collapsed.includes("local/passes"));
-      assert.ok(!collapsed.includes("call-1"));
-
-      const expanded = renderEntry(harness, 0, true);
-      assert.match(expanded, /^\n pi-assert ran 1 command/m);
-      assert.match(expanded, /\n   tool-call id: call-1/);
-      assert.match(expanded, /✓ local\/passes\s+\d+ms/);
-      assert.ok(!expanded.includes("to expand"));
-      assert.equal(
-        firstData.executions.reduce(
-          (total, execution) => total + execution.durationMs,
-          0,
-        ),
-        Number(collapsed.match(/in (\d+)ms/)?.[1]),
-      );
+      assert.equal(callResult, undefined);
+      assert.equal(harness.entries.length, 0);
 
       await harness.handler("turn_end")({ turnIndex: 2 }, ctx);
-      assert.equal(harness.entries.length, 3);
+      assert.equal(harness.entries.length, 2);
+
+      const lone = renderEntry(harness, 0, false);
       assert.match(
-        renderEntry(harness, 2, false),
-        /^\n pi-assert ran 2 commands in \d+ms · turn_end 2 \(ctrl\+o to expand\)\n$/,
+        lone,
+        /pi-assert ran 1 command in \d+ms · tool_call read ×1 \(ctrl\+o to expand\)/,
       );
-      const expandedTurn = renderEntry(harness, 2, true);
-      assert.match(expandedTurn, /✓ local\/turn-pass\s+\d+ms/);
-      assert.match(expandedTurn, /✗ local\/turn-fail\s+\d+ms/);
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+      const loneExpanded = renderEntry(harness, 0, true);
+      assert.match(loneExpanded, /tool_call read · id call-1/);
+      assert.match(loneExpanded, /✓ local\/passes\s+\d+ms/);
+      assert.ok(!loneExpanded.includes("to expand"));
+
+      const turn = renderEntry(harness, 1, false);
+      assert.match(
+        turn,
+        /pi-assert ran 2 commands in \d+ms · turn_end 2 \(ctrl\+o to expand\)/,
+      );
+      const turnExpanded = renderEntry(harness, 1, true);
+      assert.match(turnExpanded, /✓ local\/turn-pass\s+\d+ms/);
+      assert.match(turnExpanded, /✗ local\/turn-fail\s+\d+ms/);
+    });
   });
 
   it("does not append entries for filter misses or ordinary when skips", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-skips-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
-      const path = projectFilePath(root);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify({
+    await withTemporaryHome("pi-assert-index-skips-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
         local: {
           miss: {
             description: "different tool",
@@ -314,45 +470,20 @@ describe("index execution entries", () => {
             default: true,
           },
         },
-      }));
-      const ctx = {
-        cwd: root,
-        hasUI: true,
-        isProjectTrusted: () => true,
-        sessionManager: { getBranch: () => [] },
-        ui: {
-          theme: { fg: (_color: string, text: string) => text },
-          setStatus: () => {},
-          notify: () => {},
-        },
-      } as unknown as ExtensionContext;
-      const harness = extensionHarness();
-      registerExtension(harness.pi);
-      await harness.handler("session_start")(
-        { type: "session_start", reason: "startup" },
-        ctx,
-      );
-      await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "skipped", input: {} },
-        ctx,
-      );
+      });
+
+      await harness.handler("tool_call")(toolCallEvent("bash", "skipped"), ctx);
+      // Flushing an entirely empty wave produces no entry.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.deepEqual(harness.entries, []);
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("persists bounded mixed summaries and nests synthetic actions under their origin", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-mixed-actions-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
-      const path = projectFilePath(root);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify({
+    await withTemporaryHome("pi-assert-index-mixed-actions-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
         local: {
           origin: {
             description: "origin",
@@ -383,29 +514,10 @@ describe("index execution entries", () => {
             default: true,
           },
         },
-      }));
-      const ctx = {
-        cwd: root,
-        hasUI: true,
-        isProjectTrusted: () => true,
-        sessionManager: { getBranch: () => [] },
-        ui: {
-          theme: { fg: (_color: string, text: string) => text },
-          setStatus: () => {},
-          notify: () => {},
-        },
-      } as unknown as ExtensionContext;
-      const harness = extensionHarness();
-      registerExtension(harness.pi);
-      await harness.handler("session_start")(
-        { type: "session_start", reason: "startup" },
-        ctx,
-      );
+      });
 
-      await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "mixed", input: {} },
-        ctx,
-      );
+      await harness.handler("tool_call")(toolCallEvent("bash", "mixed"), ctx);
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
 
       assert.equal(harness.messages.length, 3);
       assert.equal(harness.entries.length, 1);
@@ -414,20 +526,144 @@ describe("index execution entries", () => {
       assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
       assert.match(
         renderEntry(harness, 0, false),
-        /ran 4 commands in \d+ms and requested 3 actions · tool_call bash/,
+        /ran 4 commands in \d+ms and requested 3 actions · tool_call bash ×1/,
       );
       assert.match(
         renderEntry(harness, 0, true),
         /↳ → local\/after · message requested/,
       );
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 
-  it("continues rendering historical version-1 command summaries", () => {
+  it("flushes all-preflight-blocked calls at turn_end", async () => {
+    await withTemporaryHome("pi-assert-index-blocked-flush-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          block: {
+            description: "block every call",
+            hook: "tool_call",
+            shell: "false",
+            default: true,
+          },
+        },
+      });
+
+      for (const toolCallId of ["b1", "b2"]) {
+        const result = await harness.handler("tool_call")(
+          toolCallEvent("bash", toolCallId),
+          ctx,
+        );
+        assert.deepStrictEqual(result, {
+          block: true,
+          reason: `pi-assert: assertion "block" rejected bash — \`false\``,
+        });
+      }
+      assert.equal(harness.entries.length, 0);
+
+      // Pi produces synthetic results only; turn_end is the next boundary.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
+      assert.equal(harness.entries.length, 1);
+      assert.equal(
+        (harness.entries[0]?.data as { hook: string }).hook,
+        "tool_call",
+      );
+      assert.match(
+        renderEntry(harness, 0, false),
+        /pi-assert ran 2 commands in \d+ms · tool_call bash ×2/,
+      );
+    });
+  });
+
+  it("flushes pending completed reporting on session_shutdown", async () => {
+    await withTemporaryHome("pi-assert-index-shutdown-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          passes: {
+            description: "observe successful checks",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+        },
+      });
+
+      await harness.handler("tool_call")(toolCallEvent("read", "call-1"), ctx);
+      assert.equal(harness.entries.length, 0);
+
+      await harness.handler("session_shutdown")(
+        { type: "session_shutdown" },
+        ctx,
+      );
+      assert.equal(harness.entries.length, 1);
+      assert.match(
+        renderEntry(harness, 0, false),
+        /pi-assert ran 1 command in \d+ms · tool_call read ×1/,
+      );
+    });
+  });
+
+  it("completes an observation when callback context capture escapes", async () => {
+    await withTemporaryHome("pi-assert-index-capture-escape-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          passes: {
+            description: "observe successful checks",
+            hook: "tool_call",
+            shell: "true",
+            default: true,
+          },
+        },
+      });
+
+      const sessionManager = ctx.sessionManager;
+      let captureFails = true;
+      Object.defineProperty(ctx, "sessionManager", {
+        configurable: true,
+        get: () => {
+          if (captureFails) throw new Error("context capture failed");
+          return sessionManager;
+        },
+      });
+
+      await assert.rejects(async () => {
+        await harness.handler("tool_call")(
+          toolCallEvent("read", "capture-failed"),
+          ctx,
+        );
+      }, /context capture failed/);
+
+      captureFails = false;
+      await harness.handler("tool_call")(
+        toolCallEvent("read", "capture-succeeded"),
+        ctx,
+      );
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
+
+      assert.equal(harness.entries.length, 1);
+      const data = harness.entries[0]!.data as {
+        segments: Array<{
+          trigger: { toolCallId: string };
+          executions: unknown[];
+          actionRequests: unknown[];
+        }>;
+      };
+      assert.deepEqual(
+        data.segments.map((segment) => segment.trigger.toolCallId),
+        ["capture-failed", "capture-succeeded"],
+      );
+      assert.deepEqual(data.segments[0]!.executions, []);
+      assert.deepEqual(data.segments[0]!.actionRequests, []);
+      assert.equal(data.segments[1]!.executions.length, 1);
+    });
+  });
+
+  it("renders historical versioned and malformed payloads as an unavailable fallback", () => {
     const harness = extensionHarness();
     registerExtension(harness.pi);
     harness.entries.push({
@@ -448,33 +684,22 @@ describe("index execution entries", () => {
         }],
       },
     });
-    assert.match(
-      renderEntry(harness, 0, false),
-      /pi-assert ran 1 command in 3ms · tool_call bash/,
-    );
-  });
-
-  it("renders malformed historical payloads locally instead of throwing", () => {
-    const harness = extensionHarness();
-    registerExtension(harness.pi);
     harness.entries.push({
       customType: "pi-assert-execution",
       data: { version: 0, executions: "older-shape" },
     });
-    assert.equal(
-      renderEntry(harness, 0, true).trim(),
-      "pi-assert execution summary unavailable",
-    );
+    for (const index of [0, 1]) {
+      assert.equal(
+        renderEntry(harness, index, true).trim(),
+        "pi-assert execution summary unavailable",
+      );
+    }
   });
 });
 
 describe("index synthetic result dispatch", () => {
   it("awaits detached handlers without changing the originating block", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-results-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-results-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -555,9 +780,11 @@ describe("index synthetic result dispatch", () => {
         { assertionRef: "local/blocks", outcome: "block" },
       ]);
 
+      // Pi emits turn_end after synthetic results for a preflight-blocked wave.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       const expanded = renderEntry(harness, 0, true, 160);
-      assert.match(expanded, /pi-assert ran 6 commands in \d+ms · tool_call bash/);
+      assert.match(expanded, /pi-assert ran 6 commands in \d+ms · tool_call bash ×1/);
       assert.match(
         expanded,
         /✓ local\/passes[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
@@ -566,21 +793,13 @@ describe("index synthetic result dispatch", () => {
         expanded,
         /✗ local\/blocks[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
       );
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
 
 describe("index effect and outcome translation", () => {
   it("continues ordered feedback when execution-entry delivery fails", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-effects-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-effects-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -645,22 +864,14 @@ describe("index effect and outcome translation", () => {
       await harness.handler("agent_end")({ messages: [] }, ctx);
 
       assert.equal(deliveries.length, 3);
-      assert.equal(deliveries[0], "entry");
-      assert.match(deliveries[1]!, /assert_result assertion failed/);
-      assert.match(deliveries[2]!, /^corrective:1 assertion failed/);
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+      assert.match(deliveries[0]!, /assert_result assertion failed/);
+      assert.match(deliveries[1]!, /^corrective:1 assertion failed/);
+      assert.equal(deliveries[2], "entry");
+    });
   });
 
   it("translates a patch in headless mode without relying on UI delivery", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-patch-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-patch-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -712,26 +923,20 @@ describe("index effect and outcome translation", () => {
       assert.equal(patch.isError, true);
       assert.strictEqual(patch.details, details);
       assert.match(patch.content[0]!.text, /original tool result was suppressed/);
+      // The lone tool_result report is flushed at the next boundary.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       assert.match(
         renderEntry(harness, 0, false),
-        /^\n pi-assert ran 1 command in \d+ms · tool_result read \(ctrl\+o to expand\)\n$/,
+        /pi-assert ran 1 command in \d+ms · tool_result read ×1 \(ctrl\+o to expand\)/,
       );
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
 
 describe("index owned Action delivery", () => {
   it("maps every action onto supported Pi APIs in configured order", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-actions-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-actions-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -862,6 +1067,7 @@ describe("index owned Action delivery", () => {
         ctx,
       );
       assert.equal(result, undefined);
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.deepEqual(calls.map((call) => call.type), [
         "abort",
         "abort",
@@ -891,11 +1097,16 @@ describe("index owned Action delivery", () => {
 
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]?.data as {
-        executions: unknown[];
-        actionRequests: Array<{ actionType: string }>;
+        hook: string;
+        segments: Array<{
+          executions: unknown[];
+          actionRequests: Array<{ actionType: string }>;
+        }>;
       };
-      assert.equal(data.executions.length, 9);
-      assert.deepEqual(data.actionRequests.map((request) => request.actionType), [
+      assert.equal(data.segments.length, 1);
+      const segment = data.segments[0]!;
+      assert.equal(segment.executions.length, 9);
+      assert.deepEqual(segment.actionRequests.map((request) => request.actionType), [
         "interrupt",
         "shutdown",
         "shutdown",
@@ -908,24 +1119,17 @@ describe("index owned Action delivery", () => {
       ]);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 9 commands in \d+ms and requested 9 actions · tool_call bash/,
+        /pi-assert ran 9 commands in \d+ms and requested 9 actions · tool_call bash ×1/,
       );
       assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested/);
 
       compactError?.(new Error("compact exploded"));
       assert.match(String(calls.at(-1)?.value), /compact exploded/);
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("keeps a native block and continues after one action delivery throws", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-action-failure-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-    try {
+    await withTemporaryHome("pi-assert-index-action-failure-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -996,21 +1200,13 @@ describe("index owned Action delivery", () => {
       });
       assert.deepEqual(events, ["test:sibling"]);
       assert.ok(notices.some((message) => message.includes("message failed")));
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
 
 describe("index session guard dispatch", () => {
   it("returns cancellation even when failure feedback throws", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-index-hooks-"));
-    const previousHome = process.env.HOME;
-    process.env.HOME = root;
-
-    try {
+    await withTemporaryHome("pi-assert-index-hooks-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
@@ -1073,10 +1269,6 @@ describe("index session guard dispatch", () => {
         ),
         { cancel: true },
       );
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 });
