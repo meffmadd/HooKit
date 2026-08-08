@@ -462,7 +462,7 @@ export abstract class SectionedPanel {
    * Rebuild filtered `groups` / `nav` from `savedGroups` + the current
    * query, then restore focus to the previously-highlighted assert
    * (best-effort). Empty/whitespace-only query reproduces every section
-   * unchanged (scores 0). Filtering keeps the same catalog-entry references, so
+   * unchanged. Filtering keeps the same catalog-entry references, so
    * `restoreFocus` can use identity (`indexOf`) lookup.
    */
   protected applyFilter(): void {
@@ -470,7 +470,7 @@ export abstract class SectionedPanel {
     const filtered = (this.savedGroups ?? this.groups)
       .map((g) => ({
         source: g.source,
-        asserts: filterSection(this.query, g.asserts).map((m) => m.assert),
+        asserts: filterSection(this.query, g.asserts),
       }))
       .filter((g) => g.asserts.length > 0);
     this.groups = filtered;

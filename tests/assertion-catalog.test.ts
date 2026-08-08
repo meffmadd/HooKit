@@ -129,7 +129,7 @@ describe("Assertion Catalog creation", () => {
       "owner/repo": { sameName: remoteShell },
     });
     writeJson(paths.project!, {
-      repos: ["owner/repo"],
+      repos: ["owner/repo", "hidden/repo"],
       local: { shared: localShell("project") },
       "owner/repo": { sameName: { ...remoteShell, shell: "project-repo" } },
       "hidden/repo": { hidden: remoteShell },
@@ -138,14 +138,14 @@ describe("Assertion Catalog creation", () => {
     const loaded = catalog(AssertionCatalog.open(paths));
     assert.deepEqual(
       loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
-      ["local/shared", "local/globalOnly", "owner/repo/sameName"],
+      ["local/shared", "local/globalOnly", "owner/repo/sameName", "hidden/repo/hidden"],
     );
     const shared = find(loaded, id("local", "shared"));
     assert.ok(shared && "shell" in shared);
     assert.equal(shared.shell, "project");
     assert.equal(shared.when, undefined, "the project record replaces rather than merges");
-    assert.equal(find(loaded, id("hidden/repo", "hidden")), undefined);
-    assert.deepEqual(loaded.repositories, ["owner/repo"]);
+    assert.ok("shell" in find(loaded, id("hidden/repo", "hidden"))!);
+    assert.deepEqual(loaded.repositories, ["owner/repo", "hidden/repo"]);
     assert.equal("path" in shared, false, "storage provenance is not exposed");
   });
 
@@ -180,21 +180,105 @@ describe("Assertion Catalog creation", () => {
     assert.equal("path" in handler, false);
   });
 
-  it("retains legacy all-object-section eligibility when project repos is absent", () => {
-    const paths = locations("legacy");
+  it("keeps global repository sections visible without project declaration", () => {
+    const paths = locations("global-repo");
     writeJson(paths.global, {
-      arbitrary: { global: localShell("global") },
+      "owner/repo": { guard: remoteShell },
     });
     writeJson(paths.project!, {
-      arbitrary: { project: localShell("project") },
-      another: { entry: localShell("another") },
+      local: { localOnly: localShell() },
     });
 
     const loaded = catalog(AssertionCatalog.open(paths));
     assert.deepEqual(
       loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
-      ["arbitrary/global", "arbitrary/project", "another/entry"],
+      ["owner/repo/guard", "local/localOnly"],
     );
+  });
+
+  it("keeps project local implicit when repos is absent", () => {
+    const paths = locations("local-only");
+    writeJson(paths.project!, {
+      local: { guard: localShell() },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.deepEqual(loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
+      ["local/guard"]);
+    assert.deepEqual(loaded.repositories, []);
+  });
+
+  it("loads declared project repository sections", () => {
+    const paths = locations("declared");
+    writeJson(paths.project!, {
+      repos: ["owner/repo"],
+      "owner/repo": { guard: remoteShell },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.deepEqual(loaded.entries.map((entry) => `${entry.source}/${entry.name}`),
+      ["owner/repo/guard"]);
+    assert.deepEqual(loaded.repositories, ["owner/repo"]);
+  });
+
+  it("diagnoses an undeclared project repository section", () => {
+    const paths = locations("undeclared");
+    writeJson(paths.project!, {
+      local: { visible: localShell() },
+      "owner/repo": { guard: remoteShell },
+    });
+
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.deepEqual(result.diagnostics.map((item) => item.storage), ["project"]);
+      assert.match(result.diagnostics[0]!.reason, /owner\/repo/);
+      assert.match(result.diagnostics[0]!.reason, /repos/);
+    }
+  });
+
+  it("allows a declared repository that has no section yet", () => {
+    const paths = locations("repo-without-section");
+    writeJson(paths.project!, {
+      repos: ["owner/repo"],
+      local: { guard: localShell() },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.deepEqual(loaded.repositories, ["owner/repo"]);
+    assert.deepEqual(loaded.entries.map((entry) => entry.name), ["guard"]);
+  });
+
+  it("rejects arbitrary non-canonical section sources", () => {
+    const paths = locations("non-canonical");
+    writeJson(paths.global, { one: { entry: localShell() } });
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "global");
+      assert.match(result.diagnostics[0]!.reason, /expected local or owner\/repo/);
+    }
+  });
+
+  it("lets one project eligibility error prevent a partial catalog", () => {
+    const paths = locations("partial");
+    writeJson(paths.global, {
+      local: { globalOk: localShell() },
+    });
+    writeJson(paths.project!, {
+      repos: ["other/repo"],
+      local: { projectOk: localShell() },
+      "owner/repo": { undeclared: remoteShell },
+      "other/repo": { other: remoteShell },
+    });
+
+    const result = AssertionCatalog.open(paths);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics.length, 1);
+      assert.equal(result.diagnostics[0]!.storage, "project");
+      assert.match(result.diagnostics[0]!.reason, /owner\/repo/);
+    }
   });
 
   it("reports the first failure for every invalid authorized storage", () => {
@@ -248,6 +332,46 @@ describe("Assertion Catalog creation", () => {
       assert.equal(result.diagnostics[0]!.storage, "project");
       assert.match(result.diagnostics[0]!.reason, /repos/);
     }
+  });
+
+  it("deep-freezes catalog entries once, including nested owned data", () => {
+    const paths = locations("frozen");
+    const action = {
+      type: "message" as const,
+      outcome: ["pass", "block"] as unknown as "pass",
+      message: "Review",
+      delivery: "followUp" as const,
+      code: [0, 1],
+    };
+    writeJson(paths.project!, {
+      local: {
+        guard: {
+          description: "Frozen guard",
+          hook: "tool_call",
+          filter: { toolName: ["bash", "read"] },
+          when: "true",
+          shell: "git status",
+          action,
+        },
+        preset: { description: "P", preset: ["local/guard"] },
+      },
+    });
+
+    const loaded = catalog(AssertionCatalog.open(paths));
+    assert.ok(Object.isFrozen(loaded.entries));
+    assert.ok(Object.isFrozen(loaded.repositories));
+    const guard = loaded.entries.find((e) => e.name === "guard")!;
+    assert.ok(Object.isFrozen(guard));
+    assert.ok(Object.isFrozen(guard.filter));
+    if ("action" in guard) {
+      assert.ok(Object.isFrozen(guard.action));
+      assert.ok(Object.isFrozen(guard.action.outcome));
+      assert.ok(Object.isFrozen(guard.action.code));
+    }
+    const preset = loaded.entries.find((e) => e.name === "preset")!;
+    if ("preset" in preset) assert.ok(Object.isFrozen(preset.preset));
+    // The frozen entry is not caller-owned storage data.
+    assert.notStrictEqual("action" in guard && guard.action, action);
   });
 
   it("returns source-qualified diagnostics for invalid filter regexes", () => {
@@ -554,6 +678,7 @@ describe("Assertion Catalog mutations", () => {
       "owner/other": { same: remoteShell },
     });
     writeJson(paths.project!, {
+      repos: ["owner/other"],
       local: {
         same: localShell("project"),
         sibling: localShell("keep"),

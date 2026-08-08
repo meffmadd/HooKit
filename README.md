@@ -249,18 +249,22 @@ excludes local `default` preference. Updates preserve that preference.
 
 ## Execution summaries
 
-A durable context-neutral transcript entry is appended when at least one main
-command is recorded or one Action is requested. Exact shortcuts count as normal
-commands with normal duration presentation. Passing preconditions are not
-counted separately; a failure before the main command does not invent a command
-row.
+A durable context-neutral transcript entry is appended when at least one
+Assertion row or one requested Action is recorded. Tool calls and their
+results for one Pi tool batch join one combined Execution Wave with a single
+end-to-end duration; ordinary hooks append immediately. Exact `true`/`false`
+shortcuts count as normal commands with normal duration presentation. Passing
+preconditions are not counted separately; a `when` infrastructure failure
+before the main command does not invent a command row (only a selected Action
+stands alone).
 
 Expanded summaries show source-qualified Assertion refs, pass/fail status,
-duration, and requested Action type. Owned Actions nest beneath their local
-Assertion result; `assert_result` activity remains associated with its origin.
-Persisted Action accounting contains only bounded identity, type, hook/run,
-outcome, and origin metadata. Message bodies, compaction instructions,
-custom-event data, rich callback objects, and storage paths are not persisted.
+individual `when` + `shell` duration, and requested Action type, rendered flat
+in Hook Evaluation order with `from <ref> <outcome>` annotations on synthetic
+rows — no causal nesting. Action rows show type and owner outcome. Persisted
+report rows contain only bounded identity and outcome data; invocation
+identity (`runId`), row-level hook, Action payload text, shell command text,
+rich callback objects, and storage paths are not persisted.
 
 ## Commands and trust
 

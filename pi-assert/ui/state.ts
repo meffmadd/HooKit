@@ -166,19 +166,15 @@ export class AssertsState {
     return entryKey(entry.source, entry.name);
   }
 
-  /** Whether this entry is enabled. Legacy bare names match only uniquely. */
+  /** Whether this entry is enabled. Only canonical keys match. */
   isActive(entry: CatalogEntry): boolean {
-    const key = this.keyOf(entry);
-    if (this.active.has(key)) return true;
-    return this.active.has(entry.name) &&
-      this.entries.filter((other) => other.name === entry.name).length === 1;
+    return this.active.has(this.keyOf(entry));
   }
 
+  /** Canonical key. UI callers pass Catalog entries; strings must be canonical. */
   private resolveKey(value: CatalogEntry | string): string {
     if (typeof value !== "string") return this.keyOf(value);
-    if (value.includes("\x00")) return value;
-    const match = new AssertIndex(this.entries).resolveLegacyName(value);
-    return match ? this.keyOf(match) : value;
+    return value;
   }
 
   /** Persist activation to the current session branch. */
@@ -201,14 +197,13 @@ export class AssertsState {
     }
 
     if (saved) {
-      const index = new AssertIndex(this.entries);
-      const valid = new Set(index.byKey.keys());
-      const migrated = saved.flatMap((value) => {
-        if (value.includes("\x00")) return valid.has(value) ? [value] : [];
-        const match = index.resolveLegacyName(value);
-        return match ? [this.keyOf(match)] : [];
-      });
-      this.active = new Set(migrated);
+      const valid = new Set(this.entries.map((entry) => this.keyOf(entry)));
+      // Restore only canonical NUL-separated keys that still exist in the
+      // current catalog. Bare names are silently dropped; there is no
+      // unambiguous-name resolution.
+      this.active = new Set(saved.filter((value) =>
+        value.includes("\x00") && valid.has(value),
+      ));
       this.activationMode = "saved";
     } else {
       this.active = new Set(

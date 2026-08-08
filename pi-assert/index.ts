@@ -198,6 +198,33 @@ export default function (pi: ExtensionAPI) {
     executionReporter.flush();
   });
 
+  // Passive tool lifecycle subscription: pi-assert records the end-to-end
+  // Execution Wave interval from the first `tool_execution_start` through the
+  // final `tool_execution_end`. These are NOT configurable Assertion hooks;
+  // they only feed the reporter. Pi emits `tool_execution_end` after
+  // `tool_result` handling, so the end timestamp includes result Assertions
+  // and their Effect delivery (blocked tools still emit both lifecycle
+  // events).
+  pi.on("tool_execution_start", (event) => {
+    const lifecycle = event as { toolName?: unknown; toolCallId?: unknown };
+    if (
+      typeof lifecycle.toolName === "string" &&
+      typeof lifecycle.toolCallId === "string"
+    ) {
+      executionReporter.toolStarted(lifecycle.toolName, lifecycle.toolCallId);
+    }
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    const lifecycle = event as { toolName?: unknown; toolCallId?: unknown };
+    if (
+      typeof lifecycle.toolName === "string" &&
+      typeof lifecycle.toolCallId === "string"
+    ) {
+      executionReporter.toolEnded(lifecycle.toolName, lifecycle.toolCallId);
+    }
+  });
+
   registerAssertsCommand(pi, state);
 
   function reportDeliveryFailure(

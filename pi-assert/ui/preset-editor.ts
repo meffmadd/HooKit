@@ -53,12 +53,10 @@ import type { AssertsState } from "./state.js";
 // Result
 // ---------------------------------------------------------------------------
 
-/** `runPresetEditor` outcome: chosen refs (in item order) + last index. */
+/** `runPresetEditor` outcome: the chosen `"source/name"` refs in item order. */
 export interface PresetEditorResult {
   /** `"source/name"` refs in item order. `Esc` commits (no cancel here). */
   value: string[];
-  /** Last focused row (for restoring highlight on re-entry). */
-  index: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +275,7 @@ export class PresetEditorPanel extends SectionedPanel {
 
   /** Commit the current selection (in item order). */
   private commit(): PanelResult {
-    return { value: this.value, index: this.nav.focusedIndex };
+    return { value: this.value };
   }
 }
 

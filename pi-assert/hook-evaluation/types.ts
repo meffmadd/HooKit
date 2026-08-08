@@ -130,31 +130,38 @@ export interface OriginatingAssertionResult {
   readonly outcome: AssertResultOutcome;
 }
 
-/** One actually started main assertion shell, never a filter or precondition. */
-export interface AssertionExecution {
+/** Projected identity of a synthetic origin annotation on a report row. */
+export interface ReportOrigin {
   readonly assertionRef: string;
-  readonly runId: string;
-  readonly hook: Hook;
-  readonly durationMs: number;
-  readonly passed: boolean;
-  readonly originatingResult?: OriginatingAssertionResult;
+  readonly outcome: AssertResultOutcome;
 }
 
-/** One configured action request, excluding unbounded action payload fields. */
-export interface ActionRequestExecution {
-  readonly assertionRef: string;
-  readonly runId: string;
-  readonly hook: Hook;
-  readonly actionType: ActionType;
-  /** The individual owner result that selected this Action. */
-  readonly outcome: AssertResultOutcome;
-  readonly originatingResult?: OriginatingAssertionResult;
-}
+/**
+ * One ordered, delivery-neutral report row for a Hook Evaluation. Rows
+ * intentionally carry no invocation identity (`runId`), row-level `hook`,
+ * origin `runId`, Action payload text, or shell command text; those stay in
+ * Assertion Results, Action Requests, `assert_result` dispatch, and shell
+ * environment variables.
+ */
+export type EvaluationReportRow =
+  | {
+      readonly type: "assertion";
+      readonly assertionRef: string;
+      readonly durationMs: number;
+      readonly passed: boolean;
+      readonly origin?: ReportOrigin;
+    }
+  | {
+      readonly type: "action";
+      readonly assertionRef: string;
+      readonly actionType: ActionType;
+      readonly outcome: AssertResultOutcome;
+      readonly origin?: ReportOrigin;
+    };
 
 /** Immutable, delivery-neutral accounting for one complete Hook Evaluation. */
 export interface AssertionExecutionReport {
-  readonly executions: readonly AssertionExecution[];
-  readonly actionRequests: readonly ActionRequestExecution[];
+  readonly rows: readonly EvaluationReportRow[];
 }
 
 interface EvaluationResultBase {

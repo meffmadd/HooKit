@@ -12,17 +12,21 @@ import {
   type HookAdapter,
 } from "./adapters.js";
 import { requestOwnedAction } from "./actions.js";
-import { invokeAssertions, type InvocationError } from "./invocations.js";
+import {
+  invokeAssertions,
+  type InvocationError,
+  type StartedAssertionExecution,
+} from "./invocations.js";
 import type {
-  ActionRequestExecution,
-  AssertionExecution,
   AssertionExecutionReport,
   AssertionResult,
   EvaluationEffect,
+  EvaluationReportRow,
   EvaluationEventMap,
   HookEvaluationResult,
   HookEventMap,
   HookExecutionContext,
+  ReportOrigin,
   RuntimeMetadataSnapshot,
   ToolResultPatch,
 } from "./types.js";
@@ -31,15 +35,14 @@ export { createActiveAssertionSet } from "./active-set.js";
 export type { ActiveAssertionSet } from "./active-set.js";
 export type { ActiveAssertion } from "./assertions.js";
 export type {
-  ActionRequestExecution,
   AgentEndEvent,
   AgentSettledEvent,
-  AssertionExecution,
   AssertionExecutionReport,
   AssertionResult,
   BlockEvaluationResult,
   CancelEvaluationResult,
   EvaluationEffect,
+  EvaluationReportRow,
   HookEvaluationResult,
   HookEvaluationResultMap,
   HookEventMap,
@@ -49,6 +52,7 @@ export type {
   PatchEvaluationResult,
   PresentationSeverity,
   ReportEvaluationResult,
+  ReportOrigin,
   RuntimeMetadataSnapshot,
   SessionBeforeForkEvent,
   SessionBeforeSwitchEvent,
@@ -112,70 +116,54 @@ function freezeNested<T>(value: T): T {
   return Object.freeze(value);
 }
 
-function freezeOrigin(
-  origin: ActionRequestExecution["originatingResult"],
-) {
-  return origin === undefined
-    ? undefined
-    : Object.freeze({
-        assertionRef: origin.assertionRef,
-        runId: origin.runId,
-        outcome: origin.outcome,
-      });
-}
-
 function freezeResults(
   results: readonly AssertionResult[],
 ): readonly AssertionResult[] {
-  return Object.freeze(results.map((result) => {
-    const action = result.action === undefined
-      ? undefined
-      : freezeNested({ ...result.action });
-    const originatingResult = freezeOrigin(result.originatingResult);
-    return Object.freeze({
-      event: "assert_result" as const,
+  // Invocation owns and freezes each result at creation. Capture only the
+  // ordered array here; nested catalog Actions and synthetic origins are
+  // already immutable and need no second copy/freeze pass.
+  return Object.freeze(Array.from(results));
+}
+
+/** One native Assertion's ordered reporting rows. Native rows carry no origin. */
+function reportRowsFor(
+  result: AssertionResult,
+  execution: StartedAssertionExecution | undefined,
+  owned: ReturnType<typeof requestOwnedAction>,
+  syntheticRows: readonly EvaluationReportRow[],
+): EvaluationReportRow[] {
+  const rows: EvaluationReportRow[] = [];
+  if (execution !== undefined) {
+    rows.push({
+      type: "assertion",
       assertionRef: result.assertionRef,
-      runId: result.runId,
-      hook: result.hook,
-      outcome: result.outcome,
-      code: result.code,
-      ...(action === undefined ? {} : { action }),
-      ...(originatingResult === undefined ? {} : { originatingResult }),
+      durationMs: execution.durationMs,
+      passed: execution.passed,
     });
-  }));
+  }
+  if (owned.row !== undefined) rows.push(owned.row);
+  rows.push(...syntheticRows);
+  return rows;
 }
 
 function freezeExecutionReport(
-  executions: readonly AssertionExecution[],
-  actionRequests: readonly ActionRequestExecution[],
+  rows: readonly EvaluationReportRow[],
 ): AssertionExecutionReport | undefined {
-  if (executions.length === 0 && actionRequests.length === 0) return undefined;
-  const frozenExecutions = Object.freeze(executions.map((execution) => {
-    const originatingResult = freezeOrigin(execution.originatingResult);
+  if (rows.length === 0) return undefined;
+  const frozenRows = Object.freeze(rows.map((row) => {
+    const origin = row.origin === undefined
+      ? undefined
+      : Object.freeze({ ...row.origin });
     return Object.freeze({
-      assertionRef: execution.assertionRef,
-      runId: execution.runId,
-      hook: execution.hook,
-      durationMs: execution.durationMs,
-      passed: execution.passed,
-      ...(originatingResult === undefined ? {} : { originatingResult }),
-    });
+      type: row.type,
+      assertionRef: row.assertionRef,
+      ...(row.type === "assertion"
+        ? { durationMs: row.durationMs, passed: row.passed }
+        : { actionType: row.actionType, outcome: row.outcome }),
+      ...(origin === undefined ? {} : { origin }),
+    }) as EvaluationReportRow;
   }));
-  const frozenActions = Object.freeze(actionRequests.map((request) => {
-    const originatingResult = freezeOrigin(request.originatingResult);
-    return Object.freeze({
-      assertionRef: request.assertionRef,
-      runId: request.runId,
-      hook: request.hook,
-      actionType: request.actionType,
-      outcome: request.outcome,
-      ...(originatingResult === undefined ? {} : { originatingResult }),
-    });
-  }));
-  return Object.freeze({
-    executions: frozenExecutions,
-    actionRequests: frozenActions,
-  });
+  return Object.freeze({ rows: frozenRows });
 }
 
 function assertionErrorMessage(failure: InvocationError): string {
@@ -304,26 +292,34 @@ export class HookEvaluation {
       rawOutcome = adapter.internalError(error, event);
     }
     const outcome = rawOutcome === undefined ? undefined : freezeOutcome(rawOutcome);
-    const results = freezeResults(invocation.results);
 
-    // Freeze the aggregate decision and all origin results before reactions.
-    // Reactions are result-major: owned Action, then assert_result Assertions.
+    // Freeze the aggregate native decision and all origin results before
+    // reactions. Reactions are result-major: native Assertion row, owned
+    // Action row, then configured assert_result Assertions and their rows.
+    const records = invocation.invocations;
+    const results = freezeResults(records.map((record) => record.result));
     const effects: EvaluationEffect[] = [];
-    const executions: AssertionExecution[] = [...invocation.executions];
-    const actionRequests: ActionRequestExecution[] = [];
-    for (const result of results) {
-      const owned = requestOwnedAction(result);
+    const rows: EvaluationReportRow[] = [];
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index]!;
+      const frozenResult = results[index]!;
+
+      const owned = requestOwnedAction(frozenResult);
       effects.push(...owned.effects);
-      actionRequests.push(...owned.actionRequests);
 
       const synthetic = await this.dispatchSyntheticResult(
         assertions,
-        result,
+        frozenResult,
         context,
       );
       effects.push(...synthetic.effects);
-      executions.push(...synthetic.executions);
-      actionRequests.push(...synthetic.actionRequests);
+
+      rows.push(...reportRowsFor(
+        frozenResult,
+        record.execution,
+        owned,
+        synthetic.rows,
+      ));
     }
 
     // If ordinary failures already determine the native outcome, surface each
@@ -335,7 +331,7 @@ export class HookEvaluation {
       }
     }
 
-    const executionReport = freezeExecutionReport(executions, actionRequests);
+    const executionReport = freezeExecutionReport(rows);
     this.appendOriginFeedback(hook, adapter, outcome, effects);
     return publicResult(
       outcome,
@@ -350,12 +346,10 @@ export class HookEvaluation {
     context: HookExecutionContext,
   ): Promise<{
     effects: EvaluationEffect[];
-    executions: AssertionExecution[];
-    actionRequests: ActionRequestExecution[];
+    rows: EvaluationReportRow[];
   }> {
     const effects: EvaluationEffect[] = [];
-    const executions: AssertionExecution[] = [];
-    const actionRequests: ActionRequestExecution[] = [];
+    const rows: EvaluationReportRow[] = [];
     const failures: AssertionFailure[] = [];
     const adapter = adapterFor("assert_result");
     const detachedContext: HookExecutionContext = Object.freeze({
@@ -373,18 +367,31 @@ export class HookEvaluation {
           detachedContext,
           { originatingResult: result },
         );
-        executions.push(...invocation.executions);
         failures.push(...invocation.failures);
         for (const failure of invocation.unexpectedErrors) {
           effects.push(present(handlerErrorMessage(failure), "error"));
         }
 
-        // A handler's local result may select its own Action, but is never
-        // projected recursively as another assert_result event.
-        for (const localResult of freezeResults(invocation.results)) {
-          const owned = requestOwnedAction(localResult);
+        // A handler's local results append their Assertion row (projecting the
+        // originating native result) and may select their own Action, but are
+        // never redispatched recursively.
+        const origin: ReportOrigin = {
+          assertionRef: result.assertionRef,
+          outcome: result.outcome,
+        };
+        for (const record of invocation.invocations) {
+          if (record.execution !== undefined) {
+            rows.push({
+              type: "assertion",
+              assertionRef: record.result.assertionRef,
+              durationMs: record.execution.durationMs,
+              passed: record.execution.passed,
+              origin,
+            });
+          }
+          const owned = requestOwnedAction(record.result);
           effects.push(...owned.effects);
-          actionRequests.push(...owned.actionRequests);
+          if (owned.row !== undefined) rows.push(owned.row);
         }
       }
       if (failures.length > 0) {
@@ -399,7 +406,7 @@ export class HookEvaluation {
         "error",
       ));
     }
-    return { effects, executions, actionRequests };
+    return { effects, rows };
   }
 
   private appendOriginFeedback<E>(

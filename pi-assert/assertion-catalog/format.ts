@@ -88,18 +88,15 @@ export function validateSectionedFile(file: SectionedFile): string | null {
 }
 
 /**
- * Enumerate source partitions in insertion order. A supplied eligibility set
- * enforces project `repos` plus implicit `local`; omission preserves legacy
- * all-object-section behavior.
+ * Enumerate source partitions in insertion order. Source eligibility is a
+ * separate Assertion Catalog policy: this enumerates every section exactly
+ * as stored, leaving canonical-syntax and storage-eligibility decisions to
+ * the catalog.
  */
-export function iterSections(
-  file: SectionedFile,
-  eligibleSources?: ReadonlySet<string>,
-): SectionedSection[] {
+export function iterSections(file: SectionedFile): SectionedSection[] {
   const sections: SectionedSection[] = [];
   for (const [source, entries] of Object.entries(file)) {
     if (META_KEYS.has(source) || !isPlainObject(entries)) continue;
-    if (eligibleSources && !eligibleSources.has(source)) continue;
     sections.push({ source, entries });
   }
   return sections;

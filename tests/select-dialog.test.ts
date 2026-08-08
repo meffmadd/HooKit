@@ -1,7 +1,8 @@
 /**
  * Tests for selectDialog's shared picker behaviour: the select result shape,
- * the inline `r` → `y/n` remove confirm, the `mark` rendered outside the
- * accent wrap, and `initialIndex` highlight restoration.
+ * the `mark` rendered outside the accent wrap, `initialIndex` highlight
+ * restoration, and the `confirmOnSelect` Enter flow (the install wizard's
+ * Enter-to-uninstall guard).
  *
  * selectDialog drives its UI through `ctx.ui.custom`, so these tests mock
  * `custom` to capture the `{render, invalidate, handleInput}` triple and the
@@ -98,7 +99,7 @@ const DOWN = "\x1b[B";
 // ═══════════════════════════════════════════════════════════════════
 
 describe("selectDialog result shape", () => {
-  it("Enter resolves with { value, index, removed: false }", async () => {
+  it("Enter resolves with { value, index }", async () => {
     const s = setupDialog<string>();
     const p = selectDialog<string>(s.ctx, {
       title: "T",
@@ -109,10 +110,10 @@ describe("selectDialog result shape", () => {
     });
     const t = s.triple();
     t.handleInput(ENTER);
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    assert.deepEqual(await p, { value: "a", index: 0 });
   });
 
-  it("Esc resolves with { value: null, index, removed: false }", async () => {
+  it("Esc resolves with { value: null, index }", async () => {
     const s = setupDialog<string>();
     const p = selectDialog<string>(s.ctx, {
       title: "T",
@@ -120,115 +121,7 @@ describe("selectDialog result shape", () => {
     });
     const t = s.triple();
     t.handleInput(ESC);
-    assert.deepEqual(await p, { value: null, index: 0, removed: false });
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════
-// Remove confirm flow
-// ═══════════════════════════════════════════════════════════════════
-
-describe("selectDialog remove confirm", () => {
-  it("r then y resolves with { value, index, removed: true }", async () => {
-    const s = setupDialog<string>();
-    const p = selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [
-        { value: "a", label: "alpha" },
-        { value: "b", label: "beta" },
-      ],
-      remove: { canRemove: (it) => it.value === "a" },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    t.handleInput("y");
-    assert.deepEqual(await p, { value: "a", index: 0, removed: true });
-  });
-
-  it('r renders the `Remove "x"?` confirm body', () => {
-    const s = setupDialog<string>();
-    selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [{ value: "a", label: "alpha" }],
-      remove: { canRemove: () => true },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    const lines = t.render(80);
-    assert.ok(
-      lines.some((l) => l.includes(`Remove "a"?`)),
-      "confirm body shows the item name",
-    );
-  });
-
-  it("n cancels the confirm and returns to the list (Enter then selects)", async () => {
-    const s = setupDialog<string>();
-    const p = selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [{ value: "a", label: "alpha" }],
-      remove: { canRemove: () => true },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    t.handleInput("n");
-    // Back in the list — Enter should now select normally.
-    t.handleInput(ENTER);
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
-  });
-
-  it("Esc cancels the confirm and returns to the list", async () => {
-    const s = setupDialog<string>();
-    const p = selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [{ value: "a", label: "alpha" }],
-      remove: { canRemove: () => true },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    t.handleInput(ESC);
-    t.handleInput(ENTER);
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
-  });
-
-  it("arrow keys are ignored while confirming (selection stays put)", async () => {
-    const s = setupDialog<string>();
-    const p = selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [
-        { value: "a", label: "alpha" },
-        { value: "b", label: "beta" },
-      ],
-      remove: { canRemove: () => true },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    t.handleInput(DOWN); // ignored while confirming
-    t.handleInput("y");
-    // Still on index 0 ("a") — the down arrow did not move the highlight.
-    assert.deepEqual(await p, { value: "a", index: 0, removed: true });
-  });
-
-  it("r on a non-removable item notifies and stays in the list", async () => {
-    const s = setupDialog<string>();
-    const p = selectDialog<string>(s.ctx, {
-      title: "T",
-      items: [{ value: "a", label: "alpha" }],
-      remove: { canRemove: () => false },
-    });
-    const t = s.triple();
-    t.handleInput("r");
-    assert.ok(
-      s.notifications.includes("Only installed asserts can be removed"),
-      "notifies that only installed asserts can be removed",
-    );
-    // Confirm body must NOT be showing.
-    const lines = t.render(80);
-    assert.ok(
-      !lines.some((l) => l.includes(`Remove "a"?`)),
-      "confirm body is not shown for a non-removable item",
-    );
-    t.handleInput(ENTER);
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    assert.deepEqual(await p, { value: null, index: 0 });
   });
 });
 
@@ -409,7 +302,7 @@ describe("selectDialog confirmOnSelect", () => {
     );
   });
 
-  it("y on the confirm resolves normally (removed: false)", async () => {
+  it("y on the confirm resolves normally", async () => {
     const s = setupDialog<string>();
     const p = selectDialog<string>(s.ctx, {
       title: "T",
@@ -419,8 +312,8 @@ describe("selectDialog confirmOnSelect", () => {
     const t = s.triple();
     t.handleInput(ENTER);
     t.handleInput("y");
-    // confirmOnSelect resolves with removed: false — the caller classifies.
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    // The confirm is purely a guard; the caller classifies the result.
+    assert.deepEqual(await p, { value: "a", index: 0 });
   });
 
   it("n cancels the confirm and returns to the list", async () => {
@@ -435,7 +328,7 @@ describe("selectDialog confirmOnSelect", () => {
     t.handleInput("n");
     // Back in the list — Esc cancels the whole dialog.
     t.handleInput(ESC);
-    assert.deepEqual(await p, { value: null, index: 0, removed: false });
+    assert.deepEqual(await p, { value: null, index: 0 });
   });
 
   it("Esc cancels the confirm and returns to the list", async () => {
@@ -449,7 +342,7 @@ describe("selectDialog confirmOnSelect", () => {
     t.handleInput(ENTER);
     t.handleInput(ESC);
     t.handleInput(ESC);
-    assert.deepEqual(await p, { value: null, index: 0, removed: false });
+    assert.deepEqual(await p, { value: null, index: 0 });
   });
 
   it("Enter on a non-confirmable item resolves immediately (no shell)", async () => {
@@ -461,7 +354,7 @@ describe("selectDialog confirmOnSelect", () => {
     });
     const t = s.triple();
     t.handleInput(ENTER);
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    assert.deepEqual(await p, { value: "a", index: 0 });
     // No confirm body should have appeared.
     const lines = t.render(80);
     assert.ok(
@@ -509,6 +402,6 @@ describe("selectDialog confirmOnSelect", () => {
     t.handleInput(DOWN); // ignored while confirming
     t.handleInput("y");
     // Still on index 0 — the down arrow did not move the highlight.
-    assert.deepEqual(await p, { value: "a", index: 0, removed: false });
+    assert.deepEqual(await p, { value: "a", index: 0 });
   });
 });

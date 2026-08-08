@@ -8,8 +8,10 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
 - **`pi-assert/index.ts`** — thin Pi adapter. Authorizes catalog storage after
   checking project trust, loads session state, snapshots Pi's rich callback
   context onto bounded scalar metadata, captures one Active Assertion Set,
-  brackets each native callback with the session ExecutionReporter (wave
-  collection + late append), translates explicit Hook Evaluation outcomes into
+  subscribes passively to Pi's `tool_execution_start`/`_end` lifecycle,
+  brackets each supported native callback with the session ExecutionReporter
+  (tool-wave collection + combined Execution Wave flush + late append),
+  translates explicit Hook Evaluation outcomes into
   Pi callbacks, and delivers ordered semantic effects best-effort. It maps
   delivery-neutral Action Requests onto ordinary
   Pi context/API operations; it owns no catalog or hook policy.
@@ -18,7 +20,8 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   without storage paths, explicit `{ source, name }` identities, structured
   load/mutation results, and one domain-intent mutation union. Private format
   machinery owns authorized global/optional-project reads, complete validation,
-  repository eligibility, whole-record source-preserving merge, provenance,
+  canonical source and storage eligibility, whole-record source-preserving
+  merge, provenance,
   canonical persisted Assertion and Preset records (including effective
   `shell: "true"`), re-read-before-write mutations, local-default preservation,
   and best-effort
@@ -31,8 +34,8 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   registry, candidate/filter/environment projection, filter → `when` → shell
   Assertion Invocations, immutable individual Assertion Results, shared
   outcome/code selector matching, result-major owned-Action plus synthetic
-  `assert_result` processing, fail-closed aggregation, transaction-local
-  immutable execution reporting, and corrective retry deduplication. Ordinary
+  `assert_result` processing, fail-closed aggregation, one ordered report row
+  sequence, and corrective retry deduplication. Ordinary
   shells run via real `child_process.exec`; exact `true`/`false` shortcuts stay
   hidden in the shared evaluator. No shell port exists solely for tests.
 - **`pi-assert/domain/entry.ts` / `domain/validation.ts`** — shared persisted
@@ -48,19 +51,22 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   persistence; fetched entries are submitted to Assertion Catalog mutations.
 - **`pi-assert/ui/execution-report.ts`** — the one defensive custom-entry
   module for durable context-neutral Execution Reports. It owns the
-  session-scoped `ExecutionReporter` (brackets every callback with
-  `begin`/`complete`, assigns segment order at `begin`, collects consecutive
-  Hook Evaluations for the same tool hook into one Execution Wave that flushes
-  a single report at the next hook's entry, appends ordinary hooks immediately, waits
-  for `session_shutdown` to flush a pending wave, and calculates the
-  non-negative critical-path interval as the serial union for `tool_call`, the
-  `max(end) − max(start)` tail for `tool_result`, and `end − start` otherwise)
-  plus the shared defensive renderer (per-tool collapsed breakdown using
-  first-seen tool order, per-segment dim headers, `✓/✗` nested rows,
-  synthetic-handler nesting, configured-key collapsed hint, inset custom
-  message box). Pi owns the global expansion binding and session history; the
-  thin adapter wires the append callback and flushes on shutdown.
-- **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive subsequence + numeric fuzz score), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker with numeric per-field tiers so field dominance is deterministic, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
+  session-scoped `ExecutionReporter` (tracks tools in `tool_execution_start`
+  order with monotonic start/end timestamps, brackets every supported callback
+  with `begin`/`complete`, assigns segment order at `begin`, collects every
+  tool-hook Hook Evaluation for one Pi tool batch into one combined Execution
+  Wave that flushes a single report at the next non-tool hook entry, appends
+  ordinary hooks immediately, waits for `session_shutdown` to flush a pending
+  wave, discards an incomplete tool lifecycle rather than inventing an end, and
+  persists one end-to-end `durationMs` = `max(end) − min(start)` across tool
+  lifecycle) plus the shared defensive renderer (strict new-shape-only
+  validation with an unavailable fallback for old/malformed entries, flat
+  `✓/✗` ordered rows with inline `from` origin annotations, per-tool collapsed
+  breakdown by unique lifecycle identity, per-segment dim headers in Pi event
+  order, configured-key collapsed hint, inset custom message box). Pi owns the
+  global expansion binding and session history; the thin adapter wires the
+  append callback, forwards tool identity, and flushes on shutdown.
+- **`pi-assert/ui/fuzzy.ts`** — pure fuzzy-match module for the `/asserts` panel search mode: `fuzzyMatch` (case-insensitive greedy subsequence returning matched positions only), `matchQuery` (the v1a strip-spaces → v1b AND-of-tokens seam), `filterSection` (per-section ranker using four coarse ordered tiers — name, description, source, then body fields shell/when/Action/preset-refs — so tier dominance is deterministic and same-tier entries keep catalog order, plus an optional per-field `coerce` that joins a non-string field — a preset's `preset` refs — into the `", "`-joined string `renderAssertDetail` also highlights), and `highlightSegments` (splits a target into matched/unmatched runs for render-time highlighting, reusing `matchQuery` so highlights stay consistent with what ranked the row). No TUI deps, unit-testable in isolation.
 - **`pi-assert/ui/components.ts`** — shared UI primitives: `renderDetailList`/
   `DetailList` (the selectable list with inline `shell:`/`when:` detail and an
   optional focused-row suffix, used by both sectioned panels and every install
@@ -136,6 +142,33 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   is not a supported assertion hook because Pi exposes no cancellation result.
 - Trusted project entries replace global entries only when Assertion Source and
   name both match; whole records replace rather than merging fields.
+- **Canonical source eligibility is one catalog policy.** A section is valid
+  only as `local` or one `owner/repo`. Global canonical sections merge
+  independently of project `repos`; every project `owner/repo` section must be
+  declared in that storage's `repos` array, and missing `repos` permits only
+  `local`. Ineligible sections are never silently filtered — they produce a
+  catalog failure diagnostic, and a failed mutation leaves the caller's
+  known-good catalog and activation unchanged.
+- **Activation uses canonical keys only.** Saved activation restores only
+  NUL-separated `source\0name` keys present in the current catalog; bare names
+  are silently discarded with no unambiguous-name resolution, and `isActive`
+  checks only the canonical key.
+- **One Execution Wave per Pi tool batch; one end-to-end duration.** Every
+  `tool_call`/`tool_result` Hook Evaluation for a batch joins a single combined
+  wave bracketed by `tool_execution_start`/`_end` lifecycle. The report has one
+  `durationMs` = `max(end) − min(start)`; there is no `criticalPathMs`.
+  Individual Assertion rows measure passing `when` + main `shell`. A wave with
+  an incomplete tool lifecycle is discarded rather than assigned an invented
+  end. Tool call and result reports are never split by hook.
+- **Reports are flat ordered rows.** Hook Evaluation emits one ordered
+  `rows` sequence (native Assertion row, its owned Action row, then synthetic
+  `assert_result` rows and their Actions, per native result). Reporting rows
+  carry no `runId`, row-level hook, origin `runId`, Action payload, shell text,
+  or depth. The renderer draws those rows flat with `from` origin annotations —
+  no causal maps, consumed sets, or synthetic display-only result rows.
+- **Fuzzy search ranks by coarse field tier, not relevance.** Entries rank by
+  their highest matching field tier (name > description > source > body); ties
+  keep catalog order. Matched positions drive highlighting only.
 - **Search swaps `groups`/`nav`, not the renderer.** The `/asserts` panel's
   fuzzy-search mode filters by pointing `this.groups`/`this.nav` at filtered
   subsets of the same `Assert` objects (originals saved and restored on `Esc`).
@@ -173,21 +206,21 @@ Shell Assertions with outcome-selected owned Actions for Pi hook events. Reads
   the preset editor).
 - **Highlighting is a render concern, not a filter concern.** Search match
   highlighting recomputes `highlightSegments(query, field)` per visible field
-  at render time rather than threading `FuzzyResult.positions` through the
-  panel. The matching algorithm stays single-sourced in `matchQuery` (both
+  at render time rather than threading matched positions through the panel.
+  The matching algorithm stays single-sourced in `matchQuery` (both
   `filterSection` and `highlightSegments` call it — reuse, not duplication);
-  the redundant calls are microseconds and avoid a `FuzzyResult`/`SectionMatch`
-  shape change, new panel-side positions state, and a second helper. The name
-  highlights via the panel's `renderLabel` (one method shared by the active
-  and inactive row paths); `shell`/`when` highlight in `renderAssertDetail`,
-  pre-styled before the ANSI-aware `wrapTextWithAnsi` so highlights carry
-  across wrapped lines. A `score === 0` dead path returns no segments, so a
-  field lights up iff it contributed to ranking.  The `preset` field is
-  fuzzy-ranked via a `coerce` join (`filterSection` joins the array with `", "`,
-  the same join `renderAssertDetail` uses for the `asserts:` detail) at the
-  `shell`/`when` tier, so a search for a ref name surfaces the referencing
-  preset and highlights it across the joined string — the coerce output must
-  match the renderer's join so highlight positions align with the rank.
+  the redundant calls are microseconds and avoid a shapes change, new
+  panel-side positions state, and a second helper. The name highlights via the
+  panel's `renderLabel` (one method shared by the active and inactive row
+  paths); `shell`/`when` highlight in `renderAssertDetail`, pre-styled before
+  the ANSI-aware `wrapTextWithAnsi` so highlights carry across wrapped lines.
+  A field lights up iff its `matchQuery` is a subsequence (it contributed to
+  there being a result). The `preset` field is ranked via a `coerce` join
+  (`filterSection` joins the array with `", "`, the same join
+  `renderAssertDetail` uses for the `asserts:` detail) at the `shell`/`when`
+  tier, so a search for a ref name surfaces the referencing preset and
+  highlights it across the joined string — the coerce output must match the
+  renderer's join so highlight positions align with the rank.
 - **Focused-entry actions are contextual; panel-wide actions stay in the
   footer.** Both sectioned panels append an unboxed accent `›` action run as
   the final focused-row detail. `/asserts` predicts individual enable/disable

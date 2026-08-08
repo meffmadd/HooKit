@@ -24,8 +24,6 @@ export interface RuleFile {
   name: string;
   /** Full path within the repo (e.g. "rules/security/writes.json"). */
   path: string;
-  /** Git blob SHA from the tree (for future version tracking). */
-  sha: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +88,6 @@ export async function fetchRuleFiles(
     .map((item) => ({
       name: item.path.slice("rules/".length).replace(/\.json$/, ""),
       path: item.path,
-      sha: item.sha,
     }))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
@@ -147,7 +144,6 @@ export async function fetchRuleFile(
 interface GitHubFileItem {
   type: string;
   content?: string;
-  encoding?: string;
 }
 
 // ---------------------------------------------------------------------------

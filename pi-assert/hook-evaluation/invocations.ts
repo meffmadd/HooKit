@@ -8,7 +8,6 @@ import type {
 import { matchFilter } from "./environment.js";
 import { evaluateShell } from "./shell.js";
 import type {
-  AssertionExecution,
   AssertionResult,
   HookExecutionContext,
   OriginatingAssertionResult,
@@ -19,11 +18,28 @@ export interface InvocationError {
   readonly error: unknown;
 }
 
+/** Execution accounting for one started main Assertion shell. */
+export interface StartedAssertionExecution {
+  /** Individual Assertion duration: passing `when` (if any) plus main `shell`. */
+  readonly durationMs: number;
+  readonly passed: boolean;
+}
+
+/**
+ * One Invocation, pairing the immutable Assertion Result with the optional
+ * accounting of its started main shell. A `when`/`shell` infrastructure
+ * failure produces a result record without `execution` so its owned Action
+ * can still select; an ordinary non-zero `when` produces no record at all.
+ */
+export interface AssertionInvocationRecord {
+  readonly result: AssertionResult;
+  readonly execution?: StartedAssertionExecution;
+}
+
 export interface InvocationBatch {
-  readonly executions: AssertionExecution[];
-  readonly failures: AssertionFailure[];
-  readonly results: AssertionResult[];
-  readonly unexpectedErrors: InvocationError[];
+  readonly invocations: readonly AssertionInvocationRecord[];
+  readonly failures: readonly AssertionFailure[];
+  readonly unexpectedErrors: readonly InvocationError[];
 }
 
 interface InvocationOptions {
@@ -53,16 +69,18 @@ function assertionResult(
   code: number | null,
   originatingResult: OriginatingAssertionResult | undefined,
 ): AssertionResult {
-  return {
+  return Object.freeze({
     event: "assert_result",
     assertionRef: entryRef(assertion.source, assertion.name),
     runId,
     hook: assertion.hook,
     outcome,
     code,
+    // Catalog-owned Actions and originating native results are already
+    // immutable, so the result can retain those references directly.
     ...(assertion.action === undefined ? {} : { action: assertion.action }),
     ...(originatingResult === undefined ? {} : { originatingResult }),
-  };
+  });
 }
 
 /** Execute Assertion Invocations sequentially in deterministic set order. */
@@ -75,16 +93,14 @@ export async function invokeAssertions<E>(
 ): Promise<InvocationBatch> {
   if (adapter.skipAssertionsIfAborted && context.signal?.aborted) {
     return {
-      executions: [],
+      invocations: [],
       failures: [],
-      results: [],
       unexpectedErrors: [],
     };
   }
 
-  const executions: AssertionExecution[] = [];
+  const invocations: AssertionInvocationRecord[] = [];
   const failures: AssertionFailure[] = [];
-  const results: AssertionResult[] = [];
   const unexpectedErrors: InvocationError[] = [];
 
   for (const assertion of assertions) {
@@ -103,6 +119,10 @@ export async function invokeAssertions<E>(
         context,
       );
 
+      // Individual Assertion duration starts immediately before the optional
+      // `when`; a passing `when` contributes to the main row's duration.
+      const startedAt = Date.now();
+
       if (assertion.when) {
         const whenResult = await evaluateShell(
           assertion.when,
@@ -117,45 +137,43 @@ export async function invokeAssertions<E>(
             command: assertion.when,
             result: whenResult,
           });
-          results.push(assertionResult(
-            assertion,
-            runId,
-            adapter.failureAction,
-            null,
-            options.originatingResult,
-          ));
+          invocations.push({
+            result: assertionResult(
+              assertion,
+              runId,
+              adapter.failureAction,
+              null,
+              options.originatingResult,
+            ),
+          });
           continue;
         }
         if (!whenResult.passed) continue;
       }
 
-      const startedAt = Date.now();
       const shellResult = await evaluateShell(
         assertion.shell,
         env,
         context.signal,
         context.cwd,
       );
-      if (shellResult.started) {
-        executions.push({
-          assertionRef: entryRef(assertion.source, assertion.name),
+      invocations.push({
+        result: assertionResult(
+          assertion,
           runId,
-          hook: assertion.hook,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          passed: shellResult.passed,
-          ...(options.originatingResult === undefined
-            ? {}
-            : { originatingResult: options.originatingResult }),
-        });
-      }
-
-      results.push(assertionResult(
-        assertion,
-        runId,
-        shellResult.passed ? "pass" : adapter.failureAction,
-        shellResult.code,
-        options.originatingResult,
-      ));
+          shellResult.passed ? "pass" : adapter.failureAction,
+          shellResult.code,
+          options.originatingResult,
+        ),
+        ...(shellResult.started
+          ? {
+              execution: {
+                durationMs: Math.max(0, Date.now() - startedAt),
+                passed: shellResult.passed,
+              },
+            }
+          : {}),
+      });
 
       if (!shellResult.passed) {
         failures.push({
@@ -172,5 +190,5 @@ export async function invokeAssertions<E>(
     }
   }
 
-  return { executions, failures, results, unexpectedErrors };
+  return { invocations, failures, unexpectedErrors };
 }

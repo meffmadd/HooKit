@@ -256,13 +256,11 @@ export function parseEntryRef(ref: string): { source: string; name: string } | n
 export class AssertIndex<T extends { source: string; name: string }> {
   readonly byKey = new Map<string, T>();
   readonly byRef = new Map<string, T>();
-  readonly nameCounts = new Map<string, number>();
 
   constructor(entries: Iterable<T>) {
     for (const entry of entries) {
       this.byKey.set(entryKey(entry.source, entry.name), entry);
       this.byRef.set(entryRef(entry.source, entry.name), entry);
-      this.nameCounts.set(entry.name, (this.nameCounts.get(entry.name) ?? 0) + 1);
     }
   }
 
@@ -272,14 +270,5 @@ export class AssertIndex<T extends { source: string; name: string }> {
 
   getRef(ref: string): T | undefined {
     return this.byRef.get(ref);
-  }
-
-  /** Resolve a legacy bare name only when it is unambiguous. */
-  resolveLegacyName(name: string): T | undefined {
-    if (this.nameCounts.get(name) !== 1) return undefined;
-    for (const entry of this.byKey.values()) {
-      if (entry.name === name) return entry;
-    }
-    return undefined;
   }
 }

@@ -1,9 +1,9 @@
 /**
  * Tests for the pure fuzzy matcher (`pi-assert/ui/fuzzy.ts`).
  *
- * These assert derivable *orderings* and match/non-match, not raw score
- * numbers — the scoring constants are an implementation detail. Tier
- * dominance and within-section stability are the contract.
+ * These assert subsequence match/non-match, returned highlighting positions,
+ * and the four coarse field-tier orderings with stable within-section order —
+ * not raw scores (there are none).
  */
 
 import { describe, it } from "node:test";
@@ -75,10 +75,9 @@ function makePreset(
 // ── fuzzyMatch ─────────────────────────────────────────────────────
 
 describe("fuzzyMatch", () => {
-  it("matches a subsequence", () => {
+  it("matches a subsequence and returns positions", () => {
     const m = fuzzyMatch("wrg", "write-guard");
-    assert.ok(m, "wrg is a subsequence of write-guard");
-    assert.deepEqual(m!.positions, [0, 1, 6]); // w,r,g in 'write-guard'
+    assert.deepEqual(m, [0, 1, 6]); // w,r,g in 'write-guard'
   });
 
   it("returns null when not a subsequence", () => {
@@ -86,73 +85,18 @@ describe("fuzzyMatch", () => {
   });
 
   it("is case-insensitive", () => {
-    assert.ok(fuzzyMatch("ENV", "no-env"), "ENV matches no-env");
+    assert.deepEqual(fuzzyMatch("ENV", "no-env"), [3, 4, 5]);
   });
 
-  it("returns score 0 for an empty query", () => {
-    const m = fuzzyMatch("", "anything");
-    assert.ok(m);
-    assert.equal(m!.score, 0);
-    assert.deepEqual(m!.positions, []);
+  it("returns an empty position list for an empty query", () => {
+    assert.deepEqual(fuzzyMatch("", "anything"), []);
   });
 
-  it("rewards contiguous matches over scattered ones", () => {
-    const contiguous = fuzzyMatch("wr", "write")!;          // positions 0,1
-    const scattered = fuzzyMatch("wr", "war-ready")!;        // positions 0,2
-    assert.ok(contiguous.score > scattered.score,
-      "contiguous 'wr' in 'write' outscores scattered 'wr' in 'war-ready'");
-  });
-
-  it("rewards word-boundary matches over mid-word ones", () => {
-    const boundary = fuzzyMatch("env", "no-env")!;   // 'env' preceded by '-'
-    const midword = fuzzyMatch("env", "gonnaenv")!;   // same target length-1-ish, mid-word
-    assert.ok(boundary.score > midword.score,
-      "boundary 'env' in 'no-env' outscores mid-word 'env' in 'gonnaenv'");
-  });
-
-  it("rewards camelCase boundaries", () => {
-    const camel = fuzzyMatch("g", "fooGuard")!;        // boundary at camelCase G
-    const plain = fuzzyMatch("g", "fooguard")!;         // mid-word g (lowercase)
-    // The camelCase 'G' is a boundary; the lowercase 'g' in 'fooguard' is not
-    // (mid-word, no boundary char). Both share earliness but camel scores
-    // the boundary bonus.
-    assert.ok(camel.score > plain.score,
-      "camelCase boundary outscores mid-word lowercase");
-  });
-
-  // ── fzf-style gap penalty + 0-clamp + first-char multiplier (#1/#2/#3) ─────
-
-  it("gap penalty: a tight match outscores a scattered one of the same length", () => {
-    // 'ab' contiguous at the start of 'able' (boundary + consec chars)
-    // beats 'ab' scattered across 'a................b' (one big gap).
-    const tight = fuzzyMatch("ab", "able")!;
-    const scattered = fuzzyMatch("ab", "a" + "x".repeat(20) + "b")!;
-    assert.ok(tight.score > scattered.score,
-      "contiguous 'ab' outscores scattered 'ab' across a long gap");
-  });
-
-  it("gap penalty grows with the gap, so wider gaps score lower", () => {
-    const narrow = fuzzyMatch("ab", "a" + "x".repeat(4) + "b")!;
-    const wider = fuzzyMatch("ab", "a" + "x".repeat(40) + "b")!;
-    assert.ok(narrow.score > wider.score,
-      "a 4-char gap outscores a 40-char gap");
-  });
-
-  it("0-clamp: a hugely-scattered hit scores 0 (dead path)", () => {
-    // Gaps so wide that the gap penalty eats all the accumulated bonus.
-    const dead = fuzzyMatch("git", "g" + "x".repeat(120) + "i" + "x".repeat(120) + "t")!;
-    assert.equal(dead.score, 0,
-      "a path whose gap penalties cancel all bonus is clamped to 0");
-  });
-
-  it("first-char multiplier: a boundary-first match beats a mid-word one", () => {
-    // Both targets have 'g' as a subsequence; 'foo/g' has it at a word
-    // boundary (after '/') for the FIRST pattern char, which is doubled.
-    // 'fooag' has 'g' mid-word (no boundary) — bonus is 0 either way.
-    const boundaryFirst = fuzzyMatch("g", "foo/g")!;   // 'g' after '/'
-    const midword = fuzzyMatch("g", "fooag")!;          // 'g' mid-word
-    assert.ok(boundaryFirst.score > midword.score,
-      "a boundary first-char match (bonus doubled) outranks a mid-word one");
+  it("matches an extremely scattered subsequence", () => {
+    const target = "g" + "x".repeat(120) + "i" + "x".repeat(120) + "t";
+    const m = fuzzyMatch("git", target);
+    assert.ok(m, "a scattered subsequence still matches");
+    assert.deepEqual(m, [0, 121, 242]);
   });
 });
 
@@ -160,14 +104,13 @@ describe("fuzzyMatch", () => {
 
 describe("matchQuery", () => {
   it("ignores spaces in the query (v1a strip)", () => {
-    assert.ok(matchQuery("no env", "no-env"),
-      "'no env' matches 'no-env' because spaces are ignored for matching");
+    assert.deepEqual(matchQuery("no env", "no-env"), [0, 1, 3, 4, 5],
+      "'no env' matches 'no-env' space-stripped");
   });
 
-  it("a whitespace-only query matches everything", () => {
-    assert.ok(matchQuery(" ", "x"), "a single space strips to empty → matches");
-    assert.ok(matchQuery("   ", "anything"),
-      "all-spaces query strips to empty → matches");
+  it("a whitespace-only query strips to empty and matches", () => {
+    assert.deepEqual(matchQuery(" ", "x"), []);
+    assert.deepEqual(matchQuery("   ", "anything"), []);
   });
 });
 
@@ -178,15 +121,12 @@ describe("highlightSegments", () => {
     assert.equal(highlightSegments("", "no-env"), null);
   });
 
-  it("returns null when the query is not a subsequence", () => {
-    assert.equal(highlightSegments("xyz", "no-env"), null);
+  it("returns null for a whitespace-only query", () => {
+    assert.equal(highlightSegments("   ", "no-env"), null);
   });
 
-  it("returns null for a 0-clamp dead-path match (consistent with filterSection)", () => {
-    // Same dead-path case as fuzzyMatch: gaps so wide the score clamps to 0,
-    // which filterSection treats as a non-match — so it must not highlight.
-    const dead = "g" + "x".repeat(120) + "i" + "x".repeat(120) + "t";
-    assert.equal(highlightSegments("git", dead), null);
+  it("returns null when the query is not a subsequence", () => {
+    assert.equal(highlightSegments("xyz", "no-env"), null);
   });
 
   it("splits a contiguous match into matched/unmatched runs", () => {
@@ -204,8 +144,6 @@ describe("highlightSegments", () => {
   });
 
   it("reconstructs the target and marks exactly the matched indices", () => {
-    // 'wrg' in 'write-guard' → w(0), r(1), g(6): scattered, so matched runs
-    // are interleaved with unmatched gaps.
     const segs = highlightSegments("wrg", "write-guard")!;
     assert.equal(segs.map((s) => s.text).join(""), "write-guard");
     const matchedIdx: number[] = [];
@@ -219,104 +157,107 @@ describe("highlightSegments", () => {
     assert.deepEqual(matchedIdx, [0, 1, 6]);
   });
 
-  it("ignores spaces in the query (v1a strip)", () => {
-    // 'no env' strips to 'noenv' → matches 'no-env' (skipping the '-').
-    const segs = highlightSegments("no env", "no-env")!;
-    assert.ok(segs, "space-stripped query still matches");
-    assert.equal(segs.map((s) => s.text).join(""), "no-env");
-  });
-
   it("is case-insensitive", () => {
     const segs = highlightSegments("ENV", "no-env")!;
     assert.ok(segs.some((s) => s.matched && s.text.toLowerCase() === "env"));
+  });
+
+  it("uses the same positions as eligibility", () => {
+    // Every position `filterSection` ranks on is exactly what highlights.
+    const m = matchQuery("env", "protect-env")!;
+    const segs = highlightSegments("env", "protect-env")!;
+    const highlighted: number[] = [];
+    let i = 0;
+    for (const s of segs) {
+      for (let j = 0; j < s.text.length; j++) {
+        if (s.matched) highlighted.push(i);
+        i++;
+      }
+    }
+    assert.deepEqual(highlighted, Array.from(m));
   });
 });
 
 // ── filterSection ───────────────────────────────────────────────────
 
 describe("filterSection", () => {
-  it("empty query returns all asserts in original order with score 0", () => {
+  it("empty query returns all entries in original order", () => {
     const a = makeAssert("alpha");
     const b = makeAssert("beta");
     const out = filterSection("", [a, b]);
-    assert.equal(out.length, 2);
-    assert.equal(out[0]!.assert, a);
-    assert.equal(out[1]!.assert, b);
-    assert.equal(out[0]!.result.score, 0);
+    assert.deepEqual(out, [a, b]);
   });
 
-  it("whitespace-only query returns all asserts (strip → empty)", () => {
+  it("whitespace-only query returns all entries in original order", () => {
     const a = makeAssert("alpha");
     const b = makeAssert("beta");
     const out = filterSection("   ", [a, b]);
-    assert.equal(out.length, 2);
-    assert.equal(out[0]!.assert, a);
-    assert.equal(out[1]!.assert, b);
+    assert.deepEqual(out, [a, b]);
   });
 
-  it("filters to matching asserts", () => {
+  it("filters to matching entries", () => {
     const a = makeAssert("write-guard");
     const b = makeAssert("no-env");
     const out = filterSection("env", [a, b]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, b);
+    assert.deepEqual(out, [b]);
   });
 
-  it("ranks best-first within the section", () => {
-    const write = makeAssert("write-guard", { description: "forbids env leaks" });
-    const env = makeAssert("no-env", { description: "unrelated" });
-    const out = filterSection("env", [write, env]);
-    // 'no-env' matches in name (tier 40 000); 'write-guard' only in
-    // description (tier 30 000). Name wins.
-    assert.equal(out.length, 2);
-    assert.equal(out[0]!.assert, env);
-    assert.equal(out[1]!.assert, write);
-  });
-
-  it("tier dominance: name outranks description regardless of fuzz", () => {
-    // 'description-only' matches PERFECTLY (all-contiguous, boundary) in
-    // description but not in name; 'x' matches in name but poorly.
-    const perfectDesc = makeAssert("zzz", {
-      description: "env",          // contiguous + boundary, max fuzz
-    });
-    const poorName = makeAssert("env", {   // name is exactly 'env'
-      description: "unrelated",
-    });
+  it("name outranks description", () => {
+    const perfectDesc = makeAssert("zzz", { description: "env" });
+    const poorName = makeAssert("env", { description: "unrelated" });
     const out = filterSection("env", [perfectDesc, poorName]);
-    assert.equal(out[0]!.assert, poorName,
-      "a name match (tier 40 000) outranks a perfect description match (≤ 39 999)");
+    assert.deepEqual(out, [poorName, perfectDesc],
+      "a name match outranks a description match");
   });
 
-  it("tier dominance: description outranks source", () => {
+  it("description outranks source", () => {
     const descMatch = makeAssert("x", { description: "env" });
     const sourceMatch = makeAssert("y", { source: "owner/env-tools" });
     const out = filterSection("env", [descMatch, sourceMatch]);
-    assert.equal(out[0]!.assert, descMatch,
-      "description (tier 30 000) outranks source (tier 20 000)");
+    assert.deepEqual(out, [descMatch, sourceMatch],
+      "description outranks source");
   });
 
-  it("tier dominance: source outranks shell", () => {
+  it("source outranks body fields", () => {
     const sourceMatch = makeAssert("x", { source: "owner/env-tools" });
     const shellMatch = makeAssert("y", { shell: "grep env .env" });
     const out = filterSection("env", [sourceMatch, shellMatch]);
-    assert.equal(out[0]!.assert, sourceMatch,
-      "source (tier 20 000) outranks shell (tier 10 000)");
+    assert.deepEqual(out, [sourceMatch, shellMatch],
+      "source outranks shell");
+  });
+
+  it("shell, when, Action detail, and Preset refs share one tier", () => {
+    const shellMatch = makeAssert("s", { shell: "grep env .env" });
+    const whenMatch = makeAssert("w", { when: "test -f ./env" });
+    const actionMatch = makeAction("a");
+    const presetMatch = makePreset("p", ["local/env-guard"]);
+    // Each matches only via its body field: same tier → catalog order.
+    const bodyEntries = [shellMatch, whenMatch, actionMatch, presetMatch];
+    const out = filterSection("env", bodyEntries);
+    assert.deepEqual(out, bodyEntries,
+      "body-tier matches retain catalog order");
+  });
+
+  it("same-tier matches preserve catalog order regardless of match gaps", () => {
+    // Both match only via shell (same tier); the scattered one must NOT
+    // outrank the tight one (no match-gap quality heuristics).
+    const tight = makeAssert("t", { shell: "env " });
+    const scattered = makeAssert("s", {
+      shell: "e" + "x".repeat(40) + "n" + "x".repeat(40) + "v",
+    });
+    const out = filterSection("env", [scattered, tight]);
+    assert.deepEqual(out, [scattered, tight],
+      "same-tier entries keep catalog order even across a huge gap");
   });
 
   it("is stable on ties (original within-section order preserved)", () => {
-    // Two asserts that tie: identical name prefix match quality. Ties must
-    // keep their original section order.
     const first = makeAssert("aaa-env");
     const second = makeAssert("bbb-env");
     const out = filterSection("env", [first, second]);
-    assert.equal(out[0]!.assert, first);
-    assert.equal(out[1]!.assert, second);
+    assert.deepEqual(out, [first, second]);
   });
 
   it("does not throw when description/when are absent (test-constructed)", () => {
-    // makeAssert sets description:"" by default here; verify an assert
-    // built with the panel-test helper shape (description omitted entirely
-    // on the type but present as undefined) still ranks.
     const a: CatalogEntry = {
       name: "no-env",
       source: "local",
@@ -326,54 +267,29 @@ describe("filterSection", () => {
       // description intentionally omitted
     } as unknown as CatalogEntry;
     const out = filterSection("env", [a]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, a);
+    assert.deepEqual(out, [a]);
   });
 
   it("matches against the `when` field", () => {
     const a = makeAssert("x", { when: "test -f ./env" });
-    const out = filterSection("env", [a]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, a);
+    assert.deepEqual(filterSection("env", [a]), [a]);
   });
 
-  it("0-clamp excludes asserts whose only field hits a dead path", () => {
-    // 'osc-rule' has 'g','i','t' only as spread across a long shell with
-    // gaps ~60. The weak shell hit 0-clamps → no field contributes → the
-    // assert drops out of the section entirely (the "too fuzzy" fix).
-    const gitGuard = makeAssert("git-guard");
-    const osc = makeAssert("osc-rule", {
-      shell: "echo g" + "x".repeat(60) + "i" + "x".repeat(60) + "t",
-    });
-    const out = filterSection("git", [gitGuard, osc]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, gitGuard,
-      "only the tight git-guard survives; osc's dead-path shell match is dropped");
+  it("matches against the owned Action detail at the body tier", () => {
+    const action = makeAction("notify");
+    assert.deepEqual(filterSection("followUp", [action]), [action]);
+    assert.deepEqual(filterSection("investigate", [action]), [action]);
+    assert.deepEqual(filterSection("triggerTurn", [action]), [action]);
   });
 
-  it("excludes asserts that match no field", () => {
+  it("excludes entries that match no field", () => {
     const a = makeAssert("write-guard");
     const b = makeAssert("no-secrets");
-    const out = filterSection("zzz", [a, b]);
-    assert.equal(out.length, 0);
+    assert.deepEqual(filterSection("zzz", [a, b]), []);
   });
 });
 
 // ── preset field (coerce) ─────────────────────────────────────────────
-//
-describe("filterSection — owned Action field", () => {
-  it("matches action type and safe configuration at the body tier", () => {
-    const action = makeAction("notify");
-    assert.equal(filterSection("followUp", [action])[0]?.assert, action);
-    assert.equal(filterSection("investigate", [action])[0]?.assert, action);
-    assert.equal(filterSection("triggerTurn", [action])[0]?.assert, action);
-  });
-});
-
-// A preset's `preset` refs are a string array; `filterSection` coerces them
-// to a `", "`-joined string (matching `renderAssertDetail`'s `asserts:`
-// join, so highlight positions align with the rank) at the same tier as
-// `shell`/`when`.  These cover the coerce path and its tier dominance.
 
 describe("filterSection — preset field", () => {
   it("matches a preset via its `preset` refs (coerced to a joined string)", () => {
@@ -381,74 +297,40 @@ describe("filterSection — preset field", () => {
       "local/block-rm-rf",
       "meffmadd/pi-assert-rules/protect-env",
     ]);
-    const out = filterSection("protect-env", [p]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, p);
+    assert.deepEqual(filterSection("protect-env", [p]), [p]);
   });
 
   it("matches a ref that appears after the join separator", () => {
-    // The coerce joins with `", "`; a ref in the second position must still be
-    // reachable (the comma+space is just a gap in the subsequence).
     const p = makePreset("p", ["local/foo", "local/bar"]);
-    const out = filterSection("bar", [p]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, p);
+    assert.deepEqual(filterSection("bar", [p]), [p]);
   });
 
   it("tier dominance: name outranks preset", () => {
-    // 'env-preset' matches in name (tier 40 000); 'other' only via a preset
-    // ref (tier 10 000). Name wins.
     const nameMatch = makePreset("env-preset", ["local/x"]);
     const presetMatch = makePreset("other", ["local/env-guard"]);
     const out = filterSection("env", [nameMatch, presetMatch]);
-    assert.equal(out[0]!.assert, nameMatch,
-      "name (tier 40 000) outranks preset (tier 10 000)");
-  });
-
-  it("tier dominance: preset ranks alongside shell/when (same tier, fuzz breaks ties)", () => {
-    // Both match only via their tier-10 000 body field: a preset ref vs a
-    // shell string. A tight contiguous ref match outranks a scattered shell
-    // match at the same tier (fuzz decides), confirming preset is tier 10 000,
-    // not a higher tier.
-    const preset = makePreset("p", ["local/env-guard"]);          // contiguous
-    const shell = makeAssert("s", { shell: "e" + "x".repeat(20) + "nv" }); // scattered
-    const out = filterSection("env", [preset, shell]);
-    assert.equal(out[0]!.assert, preset,
-      "preset is tier 10 000 — a tighter ref fuzz beats a scattered shell fuzz");
+    assert.deepEqual(out, [nameMatch, presetMatch],
+      "name outranks a preset-ref body match");
   });
 
   it("an empty preset array does not match on the preset field", () => {
-    // No refs → coerce yields "" → preset field contributes nothing. The
-    // preset still matches via its name.
     const p = makePreset("zzz", []);
-    const out = filterSection("zzz", [p]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, p);
+    assert.deepEqual(filterSection("zzz", [p]), [p],
+      "still matches via its name");
   });
 
   it("a preset whose refs don't contain the query is excluded", () => {
     const p = makePreset("p", ["local/foo"]);
-    const out = filterSection("bar", [p]);
-    assert.equal(out.length, 0);
+    assert.deepEqual(filterSection("bar", [p]), []);
   });
 
   it("shell asserts are unaffected (preset field is undefined → coerce yields \"\")", () => {
-    // A ShellAssert has no `preset`; the coerce returns "" for undefined so
-    // the preset field never contributes for a shell assert.
     const a = makeAssert("write-guard", { shell: "echo hi" });
-    const out = filterSection("hi", [a]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0]!.assert, a);
+    assert.deepEqual(filterSection("hi", [a]), [a]);
   });
 });
 
 // ── highlightSegments — joined preset refs ─────────────────────────────
-//
-// `highlightSegments` is pure: it highlights across whatever string it's
-// given. `renderAssertDetail` feeds it a preset's refs joined with `", "`
-// (the same separator `filterSection`'s coerce uses), so a ref after the
-// comma is highlighted. These lock in that the joined string is searchable
-// end-to-end.
 
 describe("highlightSegments — joined preset refs", () => {
   it("highlights a ref that sits after the ', ' join separator", () => {

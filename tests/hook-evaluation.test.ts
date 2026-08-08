@@ -11,16 +11,40 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Hook, NativeHook } from "../pi-assert/domain/entry.js";
+import { adapterFor } from "../pi-assert/hook-evaluation/adapters.js";
+import { invokeAssertions } from "../pi-assert/hook-evaluation/invocations.js";
 import type {
   ActiveAssertion,
 } from "../pi-assert/hook-evaluation/index.js";
 import {
   HookEvaluation,
   createActiveAssertionSet,
+  type AssertionExecutionReport,
+  type EvaluationReportRow,
   type HookEventMap,
   type HookExecutionContext,
   type HookEvaluationResult,
 } from "../pi-assert/hook-evaluation/index.js";
+
+/** Ordered assertion rows of one report (or none). */
+function assertionRows(
+  report?: AssertionExecutionReport,
+): Array<Extract<EvaluationReportRow, { type: "assertion" }>> {
+  return (report?.rows ?? []).filter(
+    (row): row is Extract<EvaluationReportRow, { type: "assertion" }> =>
+      row.type === "assertion",
+  );
+}
+
+/** Ordered action rows of one report (or none). */
+function actionRows(
+  report?: AssertionExecutionReport,
+): Array<Extract<EvaluationReportRow, { type: "action" }>> {
+  return (report?.rows ?? []).filter(
+    (row): row is Extract<EvaluationReportRow, { type: "action" }> =>
+      row.type === "action",
+  );
+}
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -145,7 +169,7 @@ describe("Hook Evaluation native outcomes", () => {
     }
     assert.equal(existsSync(join(cwd, "not-run")), true);
     assert.deepEqual(
-      result.executionReport?.executions.map(({ assertionRef, passed }) => ({
+      assertionRows(result.executionReport).map(({ assertionRef, passed }) => ({
         assertionRef,
         passed,
       })),
@@ -294,7 +318,7 @@ describe("Hook Evaluation native outcomes", () => {
     assert.match(presentationMessages(result)[0] ?? "", /\*\*one\*\*/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*two\*\*/);
     assert.deepEqual(
-      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(result.executionReport).map((row) => row.assertionRef),
       ["local/one", "local/two"],
     );
   });
@@ -363,18 +387,33 @@ describe("Hook Evaluation native outcomes", () => {
     assert.ok(Object.isFrozen(result));
     assert.ok(Object.isFrozen(result.effects));
     assert.ok(Object.isFrozen(result.executionReport));
-    assert.ok(Object.isFrozen(result.executionReport?.executions));
-    assert.equal(result.executionReport?.executions.length, 1);
-    const execution = result.executionReport?.executions[0];
-    assert.equal(execution?.assertionRef, "owner/rules/pass");
-    assert.equal(execution?.hook, "tool_call");
-    assert.equal(execution?.passed, true);
-    assert.ok((execution?.durationMs ?? -1) >= 0);
-    assert.ok(Object.isFrozen(execution));
+    assert.ok(Object.isFrozen(result.executionReport?.rows));
+    assert.equal(assertionRows(result.executionReport).length, 1);
+    const row = assertionRows(result.executionReport)[0];
+    assert.equal(row?.assertionRef, "owner/rules/pass");
+    assert.equal(row?.type, "assertion");
+    assert.equal(row?.passed, true);
+    assert.ok((row?.durationMs ?? -1) >= 0);
+    assert.ok(Object.isFrozen(row));
+    // Reporting rows carry no invocation identity or row-level hook.
+    assert.ok(!("runId" in (row ?? {})), "no runId on a report row");
+    assert.ok(!("hook" in (row ?? {})), "no row-level hook");
   });
 });
 
 describe("Assertion Invocation semantics", () => {
+  it("freezes each individual Assertion Result at Invocation creation", async () => {
+    const batch = await invokeAssertions(
+      [assertion("immutable", "tool_call")],
+      adapterFor("tool_call"),
+      toolCall,
+      context(root),
+    );
+
+    assert.equal(batch.invocations.length, 1);
+    assert.ok(Object.isFrozen(batch.invocations[0]!.result));
+  });
+
   it("runs filter then when then shell with one shared environment", async () => {
     const cwd = caseDirectory("when-shell-environment");
     const print =
@@ -396,7 +435,7 @@ describe("Assertion Invocation semantics", () => {
     const whenIdentity = readFileSync(join(cwd, "when.log"), "utf8").trim();
     const shellIdentity = readFileSync(join(cwd, "shell.log"), "utf8").trim();
     assert.equal(shellIdentity, whenIdentity);
-    assert.equal(result.executionReport?.executions.length, 1);
+    assert.equal(assertionRows(result.executionReport).length, 1);
     const [ref, hook, runId, event, session] = shellIdentity.split("|");
     assert.equal(ref, "owner/rules/identity");
     assert.equal(hook, "tool_call");
@@ -502,7 +541,7 @@ describe("Assertion Invocation semantics", () => {
     assert.equal(result.outcome, "pass");
     assert.equal(existsSync(join(cwd, "should-not-run")), false);
     assert.deepEqual(
-      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(result.executionReport).map((row) => row.assertionRef),
       ["local/pass"],
     );
   });
@@ -635,46 +674,40 @@ describe("Assertion Invocation semantics", () => {
 });
 
 describe("Active Assertion Set", () => {
-  it("copies and freezes its collection, assertions, and nested filters", async () => {
-    const names = ["bash"];
-    const rule = assertion("frozen", "tool_call", "false", {
-      filter: { toolName: names },
-    });
-    const activeSet = createActiveAssertionSet([rule]);
+  it("copies its ordered membership while reusing immutable catalog Assertions", async () => {
+    const first = assertion("first", "tool_call", "false");
+    const second = assertion("second", "tool_call", "true");
+    const input = [first, second];
+    const activeSet = createActiveAssertionSet(input);
     assert.ok(Object.isFrozen(activeSet));
-    assert.equal(activeSet.size, 1);
+    assert.equal(activeSet.size, 2);
 
-    names.push("write");
-    rule.shell = "true";
-    rule.filter = undefined;
+    // Later activation or catalog replacement cannot affect the captured set:
+    // membership is copied, not aliased.
+    input.length = 0;
+    input.push(assertion("replacement", "tool_call", "true"));
 
-    const evaluator = new HookEvaluation();
-    const write = await evaluator.evaluate(
-      "tool_call",
-      { toolName: "write", toolCallId: "write", input: {} },
-      context(root),
-      activeSet,
-    );
-    assert.equal(write.outcome, "pass");
-
-    const bash = await evaluator.evaluate(
+    const result = await new HookEvaluation().evaluate(
       "tool_call",
       toolCall,
       context(root),
       activeSet,
     );
-    assert.equal(bash.outcome, "block");
+    // The captured `first` (shell false) still blocks; the replacement is not
+    // part of this set.
+    assert.equal(result.outcome, "block");
   });
 
   it("captures one set and metadata snapshot for origin and handlers", async () => {
     const cwd = caseDirectory("captured-set-and-metadata");
     const metadata = { PI_SESSION_ID: "captured" };
-    const origin = assertion("origin", "tool_call", "sleep 0.05; true");
-    const handler = assertion(
+    // Catalog-owned Assertions are already immutable; capture reuses them.
+    const origin = Object.freeze(assertion("origin", "tool_call", "sleep 0.05; true"));
+    const handler = Object.freeze(assertion(
       "handler",
       "assert_result",
       "printf '%s' \"$PI_SESSION_ID\" > captured.log",
-    );
+    ));
     const activeSet = createActiveAssertionSet([origin, handler]);
     const evaluation = new HookEvaluation().evaluate(
       "tool_call",
@@ -683,8 +716,9 @@ describe("Active Assertion Set", () => {
       activeSet,
     );
 
+    // Mutating runtime metadata after capture must not affect the running
+    // evaluation (the metadata snapshot is taken at callback entry).
     metadata.PI_SESSION_ID = "changed";
-    handler.shell = "false";
     const result = await evaluation;
     assert.equal(result.outcome, "pass");
     assert.equal(readFileSync(join(cwd, "captured.log"), "utf8"), "captured");
@@ -745,7 +779,7 @@ describe("owned Action evaluation", () => {
     assert.match(effects[1]?.runId ?? "", UUID_PATTERN);
     assert.notEqual(effects[0]?.runId, effects[1]?.runId);
     assert.deepEqual(
-      result.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(result.executionReport).map((row) => row.assertionRef),
       ["local/first", "local/second"],
     );
   });
@@ -780,7 +814,7 @@ describe("owned Action evaluation", () => {
       "local/interrupt",
     ]);
     assert.deepEqual(
-      result.executionReport?.actionRequests.map((request) => ({
+      actionRows(result.executionReport).map((request) => ({
         ref: request.assertionRef,
         type: request.actionType,
       })),
@@ -789,7 +823,7 @@ describe("owned Action evaluation", () => {
         { ref: "local/interrupt", type: "interrupt" },
       ],
     );
-    assert.ok(Object.isFrozen(result.executionReport?.actionRequests));
+    assert.ok(Object.isFrozen(result.executionReport?.rows));
   });
 
   it("lets a failure Action select a precondition infrastructure result", async () => {
@@ -815,7 +849,7 @@ describe("owned Action evaluation", () => {
       "request-action",
     ]);
     assert.deepEqual(
-      result.executionReport?.actionRequests.map((request) => ({
+      actionRows(result.executionReport).map((request) => ({
         ref: request.assertionRef,
         outcome: request.outcome,
       })),
@@ -851,7 +885,7 @@ describe("owned Action evaluation", () => {
     assert.equal(result.outcome, "report");
     assert.equal(existsSync(join(cwd, "ordinary-shell")), true);
     assert.deepEqual(
-      result.executionReport?.executions.map(({ assertionRef, passed }) => ({
+      assertionRows(result.executionReport).map(({ assertionRef, passed }) => ({
         assertionRef,
         passed,
       })),
@@ -890,9 +924,9 @@ describe("owned Action evaluation", () => {
     );
 
     assert.equal(result.outcome, "block");
-    assert.equal(result.executionReport?.executions.length, 0);
+    assert.equal(assertionRows(result.executionReport).length, 0);
     assert.deepEqual(
-      result.executionReport?.actionRequests.map(({ assertionRef, outcome }) => ({
+      actionRows(result.executionReport).map(({ assertionRef, outcome }) => ({
         assertionRef,
         outcome,
       })),
@@ -976,9 +1010,9 @@ describe("owned Action evaluation", () => {
 
     assert.deepEqual(
       cases.map((result) => {
-        const requests = result.executionReport?.actionRequests ?? [];
+        const requests = actionRows(result.executionReport);
         assert.equal(requests.length, 1);
-        return requests[0]?.originatingResult?.outcome;
+        return requests[0]?.origin?.outcome;
       }),
       ["pass", "block", "patch", "cancel", "report"],
     );
@@ -1009,8 +1043,8 @@ describe("owned Action evaluation", () => {
       "local/second",
     ]);
     assert.deepEqual(
-      result.executionReport?.actionRequests.map((request) =>
-        request.originatingResult?.assertionRef
+      actionRows(result.executionReport).map((row) =>
+        row.origin?.assertionRef
       ),
       ["local/passes", "local/passes", "local/fails", "local/fails"],
     );
@@ -1018,6 +1052,62 @@ describe("owned Action evaluation", () => {
     assert.ok(eventAction && eventAction.type === "emit-custom-event");
     assert.ok(Object.isFrozen(eventAction));
     assert.ok(Object.isFrozen(eventAction.data));
+  });
+
+  it("exposes one ordered result-major report row sequence", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 2 },
+      [
+        assertion("first", "turn_end", "true"),
+        assertionWithAction("steer", "turn_end", { type: "interrupt" }),
+        assertion("second", "turn_end", "false"),
+        assertion("after", "assert_result", "true"),
+      ],
+    );
+
+    // For each native result: its Assertion row, its owned Action row, then its
+    // synthetic `assert_result` rows — one ordered sequence.
+    const rows = result.executionReport?.rows ?? [];
+    assert.deepEqual(
+      rows.map((row) =>
+        row.type === "assertion"
+          ? `a:${row.assertionRef}`
+          : `x:${row.assertionRef}`
+      ),
+      [
+        "a:local/first",  // native result 1
+        "a:local/after",  // synthetic for result 1
+        "a:local/steer",  // native result 2
+        "x:local/steer",  // its owned Action row directly after its Assertion
+        "a:local/after",  // synthetic for result 2
+        "a:local/second", // native result 3
+        "a:local/after",  // synthetic for result 3
+      ],
+    );
+    // The owned Action row directly follows its owner's Assertion row.
+    const interruptIndex = rows.findIndex(
+      (row) => row.type === "action" && row.assertionRef === "local/steer",
+    );
+    assert.ok(interruptIndex > 0);
+    assert.equal(rows[interruptIndex - 1]?.type, "assertion");
+    assert.equal(rows[interruptIndex - 1]?.assertionRef, "local/steer");
+  });
+
+  it("measures a passing when plus shell in the reported duration", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [assertion("slow-when", "tool_call", "true", { when: "sleep 0.06" })],
+    );
+    const row = assertionRows(result.executionReport)[0];
+    assert.ok(row, "a passing when still yields an Assertion row");
+    assert.ok(
+      (row?.durationMs ?? 0) >= 50,
+      "duration includes the passing when interval",
+    );
   });
 });
 
@@ -1056,19 +1146,24 @@ describe("synthetic assert_result phase", () => {
     assert.match(lines[0] ?? "", /"outcome":"pass","code":0/);
     assert.match(lines[2] ?? "", /"outcome":"report","code":7/);
 
-    const executions = result.executionReport?.executions ?? [];
-    assert.deepEqual(executions.map((execution) => execution.assertionRef), [
+    const rows = result.executionReport?.rows ?? [];
+    const executions = rows.filter(
+      (row): row is Extract<EvaluationReportRow, { type: "assertion" }> =>
+        row.type === "assertion",
+    );
+    assert.deepEqual(executions.map((row) => row.assertionRef), [
       "local/origin-pass",
+      "local/first",
+      "local/second",
       "local/origin-fail",
       "local/first",
       "local/second",
-      "local/first",
-      "local/second",
     ]);
+    // Synthetic handler rows carry the projected origin; they are interleaved
+    // result-major (native row, then its handlers).
+    const synthetic = executions.filter((row) => row.origin !== undefined);
     assert.deepEqual(
-      executions.slice(2).map((execution) =>
-        execution.originatingResult?.assertionRef
-      ),
+      synthetic.map((row) => row.origin?.assertionRef),
       [
         "local/origin-pass",
         "local/origin-pass",
@@ -1076,7 +1171,7 @@ describe("synthetic assert_result phase", () => {
         "local/origin-fail",
       ],
     );
-    assert.ok(Object.isFrozen(executions[2]?.originatingResult));
+    assert.ok(Object.isFrozen(executions[1]?.origin));
   });
 
   it("matches assertion refs by regex, outcomes exactly, and codes strictly", async () => {
@@ -1231,9 +1326,9 @@ describe("synthetic assert_result phase", () => {
     assert.equal(result.effects.length, 1);
     assert.match(presentationMessages(result)[0] ?? "", /assert_result assertion failed/);
     assert.deepEqual(
-      result.executionReport?.executions.map((execution) => ({
-        assertionRef: execution.assertionRef,
-        origin: execution.originatingResult?.assertionRef,
+      assertionRows(result.executionReport).map((row) => ({
+        assertionRef: row.assertionRef,
+        origin: row.origin?.assertionRef,
       })),
       [
         { assertionRef: "local/origin", origin: undefined },
@@ -1260,7 +1355,7 @@ describe("session policy state", () => {
       "request-corrective-turn",
     ]);
     assert.deepEqual(
-      first.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(first.executionReport).map((row) => row.assertionRef),
       ["local/clean"],
     );
 
@@ -1303,19 +1398,19 @@ describe("session policy state", () => {
       ],
     );
     assert.deepEqual(
-      tool.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(tool.executionReport).map((row) => row.assertionRef),
       ["local/tool", "local/tool-action"],
     );
     assert.deepEqual(
-      end.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(end.executionReport).map((row) => row.assertionRef),
       ["local/end", "local/end-action"],
     );
     assert.deepEqual(
-      tool.executionReport?.actionRequests.map((request) => request.assertionRef),
+      actionRows(tool.executionReport).map((row) => row.assertionRef),
       ["local/tool-action"],
     );
     assert.deepEqual(
-      end.executionReport?.actionRequests.map((request) => request.assertionRef),
+      actionRows(end.executionReport).map((row) => row.assertionRef),
       ["local/end-action"],
     );
   });
@@ -1352,19 +1447,19 @@ describe("session policy state", () => {
     assert.equal(first.outcome, "pass");
     assert.equal(second.outcome, "pass");
     assert.deepEqual(
-      first.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(first.executionReport).map((row) => row.assertionRef),
       ["local/a", "local/action-a"],
     );
     assert.deepEqual(
-      second.executionReport?.executions.map((execution) => execution.assertionRef),
+      assertionRows(second.executionReport).map((row) => row.assertionRef),
       ["local/b", "local/action-b"],
     );
     assert.deepEqual(
-      first.executionReport?.actionRequests.map((request) => request.assertionRef),
+      actionRows(first.executionReport).map((row) => row.assertionRef),
       ["local/action-a"],
     );
     assert.deepEqual(
-      second.executionReport?.actionRequests.map((request) => request.assertionRef),
+      actionRows(second.executionReport).map((row) => row.assertionRef),
       ["local/action-b"],
     );
   });

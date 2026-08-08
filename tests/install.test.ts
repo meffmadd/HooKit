@@ -115,8 +115,8 @@ describe("fetchRuleFiles", () => {
         mockTreeBlob("rules/security.json"),
       ],
       expected: [
-        { name: "defaults", path: "rules/defaults.json", sha: "abc123" },
-        { name: "security", path: "rules/security.json", sha: "abc123" },
+        { name: "defaults", path: "rules/defaults.json" },
+        { name: "security", path: "rules/security.json" },
       ],
     },
     {
@@ -125,7 +125,7 @@ describe("fetchRuleFiles", () => {
         mockTreeBlob("rules/defaults.json"),
         mockTreeBlob("rules/README.md"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+      expected: [{ name: "defaults", path: "rules/defaults.json" }],
     },
     {
       label: "filters out tree (directory) entries",
@@ -133,7 +133,7 @@ describe("fetchRuleFiles", () => {
         mockTreeBlob("rules/defaults.json"),
         mockTreeDir("rules/subdir"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+      expected: [{ name: "defaults", path: "rules/defaults.json" }],
     },
     {
       label: "filters out files outside rules/ (tree is repo-wide)",
@@ -142,7 +142,7 @@ describe("fetchRuleFiles", () => {
         mockTreeBlob("README.md"),
         mockTreeBlob("src/index.ts"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json", sha: "abc123" }],
+      expected: [{ name: "defaults", path: "rules/defaults.json" }],
     },
     {
       label: "returns [] for empty tree",
@@ -163,11 +163,11 @@ describe("fetchRuleFiles", () => {
         mockTreeBlob("package.json"),
       ],
       expected: [
-        { name: "defaults", path: "rules/defaults.json", sha: "abc123" },
-        { name: "experimental/drafts/trial", path: "rules/experimental/drafts/trial.json", sha: "abc123" },
-        { name: "git/no-force-push", path: "rules/git/no-force-push.json", sha: "abc123" },
-        { name: "security/reads", path: "rules/security/reads.json", sha: "abc123" },
-        { name: "security/writes", path: "rules/security/writes.json", sha: "abc123" },
+        { name: "defaults", path: "rules/defaults.json" },
+        { name: "experimental/drafts/trial", path: "rules/experimental/drafts/trial.json" },
+        { name: "git/no-force-push", path: "rules/git/no-force-push.json" },
+        { name: "security/reads", path: "rules/security/reads.json" },
+        { name: "security/writes", path: "rules/security/writes.json" },
       ],
     },
   ];

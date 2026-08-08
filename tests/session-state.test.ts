@@ -79,17 +79,53 @@ describe("session state catalog replacement", () => {
     assert.equal(state.isActive(state.entries[1]!), false);
   });
 
-  it("restores source-qualified identities and drops ambiguous legacy names", () => {
+  it("restores canonical saved keys and prunes missing ones", () => {
     const { global, project, state } = setup("identity");
     writeJson(project, {
-      local: { guard: shell("true") },
+      repos: ["owner/repo"],
+      local: { guard: shell("true"), gone: shell("true") },
       "owner/repo": { guard: shell("true") },
     });
     state.load({ global, project });
-    state.restore(context(["local\x00guard", "guard"]));
+    state.restore(context([
+      "local\x00guard",
+      "owner/repo\x00guard",
+      "local\x00missing", // pruned: not in the catalog
+    ]));
 
-    assert.equal(state.isActive(state.entries[0]!), true);
-    assert.equal(state.isActive(state.entries[1]!), false);
+    assert.deepEqual(Array.from(state.active),
+      ["local\x00guard", "owner/repo\x00guard"]);
+  });
+
+  it("silently drops bare saved names, including unambiguous ones", () => {
+    const { global, project, state } = setup("bare");
+    writeJson(project, {
+      local: { guard: shell("true"), other: shell("true") },
+    });
+    state.load({ global, project });
+    // `guard` is unambiguous (only one catalog entry with that name) but is a
+    // bare name; it must still be discarded without name resolution.
+    state.restore(context(["local\x00other", "guard"]));
+
+    assert.deepEqual(Array.from(state.active), ["local\x00other"]);
+  });
+
+  it("a saved entry containing only discarded names still represents saved mode", () => {
+    const { global, project, state } = setup("saved-only-discarded");
+    writeJson(project, {
+      local: {
+        guard: shell("true", true), // default would apply in defaults mode
+      },
+    });
+    state.load({ global, project });
+    state.restore(context(["bare-name"]));
+
+    // The bare name is discarded AND defaults are not re-enabled: a saved
+    // activation entry (even one with nothing restorable) means saved mode.
+    assert.deepEqual(Array.from(state.active), []);
+    state.enable("local\x00guard");
+    state.persist();
+    assert.deepEqual(state.active.size, 1);
   });
 
   it("preserves saved identities across a fresh catalog and prunes removed ones", () => {
@@ -239,7 +275,9 @@ describe("session state Active Assertion Set", () => {
     );
     assert.equal(evaluated.outcome, "pass");
     assert.deepEqual(
-      evaluated.executionReport?.actionRequests.map((request) => request.assertionRef),
+      (evaluated.executionReport?.rows ?? [])
+        .filter((row) => row.type === "action")
+        .map((row) => row.assertionRef),
       ["local/notify"],
     );
   });

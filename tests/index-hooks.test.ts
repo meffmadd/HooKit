@@ -134,6 +134,43 @@ function toolResultEvent(
   return { toolName, toolCallId, input: {}, content, isError: false, details: {} };
 }
 
+interface ToolLifecycleOutcome {
+  readonly callResult: unknown;
+  readonly resultResult?: unknown;
+}
+
+function wasBlocked(result: unknown): boolean {
+  return typeof result === "object" && result !== null &&
+    (result as { block?: unknown }).block === true;
+}
+
+/**
+ * Emit one real Pi tool lifecycle: start → call → result (unless blocked) → end.
+ * Both Hook Evaluations therefore share one lifecycle interval and identity.
+ */
+async function executeTool(
+  harness: ExtensionHarness,
+  ctx: ExtensionContext,
+  toolName: string,
+  toolCallId: string,
+): Promise<ToolLifecycleOutcome> {
+  await harness.handler("tool_execution_start")({ toolName, toolCallId }, ctx);
+  try {
+    const callResult = await harness.handler("tool_call")(
+      toolCallEvent(toolName, toolCallId),
+      ctx,
+    );
+    if (wasBlocked(callResult)) return { callResult };
+    const resultResult = await harness.handler("tool_result")(
+      toolResultEvent(toolName, toolCallId),
+      ctx,
+    );
+    return { callResult, resultResult };
+  } finally {
+    await harness.handler("tool_execution_end")({ toolName, toolCallId }, ctx);
+  }
+}
+
 async function startSession(
   harness: ExtensionHarness,
   ctx: ExtensionContext,
@@ -207,12 +244,14 @@ describe("index catalog authorization", () => {
       (harness.pi as unknown as { appendEntry: () => void }).appendEntry = () => {
         throw new Error("execution entry unavailable");
       };
-      const result = await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "global", input: {} },
+      const { callResult } = await executeTool(
+        harness,
         ctx,
+        "bash",
+        "global",
       );
 
-      assert.deepStrictEqual(result, {
+      assert.deepStrictEqual(callResult, {
         block: true,
         reason: 'pi-assert: assertion "global" rejected bash — `false`',
       });
@@ -224,7 +263,7 @@ describe("index catalog authorization", () => {
 });
 
 describe("index execution entries", () => {
-  it("appends one Execution Report for a tool_call Execution Wave before result processing", async () => {
+  it("appends one combined Execution Report for a tool batch wave", async () => {
     await withTemporaryHome("pi-assert-index-wave-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -245,64 +284,133 @@ describe("index execution entries", () => {
         },
       });
 
-      // Five tool_call Hook Evaluations form one Execution Wave before any result.
-      for (const toolCallId of ["call-1", "call-2", "call-3", "call-4", "call-5"]) {
-        const result = await harness.handler("tool_call")(
-          toolCallEvent("read", toolCallId),
-          ctx,
-        );
-        assert.equal(result, undefined);
+      // Three tool_call and three tool_result Hook Evaluations form ONE
+      // Execution Wave for the whole batch.
+      for (const toolCallId of ["call-1", "call-2", "call-3"]) {
+        await executeTool(harness, ctx, "read", toolCallId);
       }
-      // The wave stays pending: nothing is appended yet.
+      // The combined wave stays pending: nothing is appended yet.
       assert.equal(harness.entries.length, 0);
       assert.equal(harness.messages.length, 0);
 
-      // The first tool_result callback flushes one call report.
-      const result = await harness.handler("tool_result")(
-        toolResultEvent("read", "call-1"),
-        ctx,
-      );
-      assert.equal(result, undefined);
+      // A non-tool boundary (turn_end) flushes one combined report.
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
 
-      assert.equal(harness.entries.length, 1);
-      const callData = harness.entries[0]?.data as {
-        hook: string;
-        criticalPathMs: number;
+      assert.equal(harness.entries.length, 1, "no separate call/result reports");
+      const data = harness.entries[0]?.data as {
+        type: string;
+        durationMs: number;
+        tools: Array<{ toolName: string; toolCallId: string }>;
         segments: Array<{
           trigger: { event: string; toolName: string; toolCallId: string };
-          executions: Array<{ assertionRef: string; passed: boolean }>;
-          actionRequests: unknown[];
+          rows: Array<{ assertionRef: string; passed: boolean }>;
         }>;
       };
-      assert.equal(callData.hook, "tool_call");
-      assert.equal(typeof callData.criticalPathMs, "number");
-      assert.equal(callData.segments.length, 5);
+      assert.equal(data.type, "tool-wave");
+      assert.equal(typeof data.durationMs, "number");
+      assert.equal(data.segments.length, 6);
       assert.deepEqual(
-        callData.segments.map((segment) => segment.trigger.toolCallId),
-        ["call-1", "call-2", "call-3", "call-4", "call-5"],
+        data.segments.map((segment) => `${segment.trigger.event}:${segment.trigger.toolCallId}`),
+        [
+          "tool_call:call-1",
+          "tool_result:call-1",
+          "tool_call:call-2",
+          "tool_result:call-2",
+          "tool_call:call-3",
+          "tool_result:call-3",
+        ],
       );
-      for (const segment of callData.segments) {
-        assert.equal(segment.trigger.event, "tool_call");
-        assert.equal(segment.executions.length, 1);
-        assert.equal(segment.executions[0]?.assertionRef, "local/passes");
-        assert.equal(segment.executions[0]?.passed, true);
+      assert.deepEqual(data.tools.map((tool) => tool.toolCallId), [
+        "call-1",
+        "call-2",
+        "call-3",
+      ]);
+      for (const segment of data.segments) {
+        assert.equal(segment.rows.length, 1);
+        assert.equal(
+          segment.rows[0]?.assertionRef,
+          segment.trigger.event === "tool_call" ? "local/passes" : "local/tool-result",
+        );
+        assert.equal(segment.rows[0]?.passed, true);
       }
 
       const collapsed = renderEntry(harness, 0, false);
-      assert.match(collapsed, /pi-assert ran 5 commands in \d+ms · tool_call read ×5/);
+      assert.match(collapsed, /pi-assert guarded 3 tools with 6 Assertions in \d+ms · read ×3/);
       assert.ok(!collapsed.includes("local/passes"), "collapsed omits refs");
       assert.ok(!collapsed.includes("call-1"), "collapsed omits call ids");
       assert.match(collapsed, /\(ctrl\+o to expand\)/);
 
       const expanded = renderEntry(harness, 0, true);
       assert.match(expanded, /tool_call read · id call-1/);
-      assert.match(expanded, /tool_call read · id call-5/);
+      assert.match(expanded, /tool_call read · id call-3/);
       assert.match(expanded, /✓ local\/passes\s+\d+ms/);
       assert.ok(!expanded.includes("to expand"));
     });
   });
 
-  it("flushes a tool_result Execution Wave at a turn_end boundary", async () => {
+  it("finishes tool-result Effect delivery before the matching lifecycle end", async () => {
+    await withTemporaryHome("pi-assert-index-effect-lifecycle-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      const timeline: string[] = [];
+      (harness.pi as unknown as {
+        sendMessage: () => void;
+      }).sendMessage = () => timeline.push("effect");
+      await startSession(harness, ctx, {
+        local: {
+          notify: {
+            description: "deliver within the tool lifecycle",
+            hook: "tool_result",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "done",
+              delivery: "followUp",
+            },
+            default: true,
+          },
+        },
+      });
+
+      await harness.handler("tool_execution_start")(
+        { toolName: "read", toolCallId: "effect-order" },
+        ctx,
+      );
+      await harness.handler("tool_call")(
+        toolCallEvent("read", "effect-order"),
+        ctx,
+      );
+      // Simulate actual tool execution between call and result callbacks. The
+      // durable wave duration must include this lifecycle interval.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await harness.handler("tool_result")(
+        toolResultEvent("read", "effect-order"),
+        ctx,
+      );
+      timeline.push("result-complete");
+      await harness.handler("tool_execution_end")(
+        { toolName: "read", toolCallId: "effect-order" },
+        ctx,
+      );
+      timeline.push("end-complete");
+
+      assert.deepEqual(timeline, [
+        "effect",
+        "result-complete",
+        "end-complete",
+      ]);
+
+      await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
+      const entry = harness.entries[0]?.data as {
+        type: string;
+        durationMs: number;
+      };
+      assert.equal(entry.type, "tool-wave");
+      assert.ok(entry.durationMs >= 15, "duration includes actual tool time");
+    });
+  });
+
+  it("flushes a combined tool_result wave at a turn_end boundary", async () => {
     await withTemporaryHome("pi-assert-index-results-wave-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -318,11 +426,7 @@ describe("index execution entries", () => {
       });
 
       for (const toolCallId of ["r1", "r2", "r3"]) {
-        const result = await harness.handler("tool_result")(
-          toolResultEvent("bash", toolCallId),
-          ctx,
-        );
-        assert.equal(result, undefined);
+        await executeTool(harness, ctx, "bash", toolCallId);
       }
       assert.equal(harness.entries.length, 0);
 
@@ -330,22 +434,22 @@ describe("index execution entries", () => {
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]?.data as {
-        hook: string;
+        type: string;
         segments: Array<{ trigger: { toolCallId: string } }>;
       };
-      assert.equal(data.hook, "tool_result");
+      assert.equal(data.type, "tool-wave");
       assert.deepEqual(
         data.segments.map((segment) => segment.trigger.toolCallId),
-        ["r1", "r2", "r3"],
+        ["r1", "r1", "r2", "r2", "r3", "r3"],
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 3 commands in \d+ms · tool_result bash ×3/,
+        /pi-assert guarded 3 tools with 3 Assertions in \d+ms · bash ×3/,
       );
     });
   });
 
-  it("keeps alternating sequential tool_call/tool_result callbacks as separate reports", async () => {
+  it("merges alternating sequential tool_call/tool_result callbacks into one wave report", async () => {
     await withTemporaryHome("pi-assert-index-alternating-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -367,31 +471,27 @@ describe("index execution entries", () => {
       });
 
       for (const toolCallId of ["c1", "c2"]) {
-        await harness.handler("tool_call")(toolCallEvent("bash", toolCallId), ctx);
-        await harness.handler("tool_result")(
-          toolResultEvent("bash", toolCallId),
-          ctx,
-        );
+        await executeTool(harness, ctx, "bash", toolCallId);
       }
-      // The final tool_result wave is still pending until the next boundary.
-      assert.equal(harness.entries.length, 3);
+      // The combined wave is still pending until the next boundary.
+      assert.equal(harness.entries.length, 0);
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
 
-      assert.equal(harness.entries.length, 4);
-      const hooks = harness.entries.map((entry) => (entry.data as { hook: string }).hook);
-      assert.deepEqual(hooks, [
-        "tool_call",
-        "tool_result",
-        "tool_call",
-        "tool_result",
-      ]);
-      for (const entry of harness.entries) {
-        assert.equal((entry.data as { segments: unknown[] }).segments.length, 1);
-      }
+      // One combined report, not separate call/result reports per tool.
+      assert.equal(harness.entries.length, 1);
+      const data = harness.entries[0]?.data as {
+        type: string;
+        segments: Array<{ trigger: { event: string; toolCallId: string } }>;
+      };
+      assert.equal(data.type, "tool-wave");
+      assert.deepEqual(
+        data.segments.map((segment) => `${segment.trigger.event}:${segment.trigger.toolCallId}`),
+        ["tool_call:c1", "tool_result:c1", "tool_call:c2", "tool_result:c2"],
+      );
     });
   });
 
-  it("renders a lone tool report and an ordinary turn_end report with the common shape", async () => {
+  it("renders a lone tool wave and an ordinary turn_end report with the common shape", async () => {
     await withTemporaryHome("pi-assert-index-shapes-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -418,30 +518,33 @@ describe("index execution entries", () => {
         },
       });
 
-      const callResult = await harness.handler("tool_call")(
-        toolCallEvent("read", "call-1"),
+      const { callResult } = await executeTool(
+        harness,
         ctx,
+        "read",
+        "call-1",
       );
       assert.equal(callResult, undefined);
       assert.equal(harness.entries.length, 0);
 
       await harness.handler("turn_end")({ turnIndex: 2 }, ctx);
+      // The tool wave report precedes the non-tool turn_end report.
       assert.equal(harness.entries.length, 2);
 
-      const lone = renderEntry(harness, 0, false);
+      const wave = renderEntry(harness, 0, false);
       assert.match(
-        lone,
-        /pi-assert ran 1 command in \d+ms · tool_call read ×1 \(ctrl\+o to expand\)/,
+        wave,
+        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1 \(ctrl\+o to expand\)/,
       );
-      const loneExpanded = renderEntry(harness, 0, true);
-      assert.match(loneExpanded, /tool_call read · id call-1/);
-      assert.match(loneExpanded, /✓ local\/passes\s+\d+ms/);
-      assert.ok(!loneExpanded.includes("to expand"));
+      const waveExpanded = renderEntry(harness, 0, true);
+      assert.match(waveExpanded, /tool_call read · id call-1/);
+      assert.match(waveExpanded, /✓ local\/passes\s+\d+ms/);
+      assert.ok(!waveExpanded.includes("to expand"));
 
       const turn = renderEntry(harness, 1, false);
       assert.match(
         turn,
-        /pi-assert ran 2 commands in \d+ms · turn_end 2 \(ctrl\+o to expand\)/,
+        /pi-assert ran 2 Assertions in \d+ms · turn_end 2 \(ctrl\+o to expand\)/,
       );
       const turnExpanded = renderEntry(harness, 1, true);
       assert.match(turnExpanded, /✓ local\/turn-pass\s+\d+ms/);
@@ -472,14 +575,14 @@ describe("index execution entries", () => {
         },
       });
 
-      await harness.handler("tool_call")(toolCallEvent("bash", "skipped"), ctx);
+      await executeTool(harness, ctx, "bash", "skipped");
       // Flushing an entirely empty wave produces no entry.
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.deepEqual(harness.entries, []);
     });
   });
 
-  it("persists bounded mixed summaries and nests synthetic actions under their origin", async () => {
+  it("persists bounded mixed summaries and flattens synthetic actions after their origin", async () => {
     await withTemporaryHome("pi-assert-index-mixed-actions-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -516,7 +619,7 @@ describe("index execution entries", () => {
         },
       });
 
-      await harness.handler("tool_call")(toolCallEvent("bash", "mixed"), ctx);
+      await executeTool(harness, ctx, "bash", "mixed");
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
 
       assert.equal(harness.messages.length, 3);
@@ -524,14 +627,16 @@ describe("index execution entries", () => {
       const persisted = JSON.stringify(harness.entries[0]?.data);
       assert.ok(!persisted.includes("NATIVE_SECRET"));
       assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
+      assert.ok(!persisted.includes("\"runId\""));
+      assert.ok(!persisted.includes("\"hook\""));
       assert.match(
         renderEntry(harness, 0, false),
-        /ran 4 commands in \d+ms and requested 3 actions · tool_call bash ×1/,
+        /guarded 1 tool with 4 Assertions and requested 3 Actions in \d+ms · bash ×1/,
       );
-      assert.match(
-        renderEntry(harness, 0, true),
-        /↳ → local\/after · message requested/,
-      );
+      const expanded = renderEntry(harness, 0, true);
+      assert.ok(!expanded.includes("↳"), "no nested causal rendering");
+      assert.match(expanded, /→ local\/after · message requested · pass · from local\/origin pass/);
+      assert.match(expanded, /✓ local\/after\s+\d+ms · from local\/origin pass/);
     });
   });
 
@@ -551,27 +656,30 @@ describe("index execution entries", () => {
       });
 
       for (const toolCallId of ["b1", "b2"]) {
-        const result = await harness.handler("tool_call")(
-          toolCallEvent("bash", toolCallId),
+        const { callResult } = await executeTool(
+          harness,
           ctx,
+          "bash",
+          toolCallId,
         );
-        assert.deepStrictEqual(result, {
+        assert.deepStrictEqual(callResult, {
           block: true,
           reason: `pi-assert: assertion "block" rejected bash — \`false\``,
         });
       }
       assert.equal(harness.entries.length, 0);
 
-      // Pi produces synthetic results only; turn_end is the next boundary.
+      // Blocked tools emit lifecycle start/end, so the wave remains valid;
+      // turn_end flushes one combined report.
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       assert.equal(
-        (harness.entries[0]?.data as { hook: string }).hook,
-        "tool_call",
+        (harness.entries[0]?.data as { type: string }).type,
+        "tool-wave",
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 2 commands in \d+ms · tool_call bash ×2/,
+        /pi-assert guarded 2 tools with 2 Assertions in \d+ms · bash ×2/,
       );
     });
   });
@@ -591,7 +699,7 @@ describe("index execution entries", () => {
         },
       });
 
-      await harness.handler("tool_call")(toolCallEvent("read", "call-1"), ctx);
+      await executeTool(harness, ctx, "read", "call-1");
       assert.equal(harness.entries.length, 0);
 
       await harness.handler("session_shutdown")(
@@ -601,7 +709,7 @@ describe("index execution entries", () => {
       assert.equal(harness.entries.length, 1);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 1 command in \d+ms · tool_call read ×1/,
+        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1/,
       );
     });
   });
@@ -631,35 +739,40 @@ describe("index execution entries", () => {
         },
       });
 
+      await harness.handler("tool_execution_start")(
+        { toolName: "read", toolCallId: "capture-failed" },
+        ctx,
+      );
       await assert.rejects(async () => {
         await harness.handler("tool_call")(
           toolCallEvent("read", "capture-failed"),
           ctx,
         );
       }, /context capture failed/);
-
-      captureFails = false;
-      await harness.handler("tool_call")(
-        toolCallEvent("read", "capture-succeeded"),
+      await harness.handler("tool_execution_end")(
+        { toolName: "read", toolCallId: "capture-failed" },
         ctx,
       );
+
+      captureFails = false;
+      await executeTool(harness, ctx, "read", "capture-succeeded");
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
 
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]!.data as {
+        type: string;
         segments: Array<{
           trigger: { toolCallId: string };
-          executions: unknown[];
-          actionRequests: unknown[];
+          rows: unknown[];
         }>;
       };
       assert.deepEqual(
         data.segments.map((segment) => segment.trigger.toolCallId),
-        ["capture-failed", "capture-succeeded"],
+        ["capture-failed", "capture-succeeded", "capture-succeeded"],
       );
-      assert.deepEqual(data.segments[0]!.executions, []);
-      assert.deepEqual(data.segments[0]!.actionRequests, []);
-      assert.equal(data.segments[1]!.executions.length, 1);
+      assert.deepEqual(data.segments[0]!.rows, []);
+      assert.equal(data.segments[1]!.rows.length, 1);
+      assert.deepEqual(data.segments[2]!.rows, []);
     });
   });
 
@@ -758,11 +871,13 @@ describe("index synthetic result dispatch", () => {
         ctx,
       );
 
-      const result = await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "call-1", input: { command: "echo hi" } },
+      const { callResult } = await executeTool(
+        harness,
         ctx,
+        "bash",
+        "call-1",
       );
-      assert.deepStrictEqual(result, {
+      assert.deepStrictEqual(callResult, {
         block: true,
         reason: 'pi-assert: assertion "blocks" rejected bash — `exit 6`',
       });
@@ -784,15 +899,38 @@ describe("index synthetic result dispatch", () => {
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       const expanded = renderEntry(harness, 0, true, 160);
-      assert.match(expanded, /pi-assert ran 6 commands in \d+ms · tool_call bash ×1/);
       assert.match(
         expanded,
-        /✓ local\/passes[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
+        /pi-assert guarded 1 tool with 6 Assertions in \d+ms · bash ×1/,
+      );
+      // Sibling handlers still run after the failing handler and appear flat
+      // right after their origin native result.
+      const passesPos = expanded.indexOf("✓ local/passes");
+      const failingPos = expanded.indexOf("✗ local/failing-handler");
+      const loggerPos = expanded.indexOf("✓ local/logger");
+      const blocksPos = expanded.indexOf("✗ local/blocks");
+      assert.ok(passesPos >= 0 && failingPos >= 0 && loggerPos >= 0 && blocksPos >= 0);
+      assert.ok(
+        passesPos < failingPos && failingPos < loggerPos && loggerPos < blocksPos,
+        "passes rows, then its handlers, then the blocks rows, in result-major order",
       );
       assert.match(
         expanded,
-        /✗ local\/blocks[\s\S]*↳ ✗ local\/failing-handler[\s\S]*↳ ✓ local\/logger/,
+        /✗ local\/failing-handler\s+\d+ms · from local\/passes pass/,
       );
+      assert.match(
+        expanded,
+        /✓ local\/logger\s+\d+ms · from local\/passes pass/,
+      );
+      assert.match(
+        expanded,
+        /✗ local\/failing-handler\s+\d+ms · from local\/blocks block/,
+      );
+      assert.match(
+        expanded,
+        /✓ local\/logger\s+\d+ms · from local\/blocks block/,
+      );
+      assert.ok(!expanded.includes("↳"), "flat rows, no causal nesting");
     });
   });
 });
@@ -908,6 +1046,14 @@ describe("index effect and outcome translation", () => {
       };
 
       const details = { duration: 4 };
+      await harness.handler("tool_execution_start")(
+        { toolName: "read", toolCallId: "result-1" },
+        ctx,
+      );
+      await harness.handler("tool_call")(
+        toolCallEvent("read", "result-1"),
+        ctx,
+      );
       const patch = await harness.handler("tool_result")(
         {
           toolName: "read",
@@ -919,16 +1065,20 @@ describe("index effect and outcome translation", () => {
         },
         ctx,
       ) as { content: Array<{ type: string; text: string }>; details: unknown; isError: boolean };
+      await harness.handler("tool_execution_end")(
+        { toolName: "read", toolCallId: "result-1" },
+        ctx,
+      );
 
       assert.equal(patch.isError, true);
       assert.strictEqual(patch.details, details);
       assert.match(patch.content[0]!.text, /original tool result was suppressed/);
-      // The lone tool_result report is flushed at the next boundary.
+      // The combined tool wave report is flushed at the next boundary.
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 1 command in \d+ms · tool_result read ×1 \(ctrl\+o to expand\)/,
+        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1 \(ctrl\+o to expand\)/,
       );
     });
   });
@@ -1062,11 +1212,13 @@ describe("index owned Action delivery", () => {
       );
       calls.length = 0;
 
-      const result = await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "actions", input: {} },
+      const { callResult } = await executeTool(
+        harness,
         ctx,
+        "bash",
+        "actions",
       );
-      assert.equal(result, undefined);
+      assert.equal(callResult, undefined);
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.deepEqual(calls.map((call) => call.type), [
         "abort",
@@ -1097,31 +1249,38 @@ describe("index owned Action delivery", () => {
 
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]?.data as {
-        hook: string;
-        segments: Array<{
-          executions: unknown[];
-          actionRequests: Array<{ actionType: string }>;
-        }>;
+        type: string;
+        segments: Array<{ rows: Array<{ type: string; actionType?: string }> }>;
       };
-      assert.equal(data.segments.length, 1);
-      const segment = data.segments[0]!;
-      assert.equal(segment.executions.length, 9);
-      assert.deepEqual(segment.actionRequests.map((request) => request.actionType), [
-        "interrupt",
-        "shutdown",
-        "shutdown",
-        "compact",
-        "compact",
-        "message",
-        "message",
-        "message",
-        "emit-custom-event",
-      ]);
+      assert.equal(data.type, "tool-wave");
+      assert.deepEqual(
+        data.segments.map((segment) => segment.rows.length),
+        [18, 0],
+      );
+      const rows = data.segments.flatMap((segment) => segment.rows);
+      assert.equal(rows.filter((row) => row.type === "assertion").length, 9);
+      assert.deepEqual(
+        rows
+          .filter((row): row is { type: "action"; actionType: string } =>
+            row.type === "action" && "actionType" in row)
+          .map((row) => row.actionType),
+        [
+          "interrupt",
+          "shutdown",
+          "shutdown",
+          "compact",
+          "compact",
+          "message",
+          "message",
+          "message",
+          "emit-custom-event",
+        ],
+      );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert ran 9 commands in \d+ms and requested 9 actions · tool_call bash ×1/,
+        /pi-assert guarded 1 tool with 9 Assertions and requested 9 Actions in \d+ms · bash ×1/,
       );
-      assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested/);
+      assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested · pass/);
 
       compactError?.(new Error("compact exploded"));
       assert.match(String(calls.at(-1)?.value), /compact exploded/);
@@ -1190,11 +1349,13 @@ describe("index owned Action delivery", () => {
       );
       notices.length = 0;
 
-      const result = await harness.handler("tool_call")(
-        { toolName: "bash", toolCallId: "blocked", input: {} },
+      const { callResult } = await executeTool(
+        harness,
         ctx,
+        "bash",
+        "blocked",
       );
-      assert.deepEqual(result, {
+      assert.deepEqual(callResult, {
         block: true,
         reason: 'pi-assert: assertion "block" rejected bash — `false`',
       });

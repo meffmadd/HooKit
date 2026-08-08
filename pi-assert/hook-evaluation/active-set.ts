@@ -14,36 +14,18 @@ export interface ActiveAssertionSet {
   readonly [activeSetBrand]: true;
 }
 
-function cloneNested<T>(value: T, seen = new Map<object, unknown>()): T {
-  if (typeof value !== "object" || value === null) return value;
-
-  const existing = seen.get(value);
-  if (existing !== undefined) return existing as T;
-
-  if (Array.isArray(value)) {
-    const copy: unknown[] = [];
-    seen.set(value, copy);
-    for (const item of value) copy.push(cloneNested(item, seen));
-    return Object.freeze(copy) as T;
-  }
-
-  const copy: Record<string, unknown> = {};
-  seen.set(value, copy);
-  for (const [key, nested] of Object.entries(value)) {
-    copy[key] = cloneNested(nested, seen);
-  }
-  return Object.freeze(copy) as T;
-}
-
-function copyAssertion(assertion: ActiveAssertion): ActiveAssertion {
-  return cloneNested({ ...assertion });
-}
-
-/** Copy and runtime-freeze one deterministic Active Assertion Set. */
+/**
+ * Capture one deterministic Active Assertion Set. The caller's ordered
+ * membership is copied onto an immutable array (so later activation or
+ * catalog replacement cannot affect this set), and the set shell is frozen.
+ * Individual Assertions are reused as-is: they are already immutable
+ * catalog-owned records, so no per-callback recursive deep clone/freeze is
+ * needed.
+ */
 export function createActiveAssertionSet(
   assertions: readonly ActiveAssertion[],
 ): ActiveAssertionSet {
-  const copied = Object.freeze(assertions.map(copyAssertion));
+  const copied = Object.freeze(Array.from(assertions));
   const set = Object.freeze({
     size: copied.length,
     [activeSetBrand]: true as const,

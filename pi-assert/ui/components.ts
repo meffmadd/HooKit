@@ -131,21 +131,14 @@ export const HINT_ENTER_INSTALL: [string, string] = ["Enter", "install"];
 export const HINT_ENTER_UPDATE: [string, string] = ["Enter", "update"];
 export const HINT_ENTER_UNINSTALL: [string, string] = ["Enter", "remove"];
 export const HINT_ENTER_CONFIRM: [string, string] = ["Enter", "confirm"];
-// Generic constants retained for non-contextual callers; sectioned panels
-// derive predictive focused-row labels directly from current state.
-export const HINT_ENTER_ENABLE: [string, string] = ["Enter", "enable"];
-export const HINT_ENTER_TOGGLE: [string, string] = ["Enter", "toggle"];
 export const HINT_ESC_CANCEL: [string, string] = ["Esc", "cancel"];
 export const HINT_ESC_CLOSE: [string, string] = ["Esc", "close"];
 export const HINT_ESC_BACK: [string, string] = ["Esc", "back"];
 export const HINT_ESC_SAVE_BACK: [string, string] = ["Esc", "save & back"];
 export const HINT_ESC_EXIT_SEARCH: [string, string] = ["Esc", "exit search"];
-export const HINT_T_TOGGLE_DEFAULT: [string, string] = ["t", "toggle default"];
 export const HINT_D_DISABLE_ALL: [string, string] = ["d", "disable all"];
-export const HINT_R_REMOVE: [string, string] = ["r", "remove"];
 export const HINT_I_INSTALL_ASSERTS: [string, string] = ["i", "install rules"];
 export const HINT_N_NEW_PRESET: [string, string] = ["n", "new preset"];
-export const HINT_E_EDIT_PRESET: [string, string] = ["e", "edit preset"];
 export const HINT_SEARCH: [string, string] = ["/", "search"];
 
 /**
@@ -537,20 +530,16 @@ export function sectionedPanelOverlay() {
 // for plain pickers (repo / rule-file) which just get the shared list look
 // with no detail block.
 //
-// `initialIndex`/`mark`/`remove` tailor the entry picker: `initialIndex`
-// reopens on the same row after a reload; `mark` renders a leading badge
-// *outside* the accent wrap (so a coloured mark keeps its colour on the
-// selected row); `remove` enables `r` → inline `y/n` confirm, mirroring the
-// /asserts panel.
+// `initialIndex`/`mark` tailor the entry picker: `initialIndex` reopens on
+// the same row after a reload; `mark` renders a leading badge *outside* the
+// accent wrap (so a coloured mark keeps its colour on the selected row).
 // ---------------------------------------------------------------------------
 
-/** {@link selectDialog} outcome: chosen value (or null), last highlighted index, and whether the user confirmed a removal. */
+/** {@link selectDialog} outcome: chosen value (or null) plus the last highlighted index. */
 export interface SelectDialogResult<T> {
   value: T | null;
   /** Last highlighted row — pass back as `initialIndex` to remember position across reloads. */
   index: number;
-  /** `true` when the user pressed `r` then `y` on a removable item. */
-  removed: boolean;
 }
 
 export async function selectDialog<T>(
@@ -567,8 +556,6 @@ export async function selectDialog<T>(
     initialIndex?: number;
     /** Leading per-item badge rendered before the label, outside the accent wrap. Return "" for no mark. */
     mark?: (item: SelectItem) => string;
-    /** Enable the `r` Remove keybinding; `canRemove` gates which items are removable. */
-    remove?: { canRemove: (item: SelectItem) => boolean };
     /**
      * Focus-aware dynamic hint.  Called with the currently highlighted item
      * on each render, so the hintline reflects the focused row's next action
@@ -578,8 +565,8 @@ export async function selectDialog<T>(
     /**
      * Require a `y/n` confirm before `Enter` resolves the select for items
      * where `shouldConfirm` returns true (e.g. a destructive uninstall).
-     * On confirm the select resolves **normally** (`removed: false`) — the
-     * caller classifies the result; the confirm is purely a guard.
+     * On confirm the select resolves **normally** — the caller classifies the
+     * result; the confirm is purely a guard.
      */
     confirmOnSelect?: {
       shouldConfirm: (item: SelectItem) => boolean;
@@ -654,19 +641,18 @@ export async function selectDialog<T>(
     }
     list.onSelect = (item) => {
       // Enter on a confirmable item swaps to the confirm shell instead of
-      // resolving immediately.  The confirm resolves the select NORMALLY
-      // (removed: false); the caller classifies the result.  This is the
-      // guard for destructive Enter actions (e.g. uninstall).
+      // resolving immediately.  The confirm resolves the select NORMALLY —
+      // the caller classifies the result.  This is the guard for destructive
+      // Enter actions (e.g. uninstall).
       if (opts.confirmOnSelect?.shouldConfirm(item)) {
         confirmItem = item;
-        confirmIsRemove = false;
         tui.requestRender();
         return;
       }
-      done({ value: item.value as T, index: list.selectedIndex, removed: false });
+      done({ value: item.value as T, index: list.selectedIndex });
     };
     list.onCancel = () =>
-      done({ value: null, index: list.selectedIndex, removed: false });
+      done({ value: null, index: list.selectedIndex });
 
     // Dynamic, focus-aware hint: re-reads the highlighted item on each render
     // so the hintline reflects the focused row's next action.
@@ -691,14 +677,11 @@ export async function selectDialog<T>(
       keybindings: kb,
     });
 
-    // A confirm shell is needed when either the `r` Remove flow or the
-    // `confirmOnSelect` Enter flow can trigger a confirm.  Both reuse the same
-    // `confirmItem` state; `confirmIsRemove` distinguishes the `r`-triggered
-    // path (resolves `removed: true`) from the Enter-triggered confirm
-    // (resolves `removed: false`, caller classifies).
-    const hasConfirm = !!opts.remove || !!opts.confirmOnSelect;
+    // A confirm shell guards the `confirmOnSelect` Enter flow (e.g. a
+    // destructive uninstall).  It resolves the select normally — the caller
+    // classifies the result.
+    const hasConfirm = !!opts.confirmOnSelect;
     let confirmItem: SelectItem | null = null;
-    let confirmIsRemove = false;
     const confirmShell = hasConfirm
       ? dialogShell(theme, {
           title: opts.confirmOnSelect?.title ?? "Remove assert",
@@ -730,11 +713,7 @@ export async function selectDialog<T>(
       handleInput: (data: string) => {
         if (confirmItem) {
           if (matchesKey(data, "y")) {
-            done({
-              value: confirmItem.value as T,
-              index: list.selectedIndex,
-              removed: confirmIsRemove,
-            });
+            done({ value: confirmItem.value as T, index: list.selectedIndex });
             return;
           }
           if (matchesKey(data, "n") || bindingMatches(kb, data, "tui.select.cancel", Key.escape)) {
@@ -743,18 +722,6 @@ export async function selectDialog<T>(
             return;
           }
           return; // ignore other keys while confirming
-        }
-
-        if (matchesKey(data, "r") && opts.remove) {
-          const item = opts.items[list.selectedIndex];
-          if (item && opts.remove.canRemove(item)) {
-            confirmItem = item;
-            confirmIsRemove = true;
-          } else {
-            ctx.ui.notify("Only installed asserts can be removed", "info");
-          }
-          tui.requestRender();
-          return;
         }
 
         list.handleInput(data);

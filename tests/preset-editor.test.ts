@@ -246,13 +246,13 @@ describe("PresetEditorPanel commit", () => {
     panel.handleInput(DOWN);
     panel.handleInput(ENTER); // b
     const result = panel.handleInput(ESC); // Esc commits + back
-    assert.deepEqual(result, { value: ["local/a", "local/b"], index: 1 });
+    assert.deepEqual(result, { value: ["local/a", "local/b"] });
   });
 
   it("Esc commits the working selection (not cancel)", () => {
     const panel = makePanel([makeAssert("a")], new Set(["local/a"]));
     const result = panel.handleInput(ESC);
-    assert.deepEqual(result, { value: ["local/a"], index: 0 });
+    assert.deepEqual(result, { value: ["local/a"] });
   });
 
   it("Esc in search exits search (not commit)", () => {

@@ -1,11 +1,12 @@
 /**
- * Tests for durable Execution Reports for Execution Waves built by
+ * Tests for durable Execution Reports for combined Execution Waves built by
  * `ExecutionReporter` and rendered by `renderExecutionEntry`
  * (`pi-assert/ui/execution-report.ts`).
  *
  * The contract under test is externally visible report construction, append
  * ordering, timing, and rendering — not private accumulator fields. Timing
- * uses an injected deterministic monotonic clock.
+ * uses an injected deterministic monotonic clock. Every wave is bracketed by
+ * `toolStarted`/`toolEnded` lifecycle events, as the Pi adapter does.
  */
 
 import { describe, it } from "node:test";
@@ -19,10 +20,8 @@ import {
   type ExecutionTrigger,
 } from "../pi-assert/ui/execution-report.js";
 import type {
-  ActionRequestExecution,
-  AssertionExecution,
   AssertionExecutionReport,
-  OriginatingAssertionResult,
+  EvaluationReportRow,
 } from "../pi-assert/hook-evaluation/index.js";
 
 function makeClock(start = 1000): {
@@ -56,45 +55,32 @@ function toolTrigger(
   return { event, toolName, toolCallId };
 }
 
-function makeOrigin(
-  assertionRef = "parent-ref",
-  runId = "parent-run",
-  outcome: OriginatingAssertionResult["outcome"] = "block",
-): OriginatingAssertionResult {
-  return { assertionRef, runId, outcome };
-}
-
-function makeExecution(
-  partial: Partial<AssertionExecution> = {},
-): AssertionExecution {
+function makeAssertionRow(
+  partial: Partial<Extract<EvaluationReportRow, { type: "assertion" }>> = {},
+): EvaluationReportRow {
   return {
-    assertionRef: "assert-something",
-    runId: "run-abc",
-    hook: "tool_call",
-    durationMs: 12.4,
+    type: "assertion",
+    assertionRef: "local/guard",
+    durationMs: 3,
     passed: true,
     ...partial,
   };
 }
 
-function makeAction(
-  partial: Partial<ActionRequestExecution> = {},
-): ActionRequestExecution {
+function makeActionRow(
+  partial: Partial<Extract<EvaluationReportRow, { type: "action" }>> = {},
+): EvaluationReportRow {
   return {
-    assertionRef: "assert-something",
-    runId: "run-abc",
-    hook: "tool_call",
+    type: "action",
+    assertionRef: "local/act",
     actionType: "message",
-    outcome: "patch",
+    outcome: "pass",
     ...partial,
   };
 }
 
-function makeReport(
-  executions: readonly AssertionExecution[] = [],
-  actionRequests: readonly ActionRequestExecution[] = [],
-): AssertionExecutionReport {
-  return { executions, actionRequests };
+function makeReport(rows: readonly EvaluationReportRow[] = []): AssertionExecutionReport {
+  return { rows };
 }
 
 const renderTheme = {
@@ -125,372 +111,229 @@ function renderEntry(
   return component.render(width).map((line) => line.trimEnd()).join("\n");
 }
 
-describe("ExecutionReporter wave collection", () => {
-  it("builds one report for a lone segment and flushes it at the first different hook", () => {
+/** Drive one complete tool through lifecycle + a single call observation. */
+function completeTool(
+  reporter: ExecutionReporter,
+  clock: ReturnType<typeof makeClock>,
+  toolName: string,
+  toolCallId: string,
+  rows: readonly EvaluationReportRow[],
+  event: "tool_call" | "tool_result" = "tool_call",
+): void {
+  reporter.toolStarted(toolName, toolCallId);
+  const observation = reporter.begin(event, toolTrigger(toolName, toolCallId, event));
+  clock.advance(3);
+  reporter.complete(observation, makeReport(rows));
+  reporter.toolEnded(toolName, toolCallId);
+}
+
+describe("ExecutionReporter tool lifecycle collection", () => {
+  it("1. builds one combined report for a parallel wave in begin order", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    const observation = reporter.begin(
-      "tool_call",
-      toolTrigger("read", "call-1"),
-    );
+    // A starts first.
+    reporter.toolStarted("bash", "A");
+    const callA = reporter.begin("tool_call", toolTrigger("bash", "A"));
     clock.advance(5);
-    reporter.complete(
-      observation,
-      makeReport([makeExecution({ durationMs: 2 })], []),
-    );
-    // Still pending: no report until a boundary hook begins.
-    assert.equal(entries.length, 0);
+    reporter.complete(callA, makeReport([makeAssertionRow({ assertionRef: "local/a" })]));
 
-    const boundary = reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+    // B starts second.
+    reporter.toolStarted("read", "B");
+    const callB = reporter.begin("tool_call", toolTrigger("read", "B"));
+    clock.advance(4);
+    reporter.complete(callB, makeReport([makeAssertionRow({ assertionRef: "local/b" })]));
+
+    // B results and ends first.
+    const resultB = reporter.begin("tool_result", toolTrigger("read", "B", "tool_result"));
+    clock.advance(3);
+    reporter.complete(resultB, makeReport([makeAssertionRow({ assertionRef: "local/b2" })]));
+    reporter.toolEnded("read", "B");
+
+    // A results and ends last.
+    const resultA = reporter.begin("tool_result", toolTrigger("bash", "A", "tool_result"));
+    clock.advance(7);
+    reporter.complete(resultA, makeReport([makeAssertionRow({ assertionRef: "local/a2" })]));
+    reporter.toolEnded("bash", "A");
+
+    // The wave stays pending until a non-tool boundary begins.
+    assert.equal(entries.length, 0);
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+
     assert.equal(entries.length, 1);
     const entry = entries[0]!;
-    assert.equal(entry.hook, "tool_call");
-    assert.equal(entry.criticalPathMs, 5);
-    assert.equal(entry.segments.length, 1);
-    assert.deepEqual(entry.segments[0]!.trigger, {
-      event: "tool_call",
-      toolName: "read",
-      toolCallId: "call-1",
-    });
-    assert.equal(entry.segments[0]!.executions.length, 1);
-
-    reporter.complete(boundary, makeReport());
-  });
-
-  it("merges many same-hook segments into one report through the same pipeline", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const reporter = makeReporter(entries);
-
-    for (const id of ["call-1", "call-2", "call-3"]) {
-      const observation = reporter.begin(
-        "tool_call",
-        toolTrigger("bash", id),
-      );
-      reporter.complete(
-        observation,
-        makeReport([makeExecution({ assertionRef: id })], []),
-      );
-    }
-    assert.equal(entries.length, 0);
-
-    reporter.begin("tool_result", toolTrigger("bash", "call-3", "tool_result"));
-    assert.equal(entries.length, 1);
-    const entry = entries[0]!;
-    assert.equal(entry.hook, "tool_call");
-    assert.equal(entry.segments.length, 3);
+    assert.equal(entry.type, "tool-wave");
+    // duration = last end (1019) - first start (1000)
+    assert.equal(entry.durationMs, 19);
+    // segment order is begin order: call A, call B, result B, result A
     assert.deepEqual(
       entry.segments.map((segment) => segment.trigger.toolCallId),
-      ["call-1", "call-2", "call-3"],
+      ["A", "B", "B", "A"],
+    );
+    assert.deepEqual(
+      entry.segments.map((segment) => segment.trigger.event),
+      ["tool_call", "tool_call", "tool_result", "tool_result"],
+    );
+    // tool breakdown counts A and B once each.
+    assert.deepEqual(entry.tools.map((tool) => tool.toolCallId), ["A", "B"]);
+    assert.match(
+      renderEntry(entry, false),
+      /pi-assert guarded 2 tools with 4 Assertions in 19ms · bash ×1, read ×1/,
     );
   });
 
-  it("keeps collecting across the same tool hook and flushes at a non-tool boundary", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const reporter = makeReporter(entries);
-
-    const one = reporter.begin("tool_result", toolTrigger("read", "r1", "tool_result"));
-    reporter.complete(one, makeReport([makeExecution()]));
-    const two = reporter.begin("tool_result", toolTrigger("read", "r2", "tool_result"));
-    reporter.complete(two, makeReport([makeExecution()]));
-    reporter.begin("agent_end", { event: "agent_end" });
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.hook, "tool_result");
-  });
-
-  it("assigns segment order at begin so overlapping completions cannot reorder", () => {
+  it("2. sequential wave duration spans first start through last end", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    const first = reporter.begin("tool_call", toolTrigger("read", "call-1"));
-    const second = reporter.begin("tool_call", toolTrigger("read", "call-2"));
-    // The second observation completes first.
-    clock.advance(3);
-    reporter.complete(
-      second,
-      makeReport([makeExecution({ assertionRef: "second-exec" })], []),
-    );
-    clock.advance(4);
-    reporter.complete(
-      first,
-      makeReport([makeExecution({ assertionRef: "first-exec" })], []),
-    );
-    reporter.begin("agent_settled", { event: "agent_settled" });
+    completeTool(reporter, clock, "bash", "T1", [makeAssertionRow()]);
+    clock.advance(4); // transition to the second tool
+    completeTool(reporter, clock, "read", "T2", [makeAssertionRow()]);
 
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
     const entry = entries[0]!;
-    assert.deepEqual(
-      entry.segments.map((segment) => segment.trigger.toolCallId),
-      ["call-1", "call-2"],
-    );
-    assert.equal(entry.segments[0]!.executions[0]!.assertionRef, "first-exec");
-    assert.equal(entry.segments[1]!.executions[0]!.assertionRef, "second-exec");
+    assert.equal(entry.type, "tool-wave");
+    // T1: [1000, 1003]; 4ms transition; T2: [1007, 1010].
+    // One end-to-end duration: last end (1010) - first start (1000) = 10.
+    assert.equal(entry.durationMs, 10);
+    assert.deepEqual(entry.tools.map((tool) => tool.toolCallId), ["T1", "T2"]);
   });
 
-  it("appends ordinary hooks immediately as a one-segment report", () => {
+  it("3. blocked tool receives a finite duration from start + immediate end", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    reporter.toolStarted("bash", "blocked");
+    const call = reporter.begin("tool_call", toolTrigger("bash", "blocked"));
+    clock.advance(2);
+    reporter.complete(
+      call,
+      makeReport([
+        makeAssertionRow({ assertionRef: "local/block", passed: false }),
+        makeActionRow({ assertionRef: "local/block", actionType: "interrupt", outcome: "block" }),
+      ]),
+    );
+    reporter.toolEnded("bash", "blocked");
+
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+    const entry = entries[0]!;
+    assert.equal(entry.type, "tool-wave");
+    assert.equal(entry.durationMs, 2);
+    const expanded = renderEntry(entry, true);
+    assert.match(expanded, /✗ local\/block/);
+    assert.match(expanded, /→ local\/block · interrupt requested · block/);
+  });
+
+  it("4. a tool without matching Assertions still contributes to duration and breakdown", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    // read/empty has no rows but is a completed tool.
+    reporter.toolStarted("read", "empty");
+    const emptyCall = reporter.begin("tool_call", toolTrigger("read", "empty"));
+    clock.advance(2);
+    reporter.complete(emptyCall, makeReport([]));
+    reporter.toolEnded("read", "empty");
+
+    // bash/busy gives the wave its report data.
+    reporter.toolStarted("bash", "busy");
+    const busyCall = reporter.begin("tool_call", toolTrigger("bash", "busy"));
+    clock.advance(3);
+    reporter.complete(busyCall, makeReport([makeAssertionRow()]));
+    reporter.toolEnded("bash", "busy");
+
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+    const entry = entries[0]!;
+    assert.equal(entry.type, "tool-wave");
+    // duration spans empty's start (1000) through busy's end (1005).
+    assert.equal(entry.durationMs, 5);
+    assert.deepEqual(entry.tools.map((tool) => tool.toolCallId), ["empty", "busy"]);
+    assert.match(
+      renderEntry(entry, false),
+      /guarded 2 tools with 1 Assertion in 5ms · read ×1, bash ×1/,
+    );
+    // The empty segment stays persisted in Pi order but adds no expanded view.
+    assert.deepEqual(
+      entry.segments.map((segment) => segment.trigger.toolCallId),
+      ["empty", "busy"],
+    );
+    const expanded = renderEntry(entry, true);
+    assert.ok(!expanded.includes("id empty"), "empty segment header omitted");
+  });
+
+  it("5. appends nothing for an entirely empty wave", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    completeTool(reporter, clock, "read", "c1", []);
+    completeTool(reporter, clock, "read", "c2", []);
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+    assert.deepEqual(entries, []);
+  });
+
+  it("6. ordinary hook duration is its outer callback interval and appends immediately", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(500);
     const reporter = makeReporter(entries, clock);
 
     const observation = reporter.begin("turn_end", { event: "turn_end", turnIndex: 2 });
     clock.advance(12);
-    reporter.complete(
-      observation,
-      makeReport([makeExecution({ durationMs: 3 })], []),
-    );
+    reporter.complete(observation, makeReport([makeAssertionRow({ durationMs: 3 })]));
+
     assert.equal(entries.length, 1);
     const entry = entries[0]!;
-    assert.equal(entry.hook, "turn_end");
-    assert.equal(entry.criticalPathMs, 12);
-    assert.equal(entry.segments.length, 1);
-    assert.deepEqual(entry.segments[0]!.trigger, {
-      event: "turn_end",
-      turnIndex: 2,
-    });
-  });
-
-  it("appends nothing for an entirely empty wave", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const reporter = makeReporter(entries);
-
-    const one = reporter.begin("tool_call", toolTrigger("read", "c1"));
-    reporter.complete(one);
-    const two = reporter.begin("tool_call", toolTrigger("read", "c2"));
-    reporter.complete(two);
-    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-    assert.equal(entries.length, 0);
-  });
-});
-
-describe("ExecutionReporter critical-path timing", () => {
-  it("uses the union of serial tool_call intervals, excluding framework gaps", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(1000);
-    const reporter = makeReporter(entries, clock);
-
-    const first = reporter.begin("tool_call", toolTrigger("bash", "c1"));
-    clock.advance(10);
-    reporter.complete(first, makeReport([makeExecution()]));
-
-    clock.advance(50); // framework gap between preflights
-    const second = reporter.begin("tool_call", toolTrigger("bash", "c2"));
-    assert.equal(second.startMs, 1060);
-    clock.advance(20);
-    reporter.complete(second, makeReport([makeExecution()]));
-
-    reporter.begin("tool_result", toolTrigger("bash", "c2"));
-    assert.equal(entries[0]!.criticalPathMs, 30);
-  });
-
-  it("measures the tool_result critical tail as max(end) - max(start)", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(2000);
-    const reporter = makeReporter(entries, clock);
-
-    const first = reporter.begin("tool_result", toolTrigger("read", "r1", "tool_result"));
-    clock.advance(5);
-    reporter.complete(first, makeReport([makeExecution()]));
-
-    // The final/underlying result enters processing later.
-    const second = reporter.begin("tool_result", toolTrigger("read", "r2", "tool_result"));
-    assert.equal(second.startMs, 2005);
-    clock.advance(3);
-    reporter.complete(second, makeReport([makeExecution()]));
-
-    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-    const entry = entries[0]!;
-    assert.equal(entry.hook, "tool_result");
-    assert.equal(entry.criticalPathMs, 3); // maxEnd(2008) - maxStart(2005)
-  });
-
-  it("computes the tail across segments when the slowest end and latest start differ", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(2000);
-    const reporter = makeReporter(entries, clock);
-
-    const early = reporter.begin("tool_result", toolTrigger("read", "early", "tool_result"));
-    clock.advance(5);
-    const late = reporter.begin("tool_result", toolTrigger("read", "late", "tool_result"));
-    clock.advance(3);
-    reporter.complete(late, makeReport([makeExecution()]));
-    clock.advance(2);
-    reporter.complete(early, makeReport([makeExecution()]));
-
-    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-    // early: [2000, 2010], late: [2005, 2008] -> 2010 - 2005 = 5
-    assert.equal(entries[0]!.criticalPathMs, 5);
-  });
-
-  it("includes empty tool segments in timing and command totals", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(3000);
-    const reporter = makeReporter(entries, clock);
-
-    const empty = reporter.begin("tool_call", toolTrigger("read", "empty"));
-    clock.advance(7);
-    reporter.complete(empty);
-
-    const busy = reporter.begin("tool_call", toolTrigger("bash", "busy"));
-    clock.advance(3);
-    reporter.complete(busy, makeReport([makeExecution()]));
-
-    reporter.begin("tool_result", toolTrigger("bash", "busy", "tool_result"));
-    const entry = entries[0]!;
-    assert.equal(entry.criticalPathMs, 10); // both intervals, no gap
-    assert.equal(entry.segments.length, 2);
-  });
-
-  it("clamps non-finite and oversized critical-path intervals", () => {
-    for (const [endMs, expected] of [
-      [Number.NaN, 0],
-      [Number.POSITIVE_INFINITY, 2_147_483_647],
-      [Number.MAX_SAFE_INTEGER, 2_147_483_647],
-    ] as const) {
-      const entries: ExecutionReportEntryData[] = [];
-      let current = 0;
-      const reporter = new ExecutionReporter({
-        now: () => current,
-        append: (entry) => entries.push(entry),
-      });
-
-      const observation = reporter.begin(
-        "tool_call",
-        toolTrigger("read", "bounded"),
-      );
-      current = endMs;
-      reporter.complete(observation, makeReport([makeExecution()]));
-      reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-
-      assert.equal(entries[0]!.criticalPathMs, expected);
-    }
-  });
-});
-
-describe("ExecutionReporter snapshots", () => {
-  it("returns immutable bounded snapshots without retained source references", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const reporter = makeReporter(entries);
-    const origin = makeOrigin();
-    const execution = makeExecution({ originatingResult: origin });
-    const action = makeAction({
-      originatingResult: makeOrigin("other", "other-run"),
-    });
-
-    const observation = reporter.begin(
-      "tool_call",
-      toolTrigger("read\u0000  \u0001tool", "call-\u0007id"),
+    assert.equal(entry.type, "hook");
+    assert.equal(entry.durationMs, 12);
+    assert.deepEqual(entry.segment.trigger, { event: "turn_end", turnIndex: 2 });
+    assert.match(
+      renderEntry(entry, false),
+      /pi-assert ran 1 Assertion in 12ms · turn_end 2/,
     );
-    reporter.complete(observation, makeReport([execution], [action]));
-    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-
-    const entry = entries[0]!;
-    assert.ok(Object.isFrozen(entry));
-    assert.ok(Object.isFrozen(entry.segments));
-    const segment = entry.segments[0]!;
-    assert.ok(Object.isFrozen(segment));
-    assert.ok(Object.isFrozen(segment.trigger));
-    assert.ok(Object.isFrozen(segment.executions));
-    assert.ok(Object.isFrozen(segment.executions[0]));
-    assert.ok(Object.isFrozen(segment.executions[0].originatingResult));
-    assert.ok(Object.isFrozen(segment.actionRequests));
-    assert.ok(Object.isFrozen(segment.actionRequests[0]));
-    assert.ok(Object.isFrozen(segment.actionRequests[0].originatingResult));
-
-    // Sanitization from the source report.
-    assert.equal((segment.trigger as { toolName: string }).toolName, "read tool");
-    assert.equal((segment.trigger as { toolCallId: string }).toolCallId, "call- id");
-
-    // Copies, not retained references.
-    assert.notStrictEqual(segment.executions[0], execution);
-    assert.notStrictEqual(segment.executions[0].originatingResult, origin);
-    assert.notStrictEqual(segment.actionRequests[0].originatingResult, execution.originatingResult);
-
-    execution.durationMs = 999;
-    execution.assertionRef = "mutated";
-    execution.runId = "mutated-run";
-    origin.runId = "mutated-origin";
-    action.outcome = "cancel";
-    action.runId = "mutated-action";
-
-    assert.equal(segment.executions[0].durationMs, 12);
-    assert.equal(segment.executions[0].assertionRef, "assert-something");
-    assert.equal(segment.executions[0].originatingResult?.runId, "parent-run");
-    assert.equal(segment.actionRequests[0].outcome, "patch");
-    assert.equal(segment.actionRequests[0].runId, "run-abc");
   });
 
-  it("drops writer input whose trigger does not match its hook", () => {
+  it("an ordinary hook with no rows appends nothing", () => {
     const entries: ExecutionReportEntryData[] = [];
     const reporter = makeReporter(entries);
-
-    const observation = reporter.begin(
-      "tool_call",
-      { event: "turn_end", turnIndex: 1 },
-    );
-    reporter.complete(observation, makeReport([makeExecution()]));
-    reporter.begin("tool_result", toolTrigger("read", "c1", "tool_result"));
-
+    const observation = reporter.begin("agent_end", { event: "agent_end" });
+    reporter.complete(observation, makeReport([]));
     assert.deepEqual(entries, []);
-  });
-
-  it("round-trips through an unversioned hook/criticalPathMs/segments shape", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const reporter = makeReporter(entries);
-
-    const observation = reporter.begin("tool_call", toolTrigger("bash", "c1"));
-    reporter.complete(observation, makeReport([makeExecution()]));
-    reporter.begin("tool_result", toolTrigger("bash", "c1", "tool_result"));
-
-    const entry = entries[0]!;
-    assert.deepEqual(Object.keys(entry).sort(), [
-      "criticalPathMs",
-      "hook",
-      "segments",
-    ]);
-    assert.equal(entry.hook, "tool_call");
-    assert.equal(typeof entry.criticalPathMs, "number");
-    assert.ok(Array.isArray(entry.segments));
-    const segment = entry.segments[0]!;
-    assert.deepEqual(Object.keys(segment).sort(), [
-      "actionRequests",
-      "executions",
-      "trigger",
-    ]);
-    // Every segment trigger must equal the top-level hook.
-    for (const pending of entry.segments) {
-      assert.equal(pending.trigger.event, entry.hook);
-    }
   });
 });
 
 describe("ExecutionReporter shutdown and failure", () => {
-  it("flushes completed observations and discards open ones on shutdown", () => {
+  it("7. flushes a complete pending wave once and is idempotent", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    const done = reporter.begin("tool_call", toolTrigger("read", "c1"));
-    clock.advance(3);
-    reporter.complete(done, makeReport([makeExecution()]));
-    const open = reporter.begin("tool_call", toolTrigger("read", "c2"));
-    clock.advance(10);
-    // Never completed.
-    void open;
-
+    completeTool(reporter, clock, "read", "c1", [makeAssertionRow()]);
+    assert.equal(entries.length, 0);
     reporter.flush();
     assert.equal(entries.length, 1);
-    const entry = entries[0]!;
-    assert.equal(entry.segments.length, 1);
-    assert.equal(entry.segments[0]!.trigger.toolCallId, "c1");
-    assert.equal(entry.criticalPathMs, 3);
-
-    // Idempotent; the open observation is never invented into a partial row.
     reporter.flush();
     assert.equal(entries.length, 1);
   });
 
-  it("drops a failed append without retrying, merging, or poisoning later waves", () => {
+  it("7. discards an incomplete wave rather than assigning an end", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    reporter.toolStarted("read", "mid-flight");
+    const observation = reporter.begin("tool_call", toolTrigger("read", "mid-flight"));
+    clock.advance(10);
+    reporter.complete(observation, makeReport([makeAssertionRow()]));
+    // No toolEnded: the wave has no valid interval.
+    reporter.flush();
+    assert.deepEqual(entries, []);
+  });
+
+  it("7. drops a failed append without retrying, merging, or poisoning later waves", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(500);
     let failures = 0;
@@ -505,210 +348,312 @@ describe("ExecutionReporter shutdown and failure", () => {
       },
     });
 
-    const call = reporter.begin("tool_call", toolTrigger("read", "c1"));
-    clock.advance(2);
-    reporter.complete(call, makeReport([makeExecution()]));
-    const boundary = reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+    completeTool(reporter, clock, "read", "c1", [makeAssertionRow()]);
+    reporter.flush();
     assert.equal(entries.length, 0, "dropped report is not appended");
     assert.equal(failures, 1);
 
-    clock.advance(2);
-    reporter.complete(
-      boundary,
-      makeReport([makeExecution({ assertionRef: "later" })], []),
+    completeTool(reporter, clock, "read", "c2", [makeAssertionRow()]);
+    reporter.flush();
+    assert.equal(entries.length, 1, "a later wave still appends");
+  });
+
+  it("8. cleans and bounds labels while keeping source references out", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    const toolName = `rea\u0000  \u0001d${"x".repeat(600)}`;
+    const toolCallId = `call\u0007id${"y".repeat(300)}`;
+    const assertionRef = `local/\u0000guard\u0001${"z".repeat(600)}`;
+    reporter.toolStarted(toolName, toolCallId);
+    const observation = reporter.begin(
+      "tool_call",
+      toolTrigger(toolName, toolCallId),
     );
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.hook, "turn_end");
-    assert.equal(entries[0]!.segments[0]!.executions[0]!.assertionRef, "later");
-    assert.equal(entries.length, 1, "the failed wave is never merged or retried");
+    reporter.complete(
+      observation,
+      makeReport([makeAssertionRow({ assertionRef })]),
+    );
+    reporter.toolEnded(toolName, toolCallId);
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+
+    const entry = entries[0]!;
+    assert.equal(entry.type, "tool-wave");
+    assert.match(entry.tools[0]!.toolName, /^rea d/);
+    assert.equal(entry.tools[0]!.toolName.length, 512);
+    assert.match(entry.tools[0]!.toolCallId, /^call id/);
+    assert.equal(entry.tools[0]!.toolCallId.length, 256);
+    assert.deepEqual(entry.segments[0]!.trigger, {
+      event: "tool_call",
+      toolName: entry.tools[0]!.toolName,
+      toolCallId: entry.tools[0]!.toolCallId,
+    });
+    assert.match(entry.segments[0]!.rows[0]!.assertionRef, /^local\/ guard/);
+    assert.equal(entry.segments[0]!.rows[0]!.assertionRef.length, 512);
+  });
+
+  it("8. clamps non-finite and oversized Assertion row durations", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    reporter.toolStarted("read", "rows-bounded");
+    const observation = reporter.begin(
+      "tool_call",
+      toolTrigger("read", "rows-bounded"),
+    );
+    reporter.complete(
+      observation,
+      makeReport([
+        makeAssertionRow({ assertionRef: "local/nan", durationMs: Number.NaN }),
+        makeAssertionRow({
+          assertionRef: "local/infinity",
+          durationMs: Number.POSITIVE_INFINITY,
+        }),
+        makeAssertionRow({
+          assertionRef: "local/oversized",
+          durationMs: Number.MAX_SAFE_INTEGER,
+        }),
+        makeAssertionRow({ assertionRef: "local/negative", durationMs: -1 }),
+      ]),
+    );
+    reporter.toolEnded("read", "rows-bounded");
+    reporter.flush();
+
+    const entry = entries[0]!;
+    assert.equal(entry.type, "tool-wave");
+    assert.deepEqual(
+      entry.segments[0]!.rows.map((row) =>
+        row.type === "assertion" ? row.durationMs : undefined
+      ),
+      [0, 2_147_483_647, 2_147_483_647, 0],
+    );
+    assert.ok(!JSON.stringify(entry).includes('"durationMs":null'));
+  });
+
+  it("8. clamps non-finite and oversized wave durations", () => {
+    for (const [endMs, expected] of [
+      [Number.NaN, 0],
+      [Number.POSITIVE_INFINITY, 2_147_483_647],
+      [Number.MAX_SAFE_INTEGER, 2_147_483_647],
+    ] as const) {
+      const entries: ExecutionReportEntryData[] = [];
+      let current = 0;
+      const reporter = new ExecutionReporter({
+        now: () => current,
+        append: (entry) => entries.push(entry),
+      });
+
+      reporter.toolStarted("read", "bounded");
+      const observation = reporter.begin("tool_call", toolTrigger("read", "bounded"));
+      reporter.complete(observation, makeReport([makeAssertionRow()]));
+      current = endMs;
+      reporter.toolEnded("read", "bounded");
+      reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+
+      assert.equal(entries[0]!.type === "tool-wave" && entries[0]!.durationMs, expected);
+    }
   });
 });
 
 describe("ExecutionReport rendering", () => {
-  it("shows command count, critical-path delay, actions, and a per-tool breakdown", () => {
+  it("9. renders ordered rows flat with inline origin annotations", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    for (const [index, id] of ["c1", "c2", "c3"].entries()) {
-      const observation = reporter.begin(
-        "tool_call",
-        toolTrigger(index % 2 === 0 ? "bash" : "read", id),
-      );
-      clock.advance(8);
-      reporter.complete(
-        observation,
-        makeReport(
-          [makeExecution({ assertionRef: `exec-${id}` })],
-          index === 2
-            ? [makeAction({ assertionRef: "steer", actionType: "message" })]
-            : [],
-        ),
-      );
-    }
-    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
-
-    const entry = entries[0]!;
-    const collapsed = renderEntry(entry, false);
-    assert.match(collapsed, /pi-assert ran 3 commands in 24ms and requested 1 action · tool_call bash ×2, read ×1/);
-    assert.match(collapsed, /\(ctrl\+o to expand\)/);
-
-    const expanded = renderEntry(entry, true);
-    assert.ok(!expanded.includes("to expand"));
-    assert.match(expanded, /tool_call bash · id c1/);
-    assert.match(expanded, /tool_call read · id c2/);
-    assert.match(expanded, /tool_call bash · id c3/);
-    assert.match(expanded, /✓ exec-c1/);
-    assert.match(expanded, /→ steer · message requested/);
-  });
-
-  it("renders action-only reports and keeps empty segments out of the expanded view", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(1000);
-    const reporter = makeReporter(entries, clock);
-
-    const empty = reporter.begin("tool_call", toolTrigger("read", "empty"));
-    clock.advance(2);
-    reporter.complete(empty);
-
-    const busy = reporter.begin("tool_call", toolTrigger("bash", "busy"));
+    reporter.toolStarted("bash", "p");
+    const call = reporter.begin("tool_call", toolTrigger("bash", "p"));
     clock.advance(2);
     reporter.complete(
-      busy,
-      makeReport([], [makeAction({ assertionRef: "notify-only" })]),
+      call,
+      makeReport([
+        makeAssertionRow({ assertionRef: "local/protect-env", durationMs: 8 }),
+        makeActionRow({
+          assertionRef: "local/protect-env",
+          actionType: "interrupt",
+          outcome: "block",
+        }),
+        makeAssertionRow({
+          assertionRef: "owner/rules/audit",
+          durationMs: 3,
+          origin: { assertionRef: "local/protect-env", outcome: "block" },
+        }),
+        makeActionRow({
+          assertionRef: "owner/rules/audit",
+          actionType: "message",
+          outcome: "report",
+          origin: { assertionRef: "local/protect-env", outcome: "block" },
+        }),
+      ]),
     );
-    reporter.begin("tool_result", toolTrigger("bash", "busy", "tool_result"));
+    reporter.toolEnded("bash", "p");
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
 
-    const entry = entries[0]!;
-    const collapsed = renderEntry(entry, false);
-    assert.match(collapsed, /pi-assert requested 1 action in 4ms · tool_call read ×1, bash ×1/);
-
-    const expanded = renderEntry(entry, true);
-    assert.ok(!expanded.includes("empty"), "empty segment header omitted");
-    assert.match(expanded, /tool_call bash · id busy/);
-    assert.match(expanded, /→ notify-only · message requested/);
+    const expanded = renderEntry(entries[0]!, true);
+    assert.ok(expanded.includes("tool_call bash · id p"));
+    assert.ok(
+      expanded.includes("✓ local/protect-env") && /8ms/.test(expanded),
+      "assertion row shows its individual duration",
+    );
+    assert.ok(
+      expanded.includes("→ local/protect-env · interrupt requested · block"),
+      "native Action row shows type and owner outcome",
+    );
+    assert.ok(
+      expanded.includes("✓ owner/rules/audit") &&
+        expanded.includes("· from local/protect-env block"),
+      "synthetic Assertion row carries the projected origin",
+    );
+    assert.ok(
+      expanded.includes("→ owner/rules/audit · message requested · report") &&
+        expanded.includes("· from local/protect-env block"),
+      "synthetic Action row carries owner outcome and origin",
+    );
+    // No causal reconstruction glyphs or depth markers.
+    assert.ok(!expanded.includes("↳"));
   });
 
-  it("keeps the per-tool breakdown in first-seen tool order for mixed tools", () => {
+  it("9. standalone Action rows render without synthetic result rows", () => {
     const entries: ExecutionReportEntryData[] = [];
     const reporter = makeReporter(entries);
+    const clock = makeClock(1000);
 
-    for (const [name, id] of [
-      ["bash", "c1"],
-      ["read", "c2"],
-      ["bash", "c3"],
-      ["read", "c4"],
-      ["read", "c5"],
-    ] as const) {
-      const observation = reporter.begin("tool_call", toolTrigger(name, id));
-      reporter.complete(
-        observation,
-        name === "bash" ? makeReport([makeExecution()]) : undefined,
-      );
-    }
-    reporter.begin("tool_result", toolTrigger("read", "c5", "tool_result"));
-
-    assert.match(
-      renderEntry(entries[0]!, false),
-      /· tool_call bash ×2, read ×3/,
-    );
-  });
-
-  it("renders an ordinary hook report using the common single-report layout", () => {
-    const entries: ExecutionReportEntryData[] = [];
-    const clock = makeClock(500);
-    const reporter = makeReporter(entries, clock);
-
-    const observation = reporter.begin("turn_end", { event: "turn_end", turnIndex: 3 });
-    clock.advance(9);
+    reporter.toolStarted("read", "w");
+    const observation = reporter.begin("tool_result", toolTrigger("read", "w", "tool_result"));
+    clock.advance(2);
     reporter.complete(
       observation,
       makeReport([
-        makeExecution({ assertionRef: "turn-pass", durationMs: 2, passed: true }),
-        makeExecution({ assertionRef: "turn-fail", durationMs: 4, passed: false }),
-      ], []),
+        // A when-infrastructure failure selected an Action with no main shell row.
+        makeActionRow({ actionType: "shutdown", outcome: "cancel" }),
+      ]),
     );
+    reporter.toolEnded("read", "w");
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
 
-    const entry = entries[0]!;
+    const expanded = renderEntry(entries[0]!, true);
     assert.match(
-      renderEntry(entry, false),
-      /pi-assert ran 2 commands in 9ms · turn_end 3/,
+      expanded,
+      /→ local\/act · shutdown requested · cancel/,
     );
-    const expanded = renderEntry(entry, true);
-    assert.match(expanded, /✓ turn-pass\s+\d+ms/);
-    assert.match(expanded, /✗ turn-fail\s+\d+ms/);
-    assert.ok(!expanded.includes("to expand"));
+    assert.ok(
+      !expanded.includes("· result"),
+      "no synthetic display-only result row is created",
+    );
   });
 
-  it("renders malformed and historical payloads as an unavailable fallback", () => {
-    // Historical pre-Wave versioned payload.
+  it("9. keeps tool segments in Pi event order", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    reporter.toolStarted("bash", "A");
+    const callA = reporter.begin("tool_call", toolTrigger("bash", "A"));
+    clock.advance(2);
+    reporter.complete(callA, makeReport([makeAssertionRow()]));
+    reporter.toolStarted("read", "B");
+    const callB = reporter.begin("tool_call", toolTrigger("read", "B"));
+    clock.advance(2);
+    reporter.complete(callB, makeReport([makeAssertionRow()]));
+    const resultB = reporter.begin("tool_result", toolTrigger("read", "B", "tool_result"));
+    clock.advance(2);
+    reporter.complete(resultB, makeReport([makeAssertionRow()]));
+    reporter.toolEnded("read", "B");
+    const resultA = reporter.begin("tool_result", toolTrigger("bash", "A", "tool_result"));
+    clock.advance(2);
+    reporter.complete(resultA, makeReport([makeAssertionRow()]));
+    reporter.toolEnded("bash", "A");
+    reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
+
+    const expanded = renderEntry(entries[0]!, true);
+    const callAIndex = expanded.indexOf("tool_call bash · id A");
+    const callBIndex = expanded.indexOf("tool_call read · id B");
+    const resultBIndex = expanded.indexOf("tool_result read · id B");
+    const resultAIndex = expanded.indexOf("tool_result bash · id A");
+    assert.ok(callAIndex >= 0 && callBIndex >= 0 && resultBIndex >= 0 && resultAIndex >= 0);
+    assert.ok(
+      callAIndex < callBIndex && callBIndex < resultBIndex && resultBIndex < resultAIndex,
+      "segments render in begin order",
+    );
+  });
+
+  it("9. rejects old and malformed shapes as an unavailable fallback", () => {
+    // Historical unversioned/old shape.
     assert.equal(
       renderEntry({
-        version: 3,
+        hook: "tool_call",
+        criticalPathMs: 3,
+        segments: [{
+          trigger: { event: "tool_call", toolName: "bash", toolCallId: "old" },
+          executions: [
+            {
+              assertionRef: "local/old",
+              runId: "old-run",
+              hook: "tool_call",
+              durationMs: 3,
+              passed: true,
+            },
+          ],
+          actionRequests: [],
+        }],
+      }, true).trim(),
+      "pi-assert execution summary unavailable",
+    );
+
+    // Old pre-wave versioned shape.
+    assert.equal(
+      renderEntry({
+        version: 1,
         trigger: { event: "tool_call", toolName: "bash", toolCallId: "old" },
-        executions: [
-          {
-            assertionRef: "local/old",
-            runId: "old-run",
-            hook: "tool_call",
-            durationMs: 3,
-            passed: true,
-          },
-        ],
+        executions: [],
         actionRequests: [],
       }, true).trim(),
       "pi-assert execution summary unavailable",
     );
 
-    // Malformed: negative critical path, empty segments, unknown hook, trigger mismatch.
-    for (const malformed of [
-      { hook: "tool_call", criticalPathMs: -1, segments: [{ event: "x" }] },
-      { hook: "tool_call", criticalPathMs: 2, segments: [] },
-      { hook: "not-a-hook", criticalPathMs: 2, segments: [{ event: "x" }] },
+    const malformed: unknown[] = [
+      { type: "tool-wave", durationMs: -1, tools: [], segments: [] },
+      { type: "tool-wave", durationMs: 2, tools: [], segments: [{ trigger: toolTrigger("read", "x") }] },
+      { type: "tool-wave", durationMs: 2, tools: [{ toolName: "r", toolCallId: "x" }], segments: [] },
       {
-        hook: "tool_call",
-        criticalPathMs: 2,
+        type: "tool-wave",
+        durationMs: 2,
+        tools: [{ toolName: "r", toolCallId: "x" }],
         segments: [{
           trigger: { event: "turn_end", turnIndex: 1 },
-          executions: [makeExecution()],
-          actionRequests: [],
+          rows: [makeAssertionRow()],
         }],
       },
       {
-        hook: "tool_call",
-        criticalPathMs: Number.MAX_SAFE_INTEGER,
+        type: "tool-wave",
+        durationMs: 2,
+        tools: [{ toolName: "r", toolCallId: "x" }],
         segments: [{
-          trigger: toolTrigger("read", "oversized"),
-          executions: [makeExecution()],
-          actionRequests: [],
+          trigger: toolTrigger("read", "x"),
+          rows: [{ type: "assertion", runId: "bad-run" }],
         }],
       },
-    ]) {
+      {
+        type: "tool-wave",
+        durationMs: Number.MAX_SAFE_INTEGER + 100,
+        tools: [{ toolName: "r", toolCallId: "x" }],
+        segments: [{ trigger: toolTrigger("read", "x"), rows: [makeAssertionRow()] }],
+      },
+      { type: "hook", durationMs: 2, segment: [] },
+      {
+        type: "hook",
+        durationMs: 2,
+        segment: { trigger: toolTrigger("read", "x"), rows: [makeAssertionRow()] },
+      },
+    ];
+    for (const bad of malformed) {
       assert.equal(
-        renderEntry(malformed, true).trim(),
+        renderEntry(bad, true).trim(),
         "pi-assert execution summary unavailable",
+        JSON.stringify(bad),
       );
     }
-
-    // Malformed: a non-tool report must contain exactly one segment.
-    assert.equal(
-      renderEntry({
-        hook: "turn_end",
-        criticalPathMs: 2,
-        segments: [
-          {
-            trigger: { event: "turn_end", turnIndex: 1 },
-            executions: [makeExecution({ hook: "tool_call" })],
-            actionRequests: [],
-          },
-          {
-            trigger: { event: "turn_end", turnIndex: 1 },
-            executions: [makeExecution({ hook: "tool_call" })],
-            actionRequests: [],
-          },
-        ],
-      }, true).trim(),
-      "pi-assert execution summary unavailable",
-    );
   });
 });

@@ -49,8 +49,8 @@ interface AuthorizedFile {
 
 interface CatalogSnapshot {
   readonly files: ReadonlyMap<CatalogStorage, AuthorizedFile>;
-  readonly entries: CatalogEntry[];
-  readonly repositories: string[];
+  readonly entries: readonly CatalogEntry[];
+  readonly repositories: readonly string[];
   readonly provenance: ReadonlyMap<string, CatalogStorage>;
 }
 
@@ -112,17 +112,39 @@ function readSnapshot(locations: CatalogStorageLocations): SnapshotResult {
   }
   if (diagnostics.length > 0) return { ok: false, diagnostics };
 
-  const project = files.get("project")?.content;
-  const knownSources = project?.repos === undefined
-    ? undefined
-    : new Set(["local", ...project.repos]);
   const merged = new Map<string, CatalogEntry>();
   const provenance = new Map<string, CatalogStorage>();
 
   for (const storage of ["global", "project"] as const) {
     const file = files.get(storage);
     if (!file) continue;
-    for (const { source, entries } of iterSections(file.content, knownSources)) {
+    const declaredRepos =
+      storage === "project" && file.content.repos !== undefined
+        ? new Set(file.content.repos)
+        : undefined;
+    for (const { source, entries } of iterSections(file.content)) {
+      // Canonical source syntax: `local` or one `owner/repo`.
+      if (source !== "local" && !REPOSITORY_SOURCE.test(source)) {
+        diagnostics.push({
+          storage,
+          reason:
+            `section "${source}" is not a valid source; expected local or owner/repo`,
+        });
+        continue;
+      }
+      // Project repository sections must be declared in the same storage.
+      // Global canonical sections merge independently of project `repos`.
+      if (
+        storage === "project" && source !== "local" &&
+        (declaredRepos === undefined || !declaredRepos.has(source))
+      ) {
+        diagnostics.push({
+          storage,
+          reason:
+            `repository section "${source}" is not declared in project "repos"`,
+        });
+        continue;
+      }
       for (const [name, definition] of Object.entries(entries)) {
         const entry = catalogEntry(source, name, definition);
         // Complete validation above guarantees this branch is unreachable.
@@ -134,12 +156,16 @@ function readSnapshot(locations: CatalogStorageLocations): SnapshotResult {
     }
   }
 
+  if (diagnostics.length > 0) return { ok: false, diagnostics };
+
   return {
     ok: true,
     snapshot: {
       files,
-      entries: Array.from(merged.values()),
-      repositories: project?.repos?.slice() ?? [],
+      entries: Object.freeze(Array.from(merged.values())),
+      repositories: Object.freeze(
+        files.get("project")?.content.repos?.slice() ?? [],
+      ),
       provenance,
     },
   };
@@ -154,32 +180,45 @@ function cloneFilter(filter: EntryFilter): EntryFilter {
   );
 }
 
+/** Recursively freeze one catalog-owned plain value (arrays included). */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
 function catalogEntry(
   source: string,
   name: string,
   definition: unknown,
 ): CatalogEntry | undefined {
   if (validatePresetShape(definition)) {
-    return {
+    return deepFreeze({
       source,
       name,
       description: definition.description,
       preset: definition.preset.slice(),
       default: definition.default ?? false,
-    };
+    });
   }
   if (validateEntryShape(definition)) {
-    return {
+    return deepFreeze({
       source,
       name,
       description: definition.description,
       hook: definition.hook,
-      ...(definition.filter === undefined ? {} : { filter: cloneFilter(definition.filter) }),
+      ...(definition.filter === undefined
+        ? {}
+        : { filter: cloneFilter(definition.filter) }),
       ...(definition.when === undefined ? {} : { when: definition.when }),
       shell: definition.shell ?? "true",
-      ...(definition.action === undefined ? {} : { action: cloneAction(definition.action) }),
+      ...(definition.action === undefined
+        ? {}
+        : { action: cloneAction(definition.action) }),
       default: definition.default ?? false,
-    };
+    });
   }
   return undefined;
 }
