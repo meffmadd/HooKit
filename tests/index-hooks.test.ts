@@ -3,18 +3,19 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type {
-  EntryRenderer,
-  ExtensionAPI,
-  ExtensionContext,
-  Theme,
+import {
+  getAgentDir,
+  type EntryRenderer,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import registerExtension from "../pi-assert/index.js";
+import registerExtension from "../hookit/index.js";
 import {
   globalFilePath,
   projectFilePath,
-} from "../pi-assert/config.js";
+} from "../hookit/config.js";
 
 type EventHandler = (
   event: Record<string, unknown>,
@@ -202,9 +203,15 @@ async function withTemporaryHome(
   }
 }
 
+describe("config storage paths", () => {
+  it("keeps the global hook config in Pi's agent directory", () => {
+    assert.equal(globalFilePath(), join(getAgentDir(), "hookit.json"));
+  });
+});
+
 describe("index catalog authorization", () => {
   it("omits untrusted project storage before catalog creation", async () => {
-    await withTemporaryHome("pi-assert-index-untrusted-", async (root) => {
+    await withTemporaryHome("HooKit-index-untrusted-", async (root) => {
       const cwd = join(root, "workspace");
       const globalPath = globalFilePath();
       mkdirSync(dirname(globalPath), { recursive: true });
@@ -212,7 +219,7 @@ describe("index catalog authorization", () => {
         local: {
           global: {
             description: "trusted global guard",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "false",
             default: true,
           },
@@ -253,7 +260,7 @@ describe("index catalog authorization", () => {
 
       assert.deepStrictEqual(callResult, {
         block: true,
-        reason: 'pi-assert: assertion "global" rejected bash — `false`',
+        reason: 'hookit: hook "global" rejected bash — `false`',
       });
       assert.ok(!notifications.some((message) => message.includes("failed to parse")));
       assert.ok(notifications.some((message) => message.includes("rejected bash")));
@@ -263,21 +270,21 @@ describe("index catalog authorization", () => {
 });
 
 describe("index execution entries", () => {
-  it("appends one combined Execution Report for a tool batch wave", async () => {
-    await withTemporaryHome("pi-assert-index-wave-", async (root) => {
+  it("appends one combined Execution Report for an Execution Wave", async () => {
+    await withTemporaryHome("HooKit-index-wave-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           passes: {
             description: "observe successful checks",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
           "tool-result": {
             description: "observe result checks",
-            hook: "tool_result",
+            event: "tool_result",
             shell: "true",
             default: true,
           },
@@ -302,15 +309,15 @@ describe("index execution entries", () => {
         durationMs: number;
         tools: Array<{ toolName: string; toolCallId: string }>;
         segments: Array<{
-          trigger: { event: string; toolName: string; toolCallId: string };
-          rows: Array<{ assertionRef: string; passed: boolean }>;
+          eventContext: { event: string; toolName: string; toolCallId: string };
+          rows: Array<{ hookRef: string; passed: boolean }>;
         }>;
       };
       assert.equal(data.type, "tool-wave");
       assert.equal(typeof data.durationMs, "number");
       assert.equal(data.segments.length, 6);
       assert.deepEqual(
-        data.segments.map((segment) => `${segment.trigger.event}:${segment.trigger.toolCallId}`),
+        data.segments.map((segment) => `${segment.eventContext.event}:${segment.eventContext.toolCallId}`),
         [
           "tool_call:call-1",
           "tool_result:call-1",
@@ -328,14 +335,14 @@ describe("index execution entries", () => {
       for (const segment of data.segments) {
         assert.equal(segment.rows.length, 1);
         assert.equal(
-          segment.rows[0]?.assertionRef,
-          segment.trigger.event === "tool_call" ? "local/passes" : "local/tool-result",
+          segment.rows[0]?.hookRef,
+          segment.eventContext.event === "tool_call" ? "local/passes" : "local/tool-result",
         );
         assert.equal(segment.rows[0]?.passed, true);
       }
 
       const collapsed = renderEntry(harness, 0, false);
-      assert.match(collapsed, /pi-assert guarded 3 tools with 6 Assertions in \d+ms · read ×3/);
+      assert.match(collapsed, /HooKit guarded 3 tools with 6 Hooks in \d+ms · read ×3/);
       assert.ok(!collapsed.includes("local/passes"), "collapsed omits refs");
       assert.ok(!collapsed.includes("call-1"), "collapsed omits call ids");
       assert.match(collapsed, /\(ctrl\+o to expand\)/);
@@ -349,7 +356,7 @@ describe("index execution entries", () => {
   });
 
   it("finishes tool-result Effect delivery before the matching lifecycle end", async () => {
-    await withTemporaryHome("pi-assert-index-effect-lifecycle-", async (root) => {
+    await withTemporaryHome("HooKit-index-effect-lifecycle-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       const timeline: string[] = [];
@@ -360,7 +367,7 @@ describe("index execution entries", () => {
         local: {
           notify: {
             description: "deliver within the tool lifecycle",
-            hook: "tool_result",
+            event: "tool_result",
             action: {
               type: "message",
               outcome: "pass",
@@ -411,14 +418,14 @@ describe("index execution entries", () => {
   });
 
   it("flushes a combined tool_result wave at a turn_end boundary", async () => {
-    await withTemporaryHome("pi-assert-index-results-wave-", async (root) => {
+    await withTemporaryHome("HooKit-index-results-wave-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           redact: {
             description: "observe successful result checks",
-            hook: "tool_result",
+            event: "tool_result",
             shell: "true",
             default: true,
           },
@@ -430,40 +437,40 @@ describe("index execution entries", () => {
       }
       assert.equal(harness.entries.length, 0);
 
-      // turn_end has no matching assertion here but still flushes the wave.
+      // turn_end has no matching hook here but still flushes the wave.
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]?.data as {
         type: string;
-        segments: Array<{ trigger: { toolCallId: string } }>;
+        segments: Array<{ eventContext: { toolCallId: string } }>;
       };
       assert.equal(data.type, "tool-wave");
       assert.deepEqual(
-        data.segments.map((segment) => segment.trigger.toolCallId),
+        data.segments.map((segment) => segment.eventContext.toolCallId),
         ["r1", "r1", "r2", "r2", "r3", "r3"],
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert guarded 3 tools with 3 Assertions in \d+ms · bash ×3/,
+        /HooKit guarded 3 tools with 3 Hooks in \d+ms · bash ×3/,
       );
     });
   });
 
   it("merges alternating sequential tool_call/tool_result callbacks into one wave report", async () => {
-    await withTemporaryHome("pi-assert-index-alternating-", async (root) => {
+    await withTemporaryHome("HooKit-index-alternating-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           "call-check": {
             description: "observe calls",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
           "result-check": {
             description: "observe results",
-            hook: "tool_result",
+            event: "tool_result",
             shell: "true",
             default: true,
           },
@@ -481,37 +488,37 @@ describe("index execution entries", () => {
       assert.equal(harness.entries.length, 1);
       const data = harness.entries[0]?.data as {
         type: string;
-        segments: Array<{ trigger: { event: string; toolCallId: string } }>;
+        segments: Array<{ eventContext: { event: string; toolCallId: string } }>;
       };
       assert.equal(data.type, "tool-wave");
       assert.deepEqual(
-        data.segments.map((segment) => `${segment.trigger.event}:${segment.trigger.toolCallId}`),
+        data.segments.map((segment) => `${segment.eventContext.event}:${segment.eventContext.toolCallId}`),
         ["tool_call:c1", "tool_result:c1", "tool_call:c2", "tool_result:c2"],
       );
     });
   });
 
   it("renders a lone tool wave and an ordinary turn_end report with the common shape", async () => {
-    await withTemporaryHome("pi-assert-index-shapes-", async (root) => {
+    await withTemporaryHome("HooKit-index-shapes-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           passes: {
             description: "observe successful checks",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
           "turn-pass": {
             description: "first aggregate check",
-            hook: "turn_end",
+            event: "turn_end",
             shell: "true",
             default: true,
           },
           "turn-fail": {
             description: "second aggregate check",
-            hook: "turn_end",
+            event: "turn_end",
             shell: "false",
             default: true,
           },
@@ -534,7 +541,7 @@ describe("index execution entries", () => {
       const wave = renderEntry(harness, 0, false);
       assert.match(
         wave,
-        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1 \(ctrl\+o to expand\)/,
+        /HooKit guarded 1 tool with 1 Hook in \d+ms · read ×1 \(ctrl\+o to expand\)/,
       );
       const waveExpanded = renderEntry(harness, 0, true);
       assert.match(waveExpanded, /tool_call read · id call-1/);
@@ -544,7 +551,7 @@ describe("index execution entries", () => {
       const turn = renderEntry(harness, 1, false);
       assert.match(
         turn,
-        /pi-assert ran 2 Assertions in \d+ms · turn_end 2 \(ctrl\+o to expand\)/,
+        /HooKit ran 2 Hooks in \d+ms · turn_end 2 \(ctrl\+o to expand\)/,
       );
       const turnExpanded = renderEntry(harness, 1, true);
       assert.match(turnExpanded, /✓ local\/turn-pass\s+\d+ms/);
@@ -553,21 +560,21 @@ describe("index execution entries", () => {
   });
 
   it("does not append entries for filter misses or ordinary when skips", async () => {
-    await withTemporaryHome("pi-assert-index-skips-", async (root) => {
+    await withTemporaryHome("HooKit-index-skips-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           miss: {
             description: "different tool",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "^read$" },
             shell: "true",
             default: true,
           },
           skip: {
             description: "precondition skips",
-            hook: "tool_call",
+            event: "tool_call",
             when: "false",
             shell: "true",
             default: true,
@@ -583,20 +590,20 @@ describe("index execution entries", () => {
   });
 
   it("persists bounded mixed summaries and flattens synthetic actions after their origin", async () => {
-    await withTemporaryHome("pi-assert-index-mixed-actions-", async (root) => {
+    await withTemporaryHome("HooKit-index-mixed-actions-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           origin: {
             description: "origin",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
           native: {
             description: "native action",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -607,7 +614,7 @@ describe("index execution entries", () => {
           },
           after: {
             description: "synthetic action",
-            hook: "assert_result",
+            event: "hook_result",
             action: {
               type: "message",
               outcome: "pass",
@@ -628,10 +635,12 @@ describe("index execution entries", () => {
       assert.ok(!persisted.includes("NATIVE_SECRET"));
       assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
       assert.ok(!persisted.includes("\"runId\""));
-      assert.ok(!persisted.includes("\"hook\""));
+      // Report rows use `type: "hook"`, so the old no-event-kind guard becomes
+      // a boundedness invariant: raw tool input is never persisted.
+      assert.ok(!persisted.includes("\"input\""));
       assert.match(
         renderEntry(harness, 0, false),
-        /guarded 1 tool with 4 Assertions and requested 3 Actions in \d+ms · bash ×1/,
+        /guarded 1 tool with 4 Hooks and requested 3 Actions in \d+ms · bash ×1/,
       );
       const expanded = renderEntry(harness, 0, true);
       assert.ok(!expanded.includes("↳"), "no nested causal rendering");
@@ -641,14 +650,14 @@ describe("index execution entries", () => {
   });
 
   it("flushes all-preflight-blocked calls at turn_end", async () => {
-    await withTemporaryHome("pi-assert-index-blocked-flush-", async (root) => {
+    await withTemporaryHome("HooKit-index-blocked-flush-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           block: {
             description: "block every call",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "false",
             default: true,
           },
@@ -664,7 +673,7 @@ describe("index execution entries", () => {
         );
         assert.deepStrictEqual(callResult, {
           block: true,
-          reason: `pi-assert: assertion "block" rejected bash — \`false\``,
+          reason: `hookit: hook "block" rejected bash — \`false\``,
         });
       }
       assert.equal(harness.entries.length, 0);
@@ -679,20 +688,20 @@ describe("index execution entries", () => {
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert guarded 2 tools with 2 Assertions in \d+ms · bash ×2/,
+        /HooKit guarded 2 tools with 2 Hooks in \d+ms · bash ×2/,
       );
     });
   });
 
   it("flushes pending completed reporting on session_shutdown", async () => {
-    await withTemporaryHome("pi-assert-index-shutdown-", async (root) => {
+    await withTemporaryHome("HooKit-index-shutdown-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           passes: {
             description: "observe successful checks",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
@@ -709,20 +718,20 @@ describe("index execution entries", () => {
       assert.equal(harness.entries.length, 1);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1/,
+        /HooKit guarded 1 tool with 1 Hook in \d+ms · read ×1/,
       );
     });
   });
 
   it("completes an observation when callback context capture escapes", async () => {
-    await withTemporaryHome("pi-assert-index-capture-escape-", async (root) => {
+    await withTemporaryHome("HooKit-index-capture-escape-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
       await startSession(harness, ctx, {
         local: {
           passes: {
             description: "observe successful checks",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             default: true,
           },
@@ -762,12 +771,12 @@ describe("index execution entries", () => {
       const data = harness.entries[0]!.data as {
         type: string;
         segments: Array<{
-          trigger: { toolCallId: string };
+          eventContext: { toolCallId: string };
           rows: unknown[];
         }>;
       };
       assert.deepEqual(
-        data.segments.map((segment) => segment.trigger.toolCallId),
+        data.segments.map((segment) => segment.eventContext.toolCallId),
         ["capture-failed", "capture-succeeded", "capture-succeeded"],
       );
       assert.deepEqual(data.segments[0]!.rows, []);
@@ -776,35 +785,21 @@ describe("index execution entries", () => {
     });
   });
 
-  it("renders historical versioned and malformed payloads as an unavailable fallback", () => {
+  it("renders malformed current-type payloads as an unavailable fallback", () => {
     const harness = extensionHarness();
     registerExtension(harness.pi);
     harness.entries.push({
-      customType: "pi-assert-execution",
-      data: {
-        version: 1,
-        trigger: {
-          event: "tool_call",
-          toolName: "bash",
-          toolCallId: "historical",
-        },
-        executions: [{
-          assertionRef: "local/old",
-          runId: "old-run",
-          hook: "tool_call",
-          durationMs: 3,
-          passed: true,
-        }],
-      },
+      customType: "hookit-execution",
+      data: { type: "tool-wave", durationMs: -1, tools: [], segments: [] },
     });
     harness.entries.push({
-      customType: "pi-assert-execution",
-      data: { version: 0, executions: "older-shape" },
+      customType: "hookit-execution",
+      data: { type: "event", durationMs: 0, segment: { eventContext: {}, rows: [] } },
     });
     for (const index of [0, 1]) {
       assert.equal(
         renderEntry(harness, index, true).trim(),
-        "pi-assert execution summary unavailable",
+        "HooKit execution summary unavailable",
       );
     }
   });
@@ -812,34 +807,34 @@ describe("index execution entries", () => {
 
 describe("index synthetic result dispatch", () => {
   it("awaits detached handlers without changing the originating block", async () => {
-    await withTemporaryHome("pi-assert-index-results-", async (root) => {
+    await withTemporaryHome("HooKit-index-results-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           passes: {
             description: "pass first",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "printf '%s' \"$PI_REASONING_LEVEL\" > reasoning.log",
             default: true,
           },
           blocks: {
             description: "then block",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "exit 6",
             default: true,
           },
           "failing-handler": {
             description: "handler reporting must be isolated",
-            hook: "assert_result",
+            event: "hook_result",
             shell: "false",
             default: true,
           },
           logger: {
             description: "record every result",
-            hook: "assert_result",
+            event: "hook_result",
             filter: {
-              assertionRef: "^local/",
+              hookRef: "^local/",
               outcome: ["pass", "block"],
             },
             shell: "printf '%s\\n' \"$PI_EVENT_PAYLOAD\" >> handled.log",
@@ -857,7 +852,7 @@ describe("index synthetic result dispatch", () => {
           theme: { fg: (_color: string, text: string) => text },
           setStatus: () => {},
           notify: (message: string) => {
-            if (message.includes("assert_result")) {
+            if (message.includes("hook_result")) {
               throw new Error("synthetic reporting failed");
             }
           },
@@ -879,20 +874,20 @@ describe("index synthetic result dispatch", () => {
       );
       assert.deepStrictEqual(callResult, {
         block: true,
-        reason: 'pi-assert: assertion "blocks" rejected bash — `exit 6`',
+        reason: 'hookit: hook "blocks" rejected bash — `exit 6`',
       });
       assert.equal(readFileSync(join(root, "reasoning.log"), "utf8"), "high");
 
       const payloads = readFileSync(join(root, "handled.log"), "utf8")
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as { assertionRef: string; outcome: string });
-      assert.deepStrictEqual(payloads.map(({ assertionRef, outcome }) => ({
-        assertionRef,
+        .map((line) => JSON.parse(line) as { hookRef: string; outcome: string });
+      assert.deepStrictEqual(payloads.map(({ hookRef, outcome }) => ({
+        hookRef,
         outcome,
       })), [
-        { assertionRef: "local/passes", outcome: "pass" },
-        { assertionRef: "local/blocks", outcome: "block" },
+        { hookRef: "local/passes", outcome: "pass" },
+        { hookRef: "local/blocks", outcome: "block" },
       ]);
 
       // Pi emits turn_end after synthetic results for a preflight-blocked wave.
@@ -901,10 +896,10 @@ describe("index synthetic result dispatch", () => {
       const expanded = renderEntry(harness, 0, true, 160);
       assert.match(
         expanded,
-        /pi-assert guarded 1 tool with 6 Assertions in \d+ms · bash ×1/,
+        /HooKit guarded 1 tool with 6 Hooks in \d+ms · bash ×1/,
       );
       // Sibling handlers still run after the failing handler and appear flat
-      // right after their origin native result.
+      // right after their originating Hook Result.
       const passesPos = expanded.indexOf("✓ local/passes");
       const failingPos = expanded.indexOf("✗ local/failing-handler");
       const loggerPos = expanded.indexOf("✓ local/logger");
@@ -937,20 +932,20 @@ describe("index synthetic result dispatch", () => {
 
 describe("index effect and outcome translation", () => {
   it("continues ordered feedback when execution-entry delivery fails", async () => {
-    await withTemporaryHome("pi-assert-index-effects-", async (root) => {
+    await withTemporaryHome("HooKit-index-effects-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           "end-check": {
             description: "request a correction",
-            hook: "agent_end",
+            event: "agent_end",
             shell: "false",
             default: true,
           },
           "failing-handler": {
             description: "present before corrective feedback",
-            hook: "assert_result",
+            event: "hook_result",
             shell: "false",
             default: true,
           },
@@ -1002,21 +997,21 @@ describe("index effect and outcome translation", () => {
       await harness.handler("agent_end")({ messages: [] }, ctx);
 
       assert.equal(deliveries.length, 3);
-      assert.match(deliveries[0]!, /assert_result assertion failed/);
-      assert.match(deliveries[1]!, /^corrective:1 assertion failed/);
+      assert.match(deliveries[0]!, /hook_result hook failed/);
+      assert.match(deliveries[1]!, /^corrective:1 hook failed/);
       assert.equal(deliveries[2], "entry");
     });
   });
 
   it("translates a patch in headless mode without relying on UI delivery", async () => {
-    await withTemporaryHome("pi-assert-index-patch-", async (root) => {
+    await withTemporaryHome("HooKit-index-patch-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           redact: {
             description: "suppress results",
-            hook: "tool_result",
+            event: "tool_result",
             shell: "false",
             default: true,
           },
@@ -1078,7 +1073,7 @@ describe("index effect and outcome translation", () => {
       assert.equal(harness.entries.length, 1);
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert guarded 1 tool with 1 Assertion in \d+ms · read ×1 \(ctrl\+o to expand\)/,
+        /HooKit guarded 1 tool with 1 Hook in \d+ms · read ×1 \(ctrl\+o to expand\)/,
       );
     });
   });
@@ -1086,32 +1081,32 @@ describe("index effect and outcome translation", () => {
 
 describe("index owned Action delivery", () => {
   it("maps every action onto supported Pi APIs in configured order", async () => {
-    await withTemporaryHome("pi-assert-index-actions-", async (root) => {
+    await withTemporaryHome("HooKit-index-actions-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           interrupt: {
             description: "stop work",
-            hook: "tool_call",
+            event: "tool_call",
             action: { type: "interrupt", outcome: "pass" },
             default: true,
           },
           shutdown: {
             description: "exit",
-            hook: "tool_call",
+            event: "tool_call",
             action: { type: "shutdown", outcome: "pass", interrupt: true },
             default: true,
           },
           drain: {
             description: "exit without interrupting",
-            hook: "tool_call",
+            event: "tool_call",
             action: { type: "shutdown", outcome: "pass" },
             default: true,
           },
           compact: {
             description: "summarize",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "compact",
               outcome: "pass",
@@ -1121,13 +1116,13 @@ describe("index owned Action delivery", () => {
           },
           compactDefault: {
             description: "summarize with defaults",
-            hook: "tool_call",
+            event: "tool_call",
             action: { type: "compact", outcome: "pass" },
             default: true,
           },
           steer: {
             description: "steer",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -1139,7 +1134,7 @@ describe("index owned Action delivery", () => {
           },
           later: {
             description: "later",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -1150,7 +1145,7 @@ describe("index owned Action delivery", () => {
           },
           next: {
             description: "next",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -1161,7 +1156,7 @@ describe("index owned Action delivery", () => {
           },
           event: {
             description: "integration",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "emit-custom-event",
               outcome: "pass",
@@ -1235,11 +1230,11 @@ describe("index owned Action delivery", () => {
       assert.equal(calls[4]?.value, "Keep decisions");
       assert.equal(calls[5]?.value, undefined);
       assert.deepEqual(calls[6]?.value, {
-        message: { customType: "pi-assert", content: "steer now", display: true },
+        message: { customType: "hookit", content: "steer now", display: true },
         options: { deliverAs: "steer", triggerTurn: true },
       });
       assert.deepEqual(calls[8]?.value, {
-        message: { customType: "pi-assert", content: "next prompt", display: true },
+        message: { customType: "hookit", content: "next prompt", display: true },
         options: { deliverAs: "nextTurn", triggerTurn: false },
       });
       assert.deepEqual(calls[9]?.value, {
@@ -1258,7 +1253,7 @@ describe("index owned Action delivery", () => {
         [18, 0],
       );
       const rows = data.segments.flatMap((segment) => segment.rows);
-      assert.equal(rows.filter((row) => row.type === "assertion").length, 9);
+      assert.equal(rows.filter((row) => row.type === "hook").length, 9);
       assert.deepEqual(
         rows
           .filter((row): row is { type: "action"; actionType: string } =>
@@ -1278,7 +1273,7 @@ describe("index owned Action delivery", () => {
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /pi-assert guarded 1 tool with 9 Assertions and requested 9 Actions in \d+ms · bash ×1/,
+        /HooKit guarded 1 tool with 9 Hooks and requested 9 Actions in \d+ms · bash ×1/,
       );
       assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested · pass/);
 
@@ -1288,20 +1283,20 @@ describe("index owned Action delivery", () => {
   });
 
   it("keeps a native block and continues after one action delivery throws", async () => {
-    await withTemporaryHome("pi-assert-index-action-failure-", async (root) => {
+    await withTemporaryHome("HooKit-index-action-failure-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           block: {
             description: "block",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "false",
             default: true,
           },
           broken: {
             description: "broken message",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -1312,7 +1307,7 @@ describe("index owned Action delivery", () => {
           },
           sibling: {
             description: "still emitted",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "emit-custom-event",
               outcome: "pass",
@@ -1357,7 +1352,7 @@ describe("index owned Action delivery", () => {
       );
       assert.deepEqual(callResult, {
         block: true,
-        reason: 'pi-assert: assertion "block" rejected bash — `false`',
+        reason: 'hookit: hook "block" rejected bash — `false`',
       });
       assert.deepEqual(events, ["test:sibling"]);
       assert.ok(notices.some((message) => message.includes("message failed")));
@@ -1367,20 +1362,20 @@ describe("index owned Action delivery", () => {
 
 describe("index session guard dispatch", () => {
   it("returns cancellation even when failure feedback throws", async () => {
-    await withTemporaryHome("pi-assert-index-hooks-", async (root) => {
+    await withTemporaryHome("HooKit-index-hooks-", async (root) => {
       const path = projectFilePath(root);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, JSON.stringify({
         local: {
           switch: {
             description: "block switches",
-            hook: "session_before_switch",
+            event: "session_before_switch",
             shell: "false",
             default: true,
           },
           fork: {
             description: "block forks",
-            hook: "session_before_fork",
+            event: "session_before_fork",
             shell: "false",
             default: true,
           },

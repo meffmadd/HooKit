@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
-  "title": "pi-assert configuration",
-  "description": "Schema for .pi/asserts.json — Assertions with optional owned Actions, and Presets for Pi.",
+  "$id": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
+  "title": "HooKit configuration",
+  "description": "Schema for .pi/hookit.json — Hooks with optional owned Actions, and Presets for Pi.",
   "type": "object",
   "properties": {
     "$schema": {
@@ -11,14 +11,14 @@
     },
     "local": {
       "type": "object",
-      "description": "User-defined Assertions and Presets.",
+      "description": "User-defined Hooks and Presets.",
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }
     },
     "repos": {
       "type": "array",
-      "description": "Repositories available for installing Assertions (owner/repo).",
+      "description": "Repositories available for installing Hooks (owner/repo).",
       "items": {
         "type": "string",
         "pattern": "^[^/]+/[^/]+$"
@@ -33,19 +33,19 @@
     "entry": {
       "oneOf": [
         {
-          "$ref": "#/$defs/assertion"
+          "$ref": "#/$defs/hook"
         },
         {
           "$ref": "#/$defs/preset"
         }
       ]
     },
-    "assertion": {
-      "description": "An Assertion. It must author a shell, an owned Action, or both. An omitted shell is canonicalized to the exact command `true`.",
+    "hook": {
+      "description": "A Hook. It must author a shell, an owned Action, or both. An omitted shell is canonicalized to the exact command `true`.",
       "type": "object",
       "required": [
         "description",
-        "hook"
+        "event"
       ],
       "anyOf": [
         {
@@ -64,7 +64,7 @@
           "type": "string",
           "description": "Human-readable description of the policy."
         },
-        "hook": {
+        "event": {
           "type": "string",
           "enum": [
             "tool_call",
@@ -74,9 +74,9 @@
             "agent_settled",
             "session_before_switch",
             "session_before_fork",
-            "assert_result"
+            "hook_result"
           ],
-          "description": "Supported native or synthetic hook."
+          "description": "Supported native or synthetic event."
         },
         "filter": {
           "type": "object",
@@ -87,7 +87,7 @@
         },
         "when": {
           "type": "string",
-          "description": "Optional shell precondition. Ordinary non-zero exits skip the whole Assertion."
+          "description": "Optional shell precondition. Ordinary non-zero exits skip the whole Hook."
         },
         "shell": {
           "type": "string",
@@ -98,7 +98,7 @@
         },
         "default": {
           "type": "boolean",
-          "description": "Whether this Assertion is active by default.",
+          "description": "Whether this Hook is active by default.",
           "default": false
         }
       },
@@ -106,18 +106,18 @@
         {
           "if": {
             "properties": {
-              "hook": {
-                "const": "assert_result"
+              "event": {
+                "const": "hook_result"
               }
             },
             "required": [
-              "hook"
+              "event"
             ]
           },
           "then": {
             "properties": {
               "filter": {
-                "$ref": "#/$defs/assertResultFilter"
+                "$ref": "#/$defs/hookResultFilter"
               }
             }
           }
@@ -125,12 +125,12 @@
         {
           "if": {
             "properties": {
-              "hook": {
+              "event": {
                 "const": "tool_call"
               }
             },
             "required": [
-              "hook"
+              "event"
             ]
           },
           "then": {
@@ -149,12 +149,12 @@
         {
           "if": {
             "properties": {
-              "hook": {
+              "event": {
                 "const": "tool_result"
               }
             },
             "required": [
-              "hook"
+              "event"
             ]
           },
           "then": {
@@ -173,17 +173,17 @@
         {
           "if": {
             "properties": {
-              "hook": {
+              "event": {
                 "enum": [
                   "turn_end",
                   "agent_end",
                   "agent_settled",
-                  "assert_result"
+                  "hook_result"
                 ]
               }
             },
             "required": [
-              "hook"
+              "event"
             ]
           },
           "then": {
@@ -202,7 +202,7 @@
         {
           "if": {
             "properties": {
-              "hook": {
+              "event": {
                 "enum": [
                   "session_before_switch",
                   "session_before_fork"
@@ -210,7 +210,7 @@
               }
             },
             "required": [
-              "hook"
+              "event"
             ]
           },
           "then": {
@@ -230,7 +230,7 @@
       "additionalProperties": false
     },
     "preset": {
-      "description": "A one-level bundle of source-qualified Assertion refs.",
+      "description": "A one-level bundle of source-qualified Hook refs.",
       "type": "object",
       "required": [
         "description",
@@ -285,14 +285,14 @@
         }
       ]
     },
-    "assertResultFilter": {
+    "hookResultFilter": {
       "type": "object",
-      "description": "assert_result identity fields use regex matching; outcome and code use exact shared result-selector matching.",
+      "description": "hook_result identity fields use regex matching; outcome and code use exact shared result-selector matching.",
       "properties": {
         "event": {
           "$ref": "#/$defs/stringOrArray"
         },
-        "assertionRef": {
+        "hookRef": {
           "$ref": "#/$defs/stringOrArray"
         },
         "runId": {
@@ -629,7 +629,7 @@
       ]
     },
     "action": {
-      "description": "One owned Action. outcome/code select the owning Assertion's immutable individual result and are removed from the delivery request.",
+      "description": "One owned Action. outcome/code select the owning Hook's immutable individual result and are removed from the delivery request.",
       "allOf": [
         {
           "$ref": "#/$defs/actionSelectorFeasibility"
@@ -781,7 +781,7 @@
     },
     "repo": {
       "type": "object",
-      "description": "Assertions and Presets installed from one repository.",
+      "description": "Hooks and Presets installed from one repository.",
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }

@@ -1,7 +1,7 @@
 /**
  * Tests for durable Execution Reports for combined Execution Waves built by
  * `ExecutionReporter` and rendered by `renderExecutionEntry`
- * (`pi-assert/ui/execution-report.ts`).
+ * (`HooKit/ui/execution-report.ts`).
  *
  * The contract under test is externally visible report construction, append
  * ordering, timing, and rendering — not private accumulator fields. Timing
@@ -17,12 +17,12 @@ import {
   ExecutionReporter,
   renderExecutionEntry,
   type ExecutionReportEntryData,
-  type ExecutionTrigger,
-} from "../pi-assert/ui/execution-report.js";
+  type ExecutionEventContext,
+} from "../hookit/ui/execution-report.js";
 import type {
-  AssertionExecutionReport,
+  HookExecutionReport,
   EvaluationReportRow,
-} from "../pi-assert/hook-evaluation/index.js";
+} from "../hookit/hook-evaluation/index.js";
 
 function makeClock(start = 1000): {
   now: () => number;
@@ -47,20 +47,20 @@ function makeReporter(
   });
 }
 
-function toolTrigger(
+function toolEventContext(
   toolName: string,
   toolCallId: string,
   event: "tool_call" | "tool_result" = "tool_call",
-): ExecutionTrigger {
+): ExecutionEventContext {
   return { event, toolName, toolCallId };
 }
 
-function makeAssertionRow(
-  partial: Partial<Extract<EvaluationReportRow, { type: "assertion" }>> = {},
+function makeHookRow(
+  partial: Partial<Extract<EvaluationReportRow, { type: "hook" }>> = {},
 ): EvaluationReportRow {
   return {
-    type: "assertion",
-    assertionRef: "local/guard",
+    type: "hook",
+    hookRef: "local/guard",
     durationMs: 3,
     passed: true,
     ...partial,
@@ -72,14 +72,14 @@ function makeActionRow(
 ): EvaluationReportRow {
   return {
     type: "action",
-    assertionRef: "local/act",
+    hookRef: "local/act",
     actionType: "message",
     outcome: "pass",
     ...partial,
   };
 }
 
-function makeReport(rows: readonly EvaluationReportRow[] = []): AssertionExecutionReport {
+function makeReport(rows: readonly EvaluationReportRow[] = []): HookExecutionReport {
   return { rows };
 }
 
@@ -101,7 +101,7 @@ function renderEntry(
       id: "entry-test",
       parentId: null,
       timestamp: new Date(0).toISOString(),
-      customType: "pi-assert-execution",
+      customType: "hookit-execution",
       data,
     },
     { expanded },
@@ -121,7 +121,10 @@ function completeTool(
   event: "tool_call" | "tool_result" = "tool_call",
 ): void {
   reporter.toolStarted(toolName, toolCallId);
-  const observation = reporter.begin(event, toolTrigger(toolName, toolCallId, event));
+  const observation = reporter.begin(
+    event,
+    toolEventContext(toolName, toolCallId, event),
+  );
   clock.advance(3);
   reporter.complete(observation, makeReport(rows));
   reporter.toolEnded(toolName, toolCallId);
@@ -135,26 +138,26 @@ describe("ExecutionReporter tool lifecycle collection", () => {
 
     // A starts first.
     reporter.toolStarted("bash", "A");
-    const callA = reporter.begin("tool_call", toolTrigger("bash", "A"));
+    const callA = reporter.begin("tool_call", toolEventContext("bash", "A"));
     clock.advance(5);
-    reporter.complete(callA, makeReport([makeAssertionRow({ assertionRef: "local/a" })]));
+    reporter.complete(callA, makeReport([makeHookRow({ hookRef: "local/a" })]));
 
     // B starts second.
     reporter.toolStarted("read", "B");
-    const callB = reporter.begin("tool_call", toolTrigger("read", "B"));
+    const callB = reporter.begin("tool_call", toolEventContext("read", "B"));
     clock.advance(4);
-    reporter.complete(callB, makeReport([makeAssertionRow({ assertionRef: "local/b" })]));
+    reporter.complete(callB, makeReport([makeHookRow({ hookRef: "local/b" })]));
 
     // B results and ends first.
-    const resultB = reporter.begin("tool_result", toolTrigger("read", "B", "tool_result"));
+    const resultB = reporter.begin("tool_result", toolEventContext("read", "B", "tool_result"));
     clock.advance(3);
-    reporter.complete(resultB, makeReport([makeAssertionRow({ assertionRef: "local/b2" })]));
+    reporter.complete(resultB, makeReport([makeHookRow({ hookRef: "local/b2" })]));
     reporter.toolEnded("read", "B");
 
     // A results and ends last.
-    const resultA = reporter.begin("tool_result", toolTrigger("bash", "A", "tool_result"));
+    const resultA = reporter.begin("tool_result", toolEventContext("bash", "A", "tool_result"));
     clock.advance(7);
-    reporter.complete(resultA, makeReport([makeAssertionRow({ assertionRef: "local/a2" })]));
+    reporter.complete(resultA, makeReport([makeHookRow({ hookRef: "local/a2" })]));
     reporter.toolEnded("bash", "A");
 
     // The wave stays pending until a non-tool boundary begins.
@@ -168,18 +171,18 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     assert.equal(entry.durationMs, 19);
     // segment order is begin order: call A, call B, result B, result A
     assert.deepEqual(
-      entry.segments.map((segment) => segment.trigger.toolCallId),
+      entry.segments.map((segment) => segment.eventContext.toolCallId),
       ["A", "B", "B", "A"],
     );
     assert.deepEqual(
-      entry.segments.map((segment) => segment.trigger.event),
+      entry.segments.map((segment) => segment.eventContext.event),
       ["tool_call", "tool_call", "tool_result", "tool_result"],
     );
     // tool breakdown counts A and B once each.
     assert.deepEqual(entry.tools.map((tool) => tool.toolCallId), ["A", "B"]);
     assert.match(
       renderEntry(entry, false),
-      /pi-assert guarded 2 tools with 4 Assertions in 19ms · bash ×1, read ×1/,
+      /HooKit guarded 2 tools with 4 Hooks in 19ms · bash ×1, read ×1/,
     );
   });
 
@@ -188,9 +191,9 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    completeTool(reporter, clock, "bash", "T1", [makeAssertionRow()]);
+    completeTool(reporter, clock, "bash", "T1", [makeHookRow()]);
     clock.advance(4); // transition to the second tool
-    completeTool(reporter, clock, "read", "T2", [makeAssertionRow()]);
+    completeTool(reporter, clock, "read", "T2", [makeHookRow()]);
 
     reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
     const entry = entries[0]!;
@@ -207,13 +210,13 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     const reporter = makeReporter(entries, clock);
 
     reporter.toolStarted("bash", "blocked");
-    const call = reporter.begin("tool_call", toolTrigger("bash", "blocked"));
+    const call = reporter.begin("tool_call", toolEventContext("bash", "blocked"));
     clock.advance(2);
     reporter.complete(
       call,
       makeReport([
-        makeAssertionRow({ assertionRef: "local/block", passed: false }),
-        makeActionRow({ assertionRef: "local/block", actionType: "interrupt", outcome: "block" }),
+        makeHookRow({ hookRef: "local/block", passed: false }),
+        makeActionRow({ hookRef: "local/block", actionType: "interrupt", outcome: "block" }),
       ]),
     );
     reporter.toolEnded("bash", "blocked");
@@ -227,23 +230,23 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     assert.match(expanded, /→ local\/block · interrupt requested · block/);
   });
 
-  it("4. a tool without matching Assertions still contributes to duration and breakdown", () => {
+  it("4. a tool without matching Hooks still contributes to duration and breakdown", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
     // read/empty has no rows but is a completed tool.
     reporter.toolStarted("read", "empty");
-    const emptyCall = reporter.begin("tool_call", toolTrigger("read", "empty"));
+    const emptyCall = reporter.begin("tool_call", toolEventContext("read", "empty"));
     clock.advance(2);
     reporter.complete(emptyCall, makeReport([]));
     reporter.toolEnded("read", "empty");
 
     // bash/busy gives the wave its report data.
     reporter.toolStarted("bash", "busy");
-    const busyCall = reporter.begin("tool_call", toolTrigger("bash", "busy"));
+    const busyCall = reporter.begin("tool_call", toolEventContext("bash", "busy"));
     clock.advance(3);
-    reporter.complete(busyCall, makeReport([makeAssertionRow()]));
+    reporter.complete(busyCall, makeReport([makeHookRow()]));
     reporter.toolEnded("bash", "busy");
 
     reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
@@ -254,11 +257,11 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     assert.deepEqual(entry.tools.map((tool) => tool.toolCallId), ["empty", "busy"]);
     assert.match(
       renderEntry(entry, false),
-      /guarded 2 tools with 1 Assertion in 5ms · read ×1, bash ×1/,
+      /guarded 2 tools with 1 Hook in 5ms · read ×1, bash ×1/,
     );
     // The empty segment stays persisted in Pi order but adds no expanded view.
     assert.deepEqual(
-      entry.segments.map((segment) => segment.trigger.toolCallId),
+      entry.segments.map((segment) => segment.eventContext.toolCallId),
       ["empty", "busy"],
     );
     const expanded = renderEntry(entry, true);
@@ -276,27 +279,27 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     assert.deepEqual(entries, []);
   });
 
-  it("6. ordinary hook duration is its outer callback interval and appends immediately", () => {
+  it("6. non-tool Hook Evaluation duration is its outer callback interval and appends immediately", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(500);
     const reporter = makeReporter(entries, clock);
 
     const observation = reporter.begin("turn_end", { event: "turn_end", turnIndex: 2 });
     clock.advance(12);
-    reporter.complete(observation, makeReport([makeAssertionRow({ durationMs: 3 })]));
+    reporter.complete(observation, makeReport([makeHookRow({ durationMs: 3 })]));
 
     assert.equal(entries.length, 1);
     const entry = entries[0]!;
-    assert.equal(entry.type, "hook");
+    assert.equal(entry.type, "event");
     assert.equal(entry.durationMs, 12);
-    assert.deepEqual(entry.segment.trigger, { event: "turn_end", turnIndex: 2 });
+    assert.deepEqual(entry.segment.eventContext, { event: "turn_end", turnIndex: 2 });
     assert.match(
       renderEntry(entry, false),
-      /pi-assert ran 1 Assertion in 12ms · turn_end 2/,
+      /HooKit ran 1 Hook in 12ms · turn_end 2/,
     );
   });
 
-  it("an ordinary hook with no rows appends nothing", () => {
+  it("a non-tool Hook Evaluation with no rows appends nothing", () => {
     const entries: ExecutionReportEntryData[] = [];
     const reporter = makeReporter(entries);
     const observation = reporter.begin("agent_end", { event: "agent_end" });
@@ -311,7 +314,7 @@ describe("ExecutionReporter shutdown and failure", () => {
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
 
-    completeTool(reporter, clock, "read", "c1", [makeAssertionRow()]);
+    completeTool(reporter, clock, "read", "c1", [makeHookRow()]);
     assert.equal(entries.length, 0);
     reporter.flush();
     assert.equal(entries.length, 1);
@@ -325,9 +328,9 @@ describe("ExecutionReporter shutdown and failure", () => {
     const reporter = makeReporter(entries, clock);
 
     reporter.toolStarted("read", "mid-flight");
-    const observation = reporter.begin("tool_call", toolTrigger("read", "mid-flight"));
+    const observation = reporter.begin("tool_call", toolEventContext("read", "mid-flight"));
     clock.advance(10);
-    reporter.complete(observation, makeReport([makeAssertionRow()]));
+    reporter.complete(observation, makeReport([makeHookRow()]));
     // No toolEnded: the wave has no valid interval.
     reporter.flush();
     assert.deepEqual(entries, []);
@@ -348,12 +351,12 @@ describe("ExecutionReporter shutdown and failure", () => {
       },
     });
 
-    completeTool(reporter, clock, "read", "c1", [makeAssertionRow()]);
+    completeTool(reporter, clock, "read", "c1", [makeHookRow()]);
     reporter.flush();
     assert.equal(entries.length, 0, "dropped report is not appended");
     assert.equal(failures, 1);
 
-    completeTool(reporter, clock, "read", "c2", [makeAssertionRow()]);
+    completeTool(reporter, clock, "read", "c2", [makeHookRow()]);
     reporter.flush();
     assert.equal(entries.length, 1, "a later wave still appends");
   });
@@ -365,15 +368,15 @@ describe("ExecutionReporter shutdown and failure", () => {
 
     const toolName = `rea\u0000  \u0001d${"x".repeat(600)}`;
     const toolCallId = `call\u0007id${"y".repeat(300)}`;
-    const assertionRef = `local/\u0000guard\u0001${"z".repeat(600)}`;
+    const hookRef = `local/\u0000guard\u0001${"z".repeat(600)}`;
     reporter.toolStarted(toolName, toolCallId);
     const observation = reporter.begin(
       "tool_call",
-      toolTrigger(toolName, toolCallId),
+      toolEventContext(toolName, toolCallId),
     );
     reporter.complete(
       observation,
-      makeReport([makeAssertionRow({ assertionRef })]),
+      makeReport([makeHookRow({ hookRef })]),
     );
     reporter.toolEnded(toolName, toolCallId);
     reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
@@ -384,16 +387,16 @@ describe("ExecutionReporter shutdown and failure", () => {
     assert.equal(entry.tools[0]!.toolName.length, 512);
     assert.match(entry.tools[0]!.toolCallId, /^call id/);
     assert.equal(entry.tools[0]!.toolCallId.length, 256);
-    assert.deepEqual(entry.segments[0]!.trigger, {
+    assert.deepEqual(entry.segments[0]!.eventContext, {
       event: "tool_call",
       toolName: entry.tools[0]!.toolName,
       toolCallId: entry.tools[0]!.toolCallId,
     });
-    assert.match(entry.segments[0]!.rows[0]!.assertionRef, /^local\/ guard/);
-    assert.equal(entry.segments[0]!.rows[0]!.assertionRef.length, 512);
+    assert.match(entry.segments[0]!.rows[0]!.hookRef, /^local\/ guard/);
+    assert.equal(entry.segments[0]!.rows[0]!.hookRef.length, 512);
   });
 
-  it("8. clamps non-finite and oversized Assertion row durations", () => {
+  it("8. clamps non-finite and oversized Hook row durations", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);
     const reporter = makeReporter(entries, clock);
@@ -401,21 +404,21 @@ describe("ExecutionReporter shutdown and failure", () => {
     reporter.toolStarted("read", "rows-bounded");
     const observation = reporter.begin(
       "tool_call",
-      toolTrigger("read", "rows-bounded"),
+      toolEventContext("read", "rows-bounded"),
     );
     reporter.complete(
       observation,
       makeReport([
-        makeAssertionRow({ assertionRef: "local/nan", durationMs: Number.NaN }),
-        makeAssertionRow({
-          assertionRef: "local/infinity",
+        makeHookRow({ hookRef: "local/nan", durationMs: Number.NaN }),
+        makeHookRow({
+          hookRef: "local/infinity",
           durationMs: Number.POSITIVE_INFINITY,
         }),
-        makeAssertionRow({
-          assertionRef: "local/oversized",
+        makeHookRow({
+          hookRef: "local/oversized",
           durationMs: Number.MAX_SAFE_INTEGER,
         }),
-        makeAssertionRow({ assertionRef: "local/negative", durationMs: -1 }),
+        makeHookRow({ hookRef: "local/negative", durationMs: -1 }),
       ]),
     );
     reporter.toolEnded("read", "rows-bounded");
@@ -425,7 +428,7 @@ describe("ExecutionReporter shutdown and failure", () => {
     assert.equal(entry.type, "tool-wave");
     assert.deepEqual(
       entry.segments[0]!.rows.map((row) =>
-        row.type === "assertion" ? row.durationMs : undefined
+        row.type === "hook" ? row.durationMs : undefined
       ),
       [0, 2_147_483_647, 2_147_483_647, 0],
     );
@@ -446,8 +449,8 @@ describe("ExecutionReporter shutdown and failure", () => {
       });
 
       reporter.toolStarted("read", "bounded");
-      const observation = reporter.begin("tool_call", toolTrigger("read", "bounded"));
-      reporter.complete(observation, makeReport([makeAssertionRow()]));
+      const observation = reporter.begin("tool_call", toolEventContext("read", "bounded"));
+      reporter.complete(observation, makeReport([makeHookRow()]));
       current = endMs;
       reporter.toolEnded("read", "bounded");
       reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
@@ -464,27 +467,27 @@ describe("ExecutionReport rendering", () => {
     const reporter = makeReporter(entries, clock);
 
     reporter.toolStarted("bash", "p");
-    const call = reporter.begin("tool_call", toolTrigger("bash", "p"));
+    const call = reporter.begin("tool_call", toolEventContext("bash", "p"));
     clock.advance(2);
     reporter.complete(
       call,
       makeReport([
-        makeAssertionRow({ assertionRef: "local/protect-env", durationMs: 8 }),
+        makeHookRow({ hookRef: "local/protect-env", durationMs: 8 }),
         makeActionRow({
-          assertionRef: "local/protect-env",
+          hookRef: "local/protect-env",
           actionType: "interrupt",
           outcome: "block",
         }),
-        makeAssertionRow({
-          assertionRef: "owner/rules/audit",
+        makeHookRow({
+          hookRef: "owner/hooks/audit",
           durationMs: 3,
-          origin: { assertionRef: "local/protect-env", outcome: "block" },
+          origin: { hookRef: "local/protect-env", outcome: "block" },
         }),
         makeActionRow({
-          assertionRef: "owner/rules/audit",
+          hookRef: "owner/hooks/audit",
           actionType: "message",
           outcome: "report",
-          origin: { assertionRef: "local/protect-env", outcome: "block" },
+          origin: { hookRef: "local/protect-env", outcome: "block" },
         }),
       ]),
     );
@@ -495,19 +498,19 @@ describe("ExecutionReport rendering", () => {
     assert.ok(expanded.includes("tool_call bash · id p"));
     assert.ok(
       expanded.includes("✓ local/protect-env") && /8ms/.test(expanded),
-      "assertion row shows its individual duration",
+      "hook row shows its individual duration",
     );
     assert.ok(
       expanded.includes("→ local/protect-env · interrupt requested · block"),
       "native Action row shows type and owner outcome",
     );
     assert.ok(
-      expanded.includes("✓ owner/rules/audit") &&
+      expanded.includes("✓ owner/hooks/audit") &&
         expanded.includes("· from local/protect-env block"),
-      "synthetic Assertion row carries the projected origin",
+      "synthetic Hook row carries the projected origin",
     );
     assert.ok(
-      expanded.includes("→ owner/rules/audit · message requested · report") &&
+      expanded.includes("→ owner/hooks/audit · message requested · report") &&
         expanded.includes("· from local/protect-env block"),
       "synthetic Action row carries owner outcome and origin",
     );
@@ -521,7 +524,7 @@ describe("ExecutionReport rendering", () => {
     const clock = makeClock(1000);
 
     reporter.toolStarted("read", "w");
-    const observation = reporter.begin("tool_result", toolTrigger("read", "w", "tool_result"));
+    const observation = reporter.begin("tool_result", toolEventContext("read", "w", "tool_result"));
     clock.advance(2);
     reporter.complete(
       observation,
@@ -550,20 +553,20 @@ describe("ExecutionReport rendering", () => {
     const reporter = makeReporter(entries, clock);
 
     reporter.toolStarted("bash", "A");
-    const callA = reporter.begin("tool_call", toolTrigger("bash", "A"));
+    const callA = reporter.begin("tool_call", toolEventContext("bash", "A"));
     clock.advance(2);
-    reporter.complete(callA, makeReport([makeAssertionRow()]));
+    reporter.complete(callA, makeReport([makeHookRow()]));
     reporter.toolStarted("read", "B");
-    const callB = reporter.begin("tool_call", toolTrigger("read", "B"));
+    const callB = reporter.begin("tool_call", toolEventContext("read", "B"));
     clock.advance(2);
-    reporter.complete(callB, makeReport([makeAssertionRow()]));
-    const resultB = reporter.begin("tool_result", toolTrigger("read", "B", "tool_result"));
+    reporter.complete(callB, makeReport([makeHookRow()]));
+    const resultB = reporter.begin("tool_result", toolEventContext("read", "B", "tool_result"));
     clock.advance(2);
-    reporter.complete(resultB, makeReport([makeAssertionRow()]));
+    reporter.complete(resultB, makeReport([makeHookRow()]));
     reporter.toolEnded("read", "B");
-    const resultA = reporter.begin("tool_result", toolTrigger("bash", "A", "tool_result"));
+    const resultA = reporter.begin("tool_result", toolEventContext("bash", "A", "tool_result"));
     clock.advance(2);
-    reporter.complete(resultA, makeReport([makeAssertionRow()]));
+    reporter.complete(resultA, makeReport([makeHookRow()]));
     reporter.toolEnded("bash", "A");
     reporter.begin("turn_end", { event: "turn_end", turnIndex: 1 });
 
@@ -579,51 +582,18 @@ describe("ExecutionReport rendering", () => {
     );
   });
 
-  it("9. rejects old and malformed shapes as an unavailable fallback", () => {
-    // Historical unversioned/old shape.
-    assert.equal(
-      renderEntry({
-        hook: "tool_call",
-        criticalPathMs: 3,
-        segments: [{
-          trigger: { event: "tool_call", toolName: "bash", toolCallId: "old" },
-          executions: [
-            {
-              assertionRef: "local/old",
-              runId: "old-run",
-              hook: "tool_call",
-              durationMs: 3,
-              passed: true,
-            },
-          ],
-          actionRequests: [],
-        }],
-      }, true).trim(),
-      "pi-assert execution summary unavailable",
-    );
-
-    // Old pre-wave versioned shape.
-    assert.equal(
-      renderEntry({
-        version: 1,
-        trigger: { event: "tool_call", toolName: "bash", toolCallId: "old" },
-        executions: [],
-        actionRequests: [],
-      }, true).trim(),
-      "pi-assert execution summary unavailable",
-    );
-
+  it("9. rejects malformed current-type shapes as an unavailable fallback", () => {
     const malformed: unknown[] = [
       { type: "tool-wave", durationMs: -1, tools: [], segments: [] },
-      { type: "tool-wave", durationMs: 2, tools: [], segments: [{ trigger: toolTrigger("read", "x") }] },
+      { type: "tool-wave", durationMs: 2, tools: [], segments: [{ eventContext: toolEventContext("read", "x") }] },
       { type: "tool-wave", durationMs: 2, tools: [{ toolName: "r", toolCallId: "x" }], segments: [] },
       {
         type: "tool-wave",
         durationMs: 2,
         tools: [{ toolName: "r", toolCallId: "x" }],
         segments: [{
-          trigger: { event: "turn_end", turnIndex: 1 },
-          rows: [makeAssertionRow()],
+          eventContext: { event: "turn_end", turnIndex: 1 },
+          rows: [makeHookRow()],
         }],
       },
       {
@@ -631,27 +601,27 @@ describe("ExecutionReport rendering", () => {
         durationMs: 2,
         tools: [{ toolName: "r", toolCallId: "x" }],
         segments: [{
-          trigger: toolTrigger("read", "x"),
-          rows: [{ type: "assertion", runId: "bad-run" }],
+          eventContext: toolEventContext("read", "x"),
+          rows: [{ type: "hook", runId: "bad-run" }],
         }],
       },
       {
         type: "tool-wave",
         durationMs: Number.MAX_SAFE_INTEGER + 100,
         tools: [{ toolName: "r", toolCallId: "x" }],
-        segments: [{ trigger: toolTrigger("read", "x"), rows: [makeAssertionRow()] }],
+        segments: [{ eventContext: toolEventContext("read", "x"), rows: [makeHookRow()] }],
       },
-      { type: "hook", durationMs: 2, segment: [] },
+      { type: "event", durationMs: 2, segment: [] },
       {
-        type: "hook",
+        type: "event",
         durationMs: 2,
-        segment: { trigger: toolTrigger("read", "x"), rows: [makeAssertionRow()] },
+        segment: { eventContext: toolEventContext("read", "x"), rows: [makeHookRow()] },
       },
     ];
     for (const bad of malformed) {
       assert.equal(
         renderEntry(bad, true).trim(),
-        "pi-assert execution summary unavailable",
+        "HooKit execution summary unavailable",
         JSON.stringify(bad),
       );
     }

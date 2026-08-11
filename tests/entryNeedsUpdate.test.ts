@@ -13,15 +13,15 @@ import {
   entryContentSignature,
   entryNeedsUpdate,
   type EntryState,
-  type RuleEntry,
+  type HookEntry,
   type SignableEntry,
-} from "../pi-assert/installer.js";
+} from "../hookit/installer.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
 const base: SignableEntry = {
   description: "Blocks writes.",
-  hook: "tool_call",
+  event: "tool_call",
   shell: "false",
 };
 
@@ -38,10 +38,10 @@ function with_(
 // ═══════════════════════════════════════════════════════════════════
 
 describe("entryContentSignature", () => {
-  it("includes description, hook, shell and omits absent filter/when", () => {
+  it("includes description, event, shell and omits absent filter/when", () => {
     assert.deepStrictEqual(
-      entryContentSignature({ description: "d", hook: "h", shell: "s" }),
-      { description: "d", hook: "h", shell: "s" },
+      entryContentSignature({ description: "d", event: "h", shell: "s" }),
+      { description: "d", event: "h", shell: "s" },
     );
   });
 
@@ -49,14 +49,14 @@ describe("entryContentSignature", () => {
     assert.deepStrictEqual(
       entryContentSignature({
         description: "d",
-        hook: "h",
+        event: "h",
         shell: "s",
         filter: { toolName: "write" },
         when: "true",
       }),
       {
         description: "d",
-        hook: "h",
+        event: "h",
         shell: "s",
         filter: { toolName: "write" },
         when: "true",
@@ -67,17 +67,17 @@ describe("entryContentSignature", () => {
   it("excludes default (a local-only preference)", () => {
     const sig = entryContentSignature({
       description: "d",
-      hook: "h",
+      event: "h",
       shell: "s",
       default: true,
-    } as RuleEntry);
+    } as HookEntry);
     assert.ok(!("default" in sig), "default must not appear in the signature");
   });
 
   it("includes canonical shell and owned Action configuration", () => {
     const sig = entryContentSignature({
       description: "notify",
-      hook: "assert_result",
+      event: "hook_result",
       action: {
         type: "message",
         outcome: "pass",
@@ -90,7 +90,7 @@ describe("entryContentSignature", () => {
     });
     assert.deepEqual(sig, {
       description: "notify",
-      hook: "assert_result",
+      event: "hook_result",
       shell: "true",
       action: {
         type: "message",
@@ -106,7 +106,7 @@ describe("entryContentSignature", () => {
   it("canonicalizes omitted and explicit true shells identically", () => {
     const implicit = {
       description: "notify",
-      hook: "tool_call",
+      event: "tool_call",
       action: { type: "interrupt", outcome: "pass" } as const,
     };
     assert.deepEqual(
@@ -119,12 +119,12 @@ describe("entryContentSignature", () => {
   it("never emits undefined-valued keys", () => {
     const sig = entryContentSignature({
       description: "d",
-      hook: "h",
+      event: "h",
       shell: "s",
       filter: undefined,
       when: undefined,
     });
-    assert.deepStrictEqual(sig, { description: "d", hook: "h", shell: "s" });
+    assert.deepStrictEqual(sig, { description: "d", event: "h", shell: "s" });
     assert.ok(!("filter" in sig));
     assert.ok(!("when" in sig));
   });
@@ -144,12 +144,12 @@ describe("entryNeedsUpdate", () => {
       entryNeedsUpdate(
         {
           description: "notify",
-          hook: "tool_call",
+          event: "tool_call",
           action: { type: "interrupt", outcome: "pass" },
         },
         {
           description: "notify",
-          hook: "tool_call",
+          event: "tool_call",
           action: { type: "shutdown", outcome: "pass" },
         },
       ),
@@ -158,14 +158,14 @@ describe("entryNeedsUpdate", () => {
   });
 
   it("returns false when only default differs (default is excluded)", () => {
-    const installed = { ...base, default: true } as RuleEntry;
-    const repo = { ...base } as RuleEntry;
+    const installed = { ...base, default: true } as HookEntry;
+    const repo = { ...base } as HookEntry;
     assert.strictEqual(entryNeedsUpdate(installed, repo), false);
   });
 
   it("returns false when default differs in both directions", () => {
-    const installed = { ...base } as RuleEntry;
-    const repo = { ...base, default: true } as RuleEntry;
+    const installed = { ...base } as HookEntry;
+    const repo = { ...base, default: true } as HookEntry;
     assert.strictEqual(entryNeedsUpdate(installed, repo), false);
   });
 
@@ -176,9 +176,9 @@ describe("entryNeedsUpdate", () => {
     );
   });
 
-  it("returns true when hook differs", () => {
+  it("returns true when event differs", () => {
     assert.strictEqual(
-      entryNeedsUpdate(base, with_({ hook: "tool_result" })),
+      entryNeedsUpdate(base, with_({ event: "tool_result" })),
       true,
     );
   });
@@ -204,8 +204,8 @@ describe("entryNeedsUpdate", () => {
   it("returns false when filter is absent on both sides", () => {
     assert.strictEqual(
       entryNeedsUpdate(
-        { description: "d", hook: "h", shell: "s" },
-        { description: "d", hook: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s" },
       ),
       false,
     );
@@ -214,15 +214,15 @@ describe("entryNeedsUpdate", () => {
   it("returns true when filter is present on one side but not the other", () => {
     assert.strictEqual(
       entryNeedsUpdate(
-        { description: "d", hook: "h", shell: "s" },
-        { description: "d", hook: "h", shell: "s", filter: { toolName: "x" } },
+        { description: "d", event: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s", filter: { toolName: "x" } },
       ),
       true,
     );
     assert.strictEqual(
       entryNeedsUpdate(
-        { description: "d", hook: "h", shell: "s", filter: { toolName: "x" } },
-        { description: "d", hook: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s", filter: { toolName: "x" } },
+        { description: "d", event: "h", shell: "s" },
       ),
       true,
     );
@@ -233,13 +233,13 @@ describe("entryNeedsUpdate", () => {
       entryNeedsUpdate(
         {
           description: "d",
-          hook: "h",
+          event: "h",
           shell: "s",
           filter: { a: "1", b: "2" },
         },
         {
           description: "d",
-          hook: "h",
+          event: "h",
           shell: "s",
           filter: { b: "2", a: "1" },
         },
@@ -251,8 +251,8 @@ describe("entryNeedsUpdate", () => {
   it("returns false when when is absent on both sides", () => {
     assert.strictEqual(
       entryNeedsUpdate(
-        { description: "d", hook: "h", shell: "s" },
-        { description: "d", hook: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s" },
       ),
       false,
     );
@@ -261,8 +261,8 @@ describe("entryNeedsUpdate", () => {
   it("returns true when when is present on one side but not the other", () => {
     assert.strictEqual(
       entryNeedsUpdate(
-        { description: "d", hook: "h", shell: "s" },
-        { description: "d", hook: "h", shell: "s", when: "true" },
+        { description: "d", event: "h", shell: "s" },
+        { description: "d", event: "h", shell: "s", when: "true" },
       ),
       true,
     );
@@ -290,7 +290,7 @@ describe("classifyEntry", () => {
 
   it("returns 'installed' when only default differs", () => {
     assert.strictEqual(
-      classifyEntry(base, { ...base, default: true } as RuleEntry),
+      classifyEntry(base, { ...base, default: true } as HookEntry),
       "installed" as EntryState,
     );
   });

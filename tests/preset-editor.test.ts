@@ -1,6 +1,6 @@
 /**
  * Tests for `PresetEditorPanel` — the preset editor's sectioned, searchable
- * assert picker.  Behaves like the `/asserts` view (sections by source,
+ * hook picker.  Behaves like the `/hooks` view (sections by source,
  * fzf-style search, Tab/Shift+Tab cross-section navigation) but with checkbox
  * semantics: `Enter` toggles membership (`✓`), `Esc` commits + goes back.
  */
@@ -8,8 +8,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { PresetEditorPanel } from "../pi-assert/ui/preset-editor.js";
-import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
+import { PresetEditorPanel } from "../hookit/ui/preset-editor.js";
+import type { CatalogEntry } from "../hookit/hook-catalog/index.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ const DOWN = "\x1b[B";
 const SPACE = " ";
 const TAB = "\t";
 
-/** A theme that wraps accented text in brackets so assertions can see it. */
+/** A theme that wraps accented text in brackets so hooks can see it. */
 function mockTheme(): Theme {
   return {
     fg: (role: string, text: string) =>
@@ -31,7 +31,7 @@ function mockTheme(): Theme {
   } as unknown as Theme;
 }
 
-function makeAssert(
+function makeHook(
   name: string,
   source = "local",
   opts: { shell?: string; when?: string; description?: string } = {},
@@ -40,7 +40,7 @@ function makeAssert(
     name,
     source,
     description: opts.description ?? `desc-${name}`,
-    hook: "tool_call",
+    event: "tool_call",
     shell: opts.shell ?? "true",
     when: opts.when,
     default: false,
@@ -53,7 +53,7 @@ function makeAction(name: string, source = "local"): CatalogEntry {
     name,
     source,
     description: `desc-${name}`,
-    hook: "tool_call",
+    event: "tool_call",
     shell: "true",
     action: {
       type: "message",
@@ -66,12 +66,12 @@ function makeAction(name: string, source = "local"): CatalogEntry {
 }
 
 function makePanel(
-  assertions: CatalogEntry[],
+  hooks: CatalogEntry[],
   selected: Set<string> = new Set(),
   opts: { name?: string; description?: string } = {},
 ): PresetEditorPanel {
   const panel = new PresetEditorPanel(
-    assertions,
+    hooks,
     opts.name ?? "my-preset",
     opts.description ?? "A preset.",
     selected,
@@ -95,11 +95,11 @@ function focusedLine(lines: string[]): string | undefined {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("PresetEditorPanel rendering", () => {
-  it("groups Assertions by source (local first, then repos alpha)", () => {
+  it("groups Hooks by source (local first, then repos alpha)", () => {
     const panel = makePanel([
-      makeAssert("zeta", "owner/repo"),
-      makeAssert("alpha", "local"),
-      makeAssert("beta", "owner/repo"),
+      makeHook("zeta", "owner/repo"),
+      makeHook("alpha", "local"),
+      makeHook("beta", "owner/repo"),
     ]);
     const lines = panel.render(80);
     // Section headers may carry `Tab`/`Shift+Tab` jump-key hints after the
@@ -111,9 +111,9 @@ describe("PresetEditorPanel rendering", () => {
     assert.deepEqual(sources, ["Local", "owner/repo"]);
   });
 
-  it("renders a ✓ badge for selected (member) asserts and a space for others", () => {
+  it("renders a ✓ badge for selected (member) hooks and a space for others", () => {
     const panel = makePanel(
-      [makeAssert("alpha"), makeAssert("beta")],
+      [makeHook("alpha"), makeHook("beta")],
       new Set(["local/alpha"]),
     );
     const lines = panel.render(80);
@@ -124,7 +124,7 @@ describe("PresetEditorPanel rendering", () => {
   });
 
   it("shows the preset name + description in the header", () => {
-    const panel = makePanel([makeAssert("a")], new Set(), {
+    const panel = makePanel([makeHook("a")], new Set(), {
       name: "my-preset",
       description: "Guards writes.",
     });
@@ -140,7 +140,7 @@ describe("PresetEditorPanel rendering", () => {
   });
 
   it("renders shell/when detail under the focused row", () => {
-    const panel = makePanel([makeAssert("a", "local", { shell: "git status", when: "true" })]);
+    const panel = makePanel([makeHook("a", "local", { shell: "git status", when: "true" })]);
     const lines = panel.render(80);
     assert.ok(
       lines.some((l) => plain(l).includes("shell: git status")),
@@ -152,7 +152,7 @@ describe("PresetEditorPanel rendering", () => {
     );
   });
 
-  it("renders Assertions with owned Actions as selectable", () => {
+  it("renders Hooks with owned Actions as selectable", () => {
     const panel = makePanel([makeAction("notify")]);
     const lines = panel.render(100);
     assert.ok(lines.some((line) => plain(line).includes("notify")));
@@ -162,16 +162,16 @@ describe("PresetEditorPanel rendering", () => {
     );
   });
 
-  it("shows 'No Assertions to select' when empty", () => {
+  it("shows 'No Hooks to select' when empty", () => {
     const panel = makePanel([]);
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => plain(l).includes("No Assertions to select")),
+      lines.some((l) => plain(l).includes("No Hooks to select")),
       "empty state message",
     );
   });
 
-  it("excludes Presets while retaining all Assertions", () => {
+  it("excludes Presets while retaining all Hooks", () => {
     const preset = {
       name: "other-preset",
       source: "local",
@@ -180,7 +180,7 @@ describe("PresetEditorPanel rendering", () => {
       default: false,
       path: "/tmp/p.json",
     } as unknown as CatalogEntry;
-    const shell = makeAssert("guard");
+    const shell = makeHook("guard");
     const action = makeAction("notify");
     const panel = makePanel([shell, action, preset]);
     const lines = panel.render(80);
@@ -190,11 +190,11 @@ describe("PresetEditorPanel rendering", () => {
     );
     assert.ok(
       lines.some((l) => plain(l).includes("guard")),
-      "shell Assertion is in the picker",
+      "shell Hook is in the picker",
     );
     assert.ok(
       lines.some((l) => plain(l).includes("notify")),
-      "Assertion with an Action is in the picker",
+      "Hook with an Action is in the picker",
     );
   });
 });
@@ -204,28 +204,28 @@ describe("PresetEditorPanel rendering", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("PresetEditorPanel Enter toggle", () => {
-  it("Enter adds the focused assert to the selection", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+  it("Enter adds the focused hook to the selection", () => {
+    const panel = makePanel([makeHook("alpha")]);
     assert.deepEqual(panel.value, []);
     panel.handleInput(ENTER);
     assert.deepEqual(panel.value, ["local/alpha"]);
   });
 
-  it("Enter removes an already-selected focused assert", () => {
-    const panel = makePanel([makeAssert("alpha")], new Set(["local/alpha"]));
+  it("Enter removes an already-selected focused hook", () => {
+    const panel = makePanel([makeHook("alpha")], new Set(["local/alpha"]));
     assert.deepEqual(panel.value, ["local/alpha"]);
     panel.handleInput(ENTER);
     assert.deepEqual(panel.value, []);
   });
 
   it("Enter toggles without committing (returns undefined)", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+    const panel = makePanel([makeHook("alpha")]);
     const result = panel.handleInput(ENTER);
     assert.strictEqual(result, undefined);
   });
 
   it("Space is a no-op in normal mode (not a toggle)", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+    const panel = makePanel([makeHook("alpha")]);
     panel.handleInput(SPACE);
     assert.deepEqual(panel.value, [], "Space did not toggle");
   });
@@ -238,7 +238,7 @@ describe("PresetEditorPanel Enter toggle", () => {
 describe("PresetEditorPanel commit", () => {
   it("Esc commits the current selection in item order", () => {
     const panel = makePanel(
-      [makeAssert("a"), makeAssert("b"), makeAssert("c")],
+      [makeHook("a"), makeHook("b"), makeHook("c")],
       new Set(),
     );
     // Toggle a (focused first), then down to b and toggle b.
@@ -250,13 +250,13 @@ describe("PresetEditorPanel commit", () => {
   });
 
   it("Esc commits the working selection (not cancel)", () => {
-    const panel = makePanel([makeAssert("a")], new Set(["local/a"]));
+    const panel = makePanel([makeHook("a")], new Set(["local/a"]));
     const result = panel.handleInput(ESC);
     assert.deepEqual(result, { value: ["local/a"] });
   });
 
   it("Esc in search exits search (not commit)", () => {
-    const panel = makePanel([makeAssert("alpha"), makeAssert("beta")]);
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
     assert.ok(panel.isSearchActive, "search entered");
     const result = panel.handleInput(ESC);
@@ -271,7 +271,7 @@ describe("PresetEditorPanel commit", () => {
 
 describe("PresetEditorPanel search", () => {
   it("/ enters search, typing filters, Esc exits", () => {
-    const panel = makePanel([makeAssert("alpha"), makeAssert("beta"), makeAssert("gamma")]);
+    const panel = makePanel([makeHook("alpha"), makeHook("beta"), makeHook("gamma")]);
     panel.handleInput("/");
     assert.ok(panel.isSearchActive);
     panel.handleInput("alp"); // matches alpha's name only (not "local" source)
@@ -284,7 +284,7 @@ describe("PresetEditorPanel search", () => {
   });
 
   it("Enter toggles in search mode (not a query char)", () => {
-    const panel = makePanel([makeAssert("alpha"), makeAssert("beta")]);
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
     panel.handleInput("al"); // matches alpha
     panel.handleInput(ENTER); // toggle — not append to query
@@ -292,7 +292,7 @@ describe("PresetEditorPanel search", () => {
   });
 
   it("Enter toggles in search mode (does not commit)", () => {
-    const panel = makePanel([makeAssert("alpha"), makeAssert("beta")]);
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
     panel.handleInput("al");
     const result = panel.handleInput(ENTER);
@@ -301,7 +301,7 @@ describe("PresetEditorPanel search", () => {
   });
 
   it("Space feeds the query in search mode (not a toggle)", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+    const panel = makePanel([makeHook("alpha")]);
     panel.handleInput("/");
     panel.handleInput("al"); // matches alpha
     panel.handleInput(SPACE); // Space is a query char, not a toggle
@@ -313,7 +313,7 @@ describe("PresetEditorPanel search", () => {
   });
 
   it("shows 'No matches' when the query matches nothing", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+    const panel = makePanel([makeHook("alpha")]);
     panel.handleInput("/");
     panel.handleInput("z");
     const lines = panel.render(80);
@@ -327,7 +327,7 @@ describe("PresetEditorPanel search", () => {
 
 describe("PresetEditorPanel navigation", () => {
   it("down moves focus within a section", () => {
-    const panel = makePanel([makeAssert("a"), makeAssert("b"), makeAssert("c")]);
+    const panel = makePanel([makeHook("a"), makeHook("b"), makeHook("c")]);
     panel.handleInput(DOWN);
     const lines = panel.render(80);
     const focused = focusedLine(lines);
@@ -336,8 +336,8 @@ describe("PresetEditorPanel navigation", () => {
 
   it("down at a section boundary crosses to the next section", () => {
     const panel = makePanel([
-      makeAssert("a", "local"),
-      makeAssert("b", "owner/repo"),
+      makeHook("a", "local"),
+      makeHook("b", "owner/repo"),
     ]);
     panel.handleInput(DOWN); // a is last in local → cross to b in owner/repo
     const lines = panel.render(80);
@@ -347,8 +347,8 @@ describe("PresetEditorPanel navigation", () => {
 
   it("Tab cycles to the next section", () => {
     const panel = makePanel([
-      makeAssert("a", "local"),
-      makeAssert("b", "owner/repo"),
+      makeHook("a", "local"),
+      makeHook("b", "owner/repo"),
     ]);
     panel.handleInput(TAB); // Tab → next section
     const lines = panel.render(80);
@@ -356,10 +356,10 @@ describe("PresetEditorPanel navigation", () => {
     assert.ok(focused && plain(focused).includes("b"), "Tab moved to next section");
   });
 
-  it("section headers show Tab/Shift+Tab jump-key hints (shared with /asserts)", () => {
+  it("section headers show Tab/Shift+Tab jump-key hints (shared with /hooks)", () => {
     const panel = makePanel([
-      makeAssert("a", "local"),
-      makeAssert("b", "owner/repo"),
+      makeHook("a", "local"),
+      makeHook("b", "owner/repo"),
     ]);
     // Focused on Local (index 0): the next section (owner/repo) shows `Tab`.
     let lines = panel.render(80);
@@ -387,7 +387,7 @@ describe("PresetEditorPanel navigation", () => {
 
 describe("PresetEditorPanel hints", () => {
   it("renders focused membership action separately from the panel footer", () => {
-    const panel = makePanel([makeAssert("a")]);
+    const panel = makePanel([makeHook("a")]);
     const lines = panel.render(80);
     const action = lines.find((l) => plain(l).includes("Enter add"))!;
     const footer = lines.find((l) => plain(l).includes("save & back"))!;
@@ -398,7 +398,7 @@ describe("PresetEditorPanel hints", () => {
   });
 
   it("predicts Enter remove for an existing member and updates after toggling", () => {
-    const panel = makePanel([makeAssert("a")], new Set(["local/a"]));
+    const panel = makePanel([makeHook("a")], new Set(["local/a"]));
     let action = panel.render(80).find((l) => plain(l).includes("Enter remove"));
     assert.ok(action, "existing membership predicts removal");
     panel.handleInput(ENTER);
@@ -407,7 +407,7 @@ describe("PresetEditorPanel hints", () => {
   });
 
   it("retains Enter add/remove in search while the footer only exits search", () => {
-    const panel = makePanel([makeAssert("alpha")]);
+    const panel = makePanel([makeHook("alpha")]);
     panel.handleInput("/");
     panel.handleInput("a");
     const lines = panel.render(80);
@@ -418,7 +418,7 @@ describe("PresetEditorPanel hints", () => {
   });
 
   it("keeps the focused row, contextual action, and framed footer in a constrained viewport", () => {
-    const lines = makePanel([makeAssert("a")]).render(60, 9);
+    const lines = makePanel([makeHook("a")]).render(60, 9);
     assert.ok(lines.some((l) => plain(l).startsWith("> ") && plain(l).includes("a")));
     assert.ok(lines.some((l) => plain(l).includes("› Enter add")));
     assert.match(lines.at(-3) ?? "", /^─+$/);

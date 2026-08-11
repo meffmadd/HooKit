@@ -1,6 +1,6 @@
 /**
  * Tests that schema.json is a valid JSON Schema and that example
- * asserts.json files (both project .pi/asserts.json and the SKILL.md
+ * hookit.json files (both project .pi/hookit.json and the SKILL.md
  * examples) validate correctly.
  *
  * Usage: npm test
@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import Ajv from "ajv";
-import { validateRuleEntry } from "../pi-assert/domain/validation.js";
+import { validateHookEntry } from "../hookit/domain/validation.js";
 
 // ── Load the schema ────────────────────────────────────────────────
 
@@ -93,11 +93,11 @@ describe("owned Action runtime/schema parity", () => {
     it(`keeps action variant ${index} aligned`, () => {
       const entry = {
         description: "d",
-        hook: "tool_call",
+        event: "tool_call",
         action,
       };
-      const schemaAccepts = validate({ local: { rule: entry } });
-      const runtimeAccepts = validateRuleEntry(entry)?.kind === "assert";
+      const schemaAccepts = validate({ local: { entry } });
+      const runtimeAccepts = validateHookEntry(entry)?.kind === "hook";
       assert.equal(schemaAccepts, expected, JSON.stringify(validate.errors));
       assert.equal(runtimeAccepts, expected);
     });
@@ -120,7 +120,7 @@ describe("validate", () => {
         local: {
           unmodified: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
           },
@@ -135,7 +135,7 @@ describe("validate", () => {
         local: {
           "protect-env-files": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "write" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -q \'\\.env\' && exit 1 || exit 0',
           },
@@ -150,7 +150,7 @@ describe("validate", () => {
         local: {
           "no-secrets-in-env": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "bash" },
             shell: 'grep -q SECRET_KEY <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
           },
@@ -165,7 +165,7 @@ describe("validate", () => {
         local: {
           "block-rm-rf": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "bash" },
             shell: 'grep -qE \'rm[[:space:]]+-rf\' <<< "$PI_TOOL_INPUT" && exit 1 || exit 0',
           },
@@ -180,7 +180,7 @@ describe("validate", () => {
         local: {
           "write-only-in-src": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "write" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -q \'"path":"src/\' && exit 0 || exit 1',
           },
@@ -195,7 +195,7 @@ describe("validate", () => {
         local: {
           "no-sensitive-reads": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "read" },
             shell: 'echo "$PI_TOOL_INPUT" | grep -qE \'\\.(env|pem|key)\' && exit 1 || exit 0',
           },
@@ -210,14 +210,14 @@ describe("validate", () => {
         local: {
           "always-active": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
             default: true,
           },
           "opt-in": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "bash" },
             shell: "false",
             default: false,
@@ -231,29 +231,29 @@ describe("validate", () => {
 
     {
       label: "missing required 'description'",
-      config: { local: { bad: { hook: "tool_call", shell: "true" } } },
+      config: { local: { bad: { event: "tool_call", shell: "true" } } },
       expected: false,
     },
 
     {
-      label: "missing required 'hook'",
+      label: "missing required 'event'",
       config: { local: { bad: { description: "d", shell: "true" } } },
       expected: false,
     },
 
     {
       label: "missing required 'shell'",
-      config: { local: { bad: { description: "d", hook: "tool_call" } } },
+      config: { local: { bad: { description: "d", event: "tool_call" } } },
       expected: false,
     },
 
     {
-      label: "unknown property at assert level",
+      label: "unknown property at hook level",
       config: {
         local: {
           bad: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             extraProp: "should not be here",
           },
@@ -263,15 +263,15 @@ describe("validate", () => {
     },
 
     {
-      label: "hook value not in enum",
-      config: { local: { bad: { description: "d", hook: "invalid_hook", shell: "true" } } },
+      label: "event value not in enum",
+      config: { local: { bad: { description: "d", event: "invalid_event", shell: "true" } } },
       expected: false,
     },
 
     {
       label: "default is not boolean",
       config: {
-        local: { bad: { description: "d", hook: "tool_call", shell: "true", default: "yes" } },
+        local: { bad: { description: "d", event: "tool_call", shell: "true", default: "yes" } },
       },
       expected: false,
     },
@@ -297,16 +297,16 @@ describe("validate", () => {
     // ── Section-based validation ───────────────────────────────────
 
     {
-      label: "accepts local section with valid asserts",
-      config: { local: { guard: { description: "d", hook: "tool_call", shell: "true" } } },
+      label: "accepts local section with valid hooks",
+      config: { local: { guard: { description: "d", event: "tool_call", shell: "true" } } },
       expected: true,
     },
 
     {
-      label: "accepts repo section with valid asserts",
+      label: "accepts repo section with valid hooks",
       config: {
-        "meffmadd/pi-assert-rules": {
-          "block-write": { description: "d", hook: "tool_call", shell: "false" },
+        "meffmadd/HooKit-rules": {
+          "block-write": { description: "d", event: "tool_call", shell: "false" },
         },
       },
       expected: true,
@@ -315,8 +315,8 @@ describe("validate", () => {
     {
       label: "accepts mixed local and repo sections",
       config: {
-        local: { custom: { description: "d", hook: "tool_call", shell: "true" } },
-        "some/repo": { installed: { description: "d", hook: "tool_call", shell: "false" } },
+        local: { custom: { description: "d", event: "tool_call", shell: "true" } },
+        "some/repo": { installed: { description: "d", event: "tool_call", shell: "false" } },
       },
       expected: true,
     },
@@ -325,7 +325,7 @@ describe("validate", () => {
       label: "accepts $schema alongside sections",
       config: {
         $schema: "https://example.com/schema.json",
-        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
+        local: { guard: { description: "d", event: "tool_call", shell: "true" } },
       },
       expected: true,
     },
@@ -333,10 +333,10 @@ describe("validate", () => {
     {
       label: "accepts repos array with valid entries",
       config: {
-        repos: ["meffmadd/pi-assert-rules"],
-        local: { guard: { description: "d", hook: "tool_call", shell: "true" } },
-        "meffmadd/pi-assert-rules": {
-          block: { description: "d", hook: "tool_call", shell: "false" },
+        repos: ["meffmadd/HooKit-rules"],
+        local: { guard: { description: "d", event: "tool_call", shell: "true" } },
+        "meffmadd/HooKit-rules": {
+          block: { description: "d", event: "tool_call", shell: "false" },
         },
       },
       expected: true,
@@ -363,14 +363,14 @@ describe("validate", () => {
     // ── Schema evolution ───────────────────────────────────────────
 
     {
-      label: "accepts 'tool_call' as hook",
-      config: { local: { guard: { description: "d", hook: "tool_call", shell: "true" } } },
+      label: "accepts 'tool_call' as an Event",
+      config: { local: { guard: { description: "d", event: "tool_call", shell: "true" } } },
       expected: true,
     },
 
     {
-      label: "accepts 'tool_result' as hook",
-      config: { local: { guard: { description: "d", hook: "tool_result", shell: "true" } } },
+      label: "accepts 'tool_result' as an Event",
+      config: { local: { guard: { description: "d", event: "tool_result", shell: "true" } } },
       expected: true,
     },
 
@@ -380,7 +380,7 @@ describe("validate", () => {
         local: {
           "block-secrets-in-reads": {
             description: "d",
-            hook: "tool_result",
+            event: "tool_result",
             filter: { toolName: "read" },
             shell: "grep -qE 'SECRET' <<< \"$PI_TOOL_RESULT\" && exit 1 || exit 0",
             when: "true",
@@ -392,45 +392,45 @@ describe("validate", () => {
     },
 
     {
-      label: "accepts 'turn_end' as hook",
-      config: { local: { guard: { description: "d", hook: "turn_end", shell: "true" } } },
+      label: "accepts 'turn_end' as an Event",
+      config: { local: { guard: { description: "d", event: "turn_end", shell: "true" } } },
       expected: true,
     },
 
     {
-      label: "accepts 'agent_settled' as hook",
-      config: { local: { guard: { description: "d", hook: "agent_settled", shell: "true" } } },
+      label: "accepts 'agent_settled' as an Event",
+      config: { local: { guard: { description: "d", event: "agent_settled", shell: "true" } } },
       expected: true,
     },
 
     {
-      label: "accepts 'session_before_switch' as hook",
-      config: { local: { guard: { description: "d", hook: "session_before_switch", shell: "true" } } },
+      label: "accepts 'session_before_switch' as an Event",
+      config: { local: { guard: { description: "d", event: "session_before_switch", shell: "true" } } },
       expected: true,
     },
 
     {
-      label: "accepts 'session_before_fork' as hook",
-      config: { local: { guard: { description: "d", hook: "session_before_fork", shell: "true" } } },
+      label: "accepts 'session_before_fork' as an Event",
+      config: { local: { guard: { description: "d", event: "session_before_fork", shell: "true" } } },
       expected: true,
     },
 
     {
       label: "rejects 'session_shutdown' because it has no cancellation contract",
-      config: { local: { guard: { description: "d", hook: "session_shutdown", shell: "true" } } },
+      config: { local: { guard: { description: "d", event: "session_shutdown", shell: "true" } } },
       expected: false,
     },
 
     {
-      label: "accepts assert_result with its bounded filter",
+      label: "accepts hook_result with its bounded filter",
       config: {
         local: {
           handler: {
             description: "d",
-            hook: "assert_result",
+            event: "hook_result",
             filter: {
-              event: "^assert_result$",
-              assertionRef: "^local/",
+              event: "^hook_result$",
+              hookRef: "^local/",
               runId: "^[0-9a-f-]+$",
               outcome: ["pass", "block", "patch", "cancel", "report"],
               code: [0, 1, null],
@@ -442,12 +442,12 @@ describe("validate", () => {
       expected: true,
     },
     {
-      label: "rejects unknown assert_result outcome",
+      label: "rejects unknown hook_result outcome",
       config: {
         local: {
           handler: {
             description: "d",
-            hook: "assert_result",
+            event: "hook_result",
             filter: { outcome: "error" },
             shell: "true",
           },
@@ -456,12 +456,12 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "rejects regex syntax in exact assert_result outcome",
+      label: "rejects regex syntax in exact hook_result outcome",
       config: {
         local: {
           handler: {
             description: "d",
-            hook: "assert_result",
+            event: "hook_result",
             filter: { outcome: "p.*" },
             shell: "true",
           },
@@ -470,12 +470,12 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "rejects string assert_result code filters",
+      label: "rejects string hook_result code filters",
       config: {
         local: {
           handler: {
             description: "d",
-            hook: "assert_result",
+            event: "hook_result",
             filter: { code: "^1$" },
             shell: "true",
           },
@@ -484,13 +484,13 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "rejects unbounded assert_result filter fields",
+      label: "rejects unbounded hook_result filter fields",
       config: {
         local: {
           handler: {
             description: "d",
-            hook: "assert_result",
-            filter: { originHook: "tool_call" },
+            event: "hook_result",
+            filter: { originEvent: "tool_call" },
             shell: "true",
           },
         },
@@ -499,8 +499,8 @@ describe("validate", () => {
     },
 
     {
-      label: "accepts 'agent_end' as hook",
-      config: { local: { guard: { description: "d", hook: "agent_end", shell: "true" } } },
+      label: "accepts 'agent_end' as an Event",
+      config: { local: { guard: { description: "d", event: "agent_end", shell: "true" } } },
       expected: true,
     },
 
@@ -510,7 +510,7 @@ describe("validate", () => {
         local: {
           "check-git-clean": {
             description: "d",
-            hook: "agent_end",
+            event: "agent_end",
             shell: "git diff --quiet",
             when: "test -d .git",
             default: true,
@@ -528,7 +528,7 @@ describe("validate", () => {
         local: {
           "protect-env": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: {
               toolName: "_write$",
               "request.target.path": "(^|/)\\.env.*$",
@@ -546,7 +546,7 @@ describe("validate", () => {
         local: {
           mixed: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { value: ["^ten$", 10, false, null] },
             shell: "false",
           },
@@ -563,7 +563,7 @@ describe("validate", () => {
         local: {
           "block-writes": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: ["write", "edit"] },
             shell: "false",
           },
@@ -578,7 +578,7 @@ describe("validate", () => {
         local: {
           "block-write": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: ["write"] },
             shell: "false",
           },
@@ -593,7 +593,7 @@ describe("validate", () => {
         local: {
           "noop": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: [] },
             shell: "false",
           },
@@ -608,7 +608,7 @@ describe("validate", () => {
         local: {
           "block-commands": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { command: ["ls", "pwd"] },
             shell: "false",
           },
@@ -623,7 +623,7 @@ describe("validate", () => {
         local: {
           "bad": {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: [{ write: true }] },
             shell: "false",
           },
@@ -632,7 +632,7 @@ describe("validate", () => {
       expected: false,
     },
 
-    // ── Assertions with owned Actions ───────────────────────────────
+    // ── Hooks with owned Actions ───────────────────────────────
 
     ...[
       { type: "interrupt" },
@@ -660,7 +660,7 @@ describe("validate", () => {
         local: {
           action: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "^bash$" },
             when: "true",
             action: { outcome: "pass", ...action },
@@ -676,7 +676,7 @@ describe("validate", () => {
         local: {
           action: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "message",
               outcome: "pass",
@@ -695,7 +695,7 @@ describe("validate", () => {
         local: {
           action: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             action: { type: "interrupt", outcome: "pass", extra: true },
           },
         },
@@ -708,7 +708,7 @@ describe("validate", () => {
         local: {
           action: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             action: {
               type: "emit-custom-event",
               outcome: "pass",
@@ -720,12 +720,12 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "accepts one Assertion carrying both shell and Action",
+      label: "accepts one Hook carrying both shell and Action",
       config: {
         local: {
           ambiguous: {
             description: "d",
-            hook: "tool_call",
+            event: "tool_call",
             shell: "true",
             action: { type: "interrupt", outcome: "pass" },
           },
@@ -736,17 +736,17 @@ describe("validate", () => {
     {
       label: "rejects an inert entry without shell, action, or preset",
       config: {
-        local: { inert: { description: "d", hook: "tool_call" } },
+        local: { inert: { description: "d", event: "tool_call" } },
       },
       expected: false,
     },
     {
-      label: "accepts an assert_result Assertion with an owned Action",
+      label: "accepts a hook_result Hook with an owned Action",
       config: {
         local: {
           action: {
             description: "d",
-            hook: "assert_result",
+            event: "hook_result",
             filter: { outcome: ["block", "patch"], code: [1, null] },
             action: { type: "interrupt", outcome: "pass" },
           },
@@ -763,7 +763,7 @@ describe("validate", () => {
         local: {
           "my-preset": {
             description: "Block destructive writes",
-            preset: ["local/block-rm-rf", "meffmadd/pi-assert-rules/protect-env"],
+            preset: ["local/block-rm-rf", "meffmadd/HooKit-rules/protect-env"],
           },
         },
       },
@@ -801,21 +801,21 @@ describe("validate", () => {
       expected: false,
     },
     {
-      label: "rejects a preset carrying hook (mutual exclusivity)",
+      label: "rejects a preset carrying event (mutual exclusivity)",
       config: {
-        local: { p: { description: "d", preset: [], hook: "tool_call" } },
+        local: { p: { description: "d", preset: [], event: "tool_call" } },
       },
       expected: false,
     },
     {
-      label: "rejects a preset carrying when (assert-only)",
+      label: "rejects a preset carrying when (hook-only)",
       config: {
         local: { p: { description: "d", preset: [], when: "true" } },
       },
       expected: false,
     },
     {
-      label: "rejects a preset carrying filter (assert-only)",
+      label: "rejects a preset carrying filter (hook-only)",
       config: {
         local: { p: { description: "d", preset: [], filter: { toolName: "bash" } } },
       },
@@ -846,7 +846,7 @@ describe("validate", () => {
       label: "rejects an entry carrying both shell and preset (oneOf mutual exclusivity)",
       config: {
         local: {
-          p: { description: "d", hook: "tool_call", shell: "false", preset: ["local/a"] },
+          p: { description: "d", event: "tool_call", shell: "false", preset: ["local/a"] },
         },
       },
       expected: false,

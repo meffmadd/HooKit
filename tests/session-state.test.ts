@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { AssertionCatalog } from "../pi-assert/assertion-catalog/index.js";
-import { HookEvaluation } from "../pi-assert/hook-evaluation/index.js";
-import { AssertsState } from "../pi-assert/ui/state.js";
+import { HookCatalog } from "../hookit/hook-catalog/index.js";
+import { HookEvaluation } from "../hookit/hook-evaluation/index.js";
+import { HooksState } from "../hookit/ui/state.js";
 
 const roots: string[] = [];
 
@@ -19,17 +19,17 @@ function setup(name: string): {
   root: string;
   global: string;
   project: string;
-  state: AssertsState;
+  state: HooksState;
   persisted: string[][];
 } {
-  const root = mkdtempSync(join(tmpdir(), `pi-assert-state-${name}-`));
+  const root = mkdtempSync(join(tmpdir(), `HooKit-state-${name}-`));
   roots.push(root);
-  const global = join(root, "global", "asserts.json");
-  const project = join(root, "project", ".pi", "asserts.json");
+  const global = join(root, "global", "hookit.json");
+  const project = join(root, "project", ".pi", "hookit.json");
   const persisted: string[][] = [];
-  const state = new AssertsState({
-    appendEntry(_type: string, data: { activeAsserts: string[] }) {
-      persisted.push(data.activeAsserts);
+  const state = new HooksState({
+    appendEntry(_type: string, data: { activeHooks: string[] }) {
+      persisted.push(data.activeHooks);
     },
   } as unknown as ExtensionAPI);
   return { root, global, project, state, persisted };
@@ -47,8 +47,8 @@ function context(saved?: string[]): ExtensionContext {
         ? []
         : [{
             type: "custom",
-            customType: "pi-assert-config",
-            data: { activeAsserts: saved },
+            customType: "hookit-config",
+            data: { activeHooks: saved },
           }],
     },
   } as unknown as ExtensionContext;
@@ -57,7 +57,7 @@ function context(saved?: string[]): ExtensionContext {
 function shell(command: string, isDefault = false) {
   return {
     description: "guard",
-    hook: "tool_call",
+    event: "tool_call",
     shell: command,
     ...(isDefault ? { default: true } : {}),
   };
@@ -192,7 +192,7 @@ describe("session state catalog replacement", () => {
     assert.equal(result.ok, false);
     assert.deepEqual(state.entries.map((entry) => entry.name), ["guard"]);
     assert.deepEqual(Array.from(state.active), ["local\x00guard"]);
-    assert.equal(state.activeAssertionSet().size, 1);
+    assert.equal(state.activeHookSet().size, 1);
   });
 
   it("accepts an independently-created fresh catalog", () => {
@@ -201,7 +201,7 @@ describe("session state catalog replacement", () => {
     state.load({ global, project });
     state.restore(context(["local\x00one"]));
     writeJson(project, { local: { two: shell("true") } });
-    const opened = AssertionCatalog.open({ global, project });
+    const opened = HookCatalog.open({ global, project });
     assert.equal(opened.ok, true);
     if (!opened.ok) return;
 
@@ -211,7 +211,7 @@ describe("session state catalog replacement", () => {
   });
 });
 
-describe("session state Active Assertion Set", () => {
+describe("session state Active Hook Set", () => {
   it("expands presets in ref order, deduplicates, and skips dangling or nested refs", async () => {
     const { root, global, project, state } = setup("preset");
     const log = join(root, "order.log");
@@ -236,7 +236,7 @@ describe("session state Active Assertion Set", () => {
     state.load({ global, project });
     state.restore(context(["local\x00bundle"]));
 
-    const activeSet = state.activeAssertionSet();
+    const activeSet = state.activeHookSet();
     assert.equal(activeSet.size, 2);
     const evaluated = await new HookEvaluation().evaluate(
       "tool_call",
@@ -248,14 +248,14 @@ describe("session state Active Assertion Set", () => {
     assert.equal(readFileSync(log, "utf8"), "b\na\n");
   });
 
-  it("expands Assertions with owned Actions through presets", async () => {
+  it("expands Hooks with owned Actions through presets", async () => {
     const { root, global, project, state } = setup("preset-action");
     writeJson(project, {
       local: {
         guard: shell("true"),
         notify: {
           description: "notify",
-          hook: "tool_call",
+          event: "tool_call",
           action: { type: "interrupt", outcome: "pass" },
         },
         bundle: {
@@ -271,13 +271,13 @@ describe("session state Active Assertion Set", () => {
       "tool_call",
       { toolName: "bash", toolCallId: "preset-action", input: {} },
       { cwd: root, metadata: {} },
-      state.activeAssertionSet(),
+      state.activeHookSet(),
     );
     assert.equal(evaluated.outcome, "pass");
     assert.deepEqual(
       (evaluated.executionReport?.rows ?? [])
         .filter((row) => row.type === "action")
-        .map((row) => row.assertionRef),
+        .map((row) => row.hookRef),
       ["local/notify"],
     );
   });
@@ -292,7 +292,7 @@ describe("session state Active Assertion Set", () => {
     });
     state.load({ global, project });
     state.restore(context(["local\x00guard"]));
-    const captured = state.activeAssertionSet();
+    const captured = state.activeHookSet();
     state.disable("local\x00guard");
 
     await new HookEvaluation().evaluate(
@@ -302,6 +302,6 @@ describe("session state Active Assertion Set", () => {
       captured,
     );
     assert.equal(readFileSync(log, "utf8"), "captured");
-    assert.equal(state.activeAssertionSet().size, 0);
+    assert.equal(state.activeHookSet().size, 0);
   });
 });

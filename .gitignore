@@ -2,4 +2,7 @@ node_modules/
 .pi/
 *.md
 !AGENTS.md
+!CONTEXT.md
 !README.md
+!skills/hookit/SKILL.md
+!docs/adr/*.md

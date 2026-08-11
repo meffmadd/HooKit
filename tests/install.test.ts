@@ -6,16 +6,16 @@ import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  fetchRuleFiles,
-  fetchRuleFile,
+  fetchHookFiles,
+  fetchHookFile,
   fetchRepoEntries,
   clearRepoEntriesCache,
   buildRepoPickerItems,
   REPO_ADD_ACTION,
   DEFAULT_REPO,
-  type RuleEntries,
-  type RuleFile,
-} from "../pi-assert/installer.js";
+  type HookEntries,
+  type HookFile,
+} from "../hookit/installer.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ function mockTreeBlob(path: string, sha = "abc123"): unknown {
     type: "blob",
     sha,
     size: 100,
-    url: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/blobs/${sha}`,
+    url: `https://api.github.com/repos/meffmadd/HooKit-rules/git/blobs/${sha}`,
   };
 }
 
@@ -70,13 +70,13 @@ function mockTreeDir(path: string, sha = "dir-sha"): unknown {
     mode: "040000",
     type: "tree",
     sha,
-    url: `https://api.github.com/repos/meffmadd/pi-assert-rules/git/trees/${sha}`,
+    url: `https://api.github.com/repos/meffmadd/HooKit-rules/git/trees/${sha}`,
   };
 }
 
 /**
  * Mock `globalThis.fetch` to serve a single recursive-trees response.
- * `fetchRuleFiles` now does one call (branch name passed directly as
+ * `fetchHookFiles` now does one call (branch name passed directly as
  * the tree SHA), so routing is by URL substring.
  */
 function mockTreesFetch(
@@ -101,48 +101,48 @@ function mockTreesFetch(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// fetchRuleFiles
+// fetchHookFiles
 // ═══════════════════════════════════════════════════════════════════
 
-describe("fetchRuleFiles", () => {
-  type PassCase = { label: string; tree: unknown[]; expected: RuleFile[] };
+describe("fetchHookFiles", () => {
+  type PassCase = { label: string; tree: unknown[]; expected: HookFile[] };
 
   const passCases: PassCase[] = [
     {
-      label: "returns only .json blobs under rules/ and strips rules/ prefix + .json",
+      label: "returns only .json blobs under hooks/ and strips hooks/ prefix + .json",
       tree: [
-        mockTreeBlob("rules/defaults.json"),
-        mockTreeBlob("rules/security.json"),
+        mockTreeBlob("hooks/defaults.json"),
+        mockTreeBlob("hooks/security.json"),
       ],
       expected: [
-        { name: "defaults", path: "rules/defaults.json" },
-        { name: "security", path: "rules/security.json" },
+        { name: "defaults", path: "hooks/defaults.json" },
+        { name: "security", path: "hooks/security.json" },
       ],
     },
     {
-      label: "filters out non-.json files under rules/",
+      label: "filters out non-.json files under hooks/",
       tree: [
-        mockTreeBlob("rules/defaults.json"),
-        mockTreeBlob("rules/README.md"),
+        mockTreeBlob("hooks/defaults.json"),
+        mockTreeBlob("hooks/README.md"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json" }],
+      expected: [{ name: "defaults", path: "hooks/defaults.json" }],
     },
     {
       label: "filters out tree (directory) entries",
       tree: [
-        mockTreeBlob("rules/defaults.json"),
-        mockTreeDir("rules/subdir"),
+        mockTreeBlob("hooks/defaults.json"),
+        mockTreeDir("hooks/subdir"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json" }],
+      expected: [{ name: "defaults", path: "hooks/defaults.json" }],
     },
     {
-      label: "filters out files outside rules/ (tree is repo-wide)",
+      label: "filters out files outside hooks/ (tree is repo-wide)",
       tree: [
-        mockTreeBlob("rules/defaults.json"),
+        mockTreeBlob("hooks/defaults.json"),
         mockTreeBlob("README.md"),
         mockTreeBlob("src/index.ts"),
       ],
-      expected: [{ name: "defaults", path: "rules/defaults.json" }],
+      expected: [{ name: "defaults", path: "hooks/defaults.json" }],
     },
     {
       label: "returns [] for empty tree",
@@ -150,24 +150,24 @@ describe("fetchRuleFiles", () => {
       expected: [],
     },
     {
-      label: "nested subdirectories: strips rules/ prefix, preserves intermediate dirs in name",
+      label: "nested subdirectories: strips hooks/ prefix, preserves intermediate dirs in name",
       tree: [
-        mockTreeBlob("rules/defaults.json"),
-        mockTreeBlob("rules/security/writes.json"),
-        mockTreeBlob("rules/security/reads.json"),
-        mockTreeBlob("rules/git/no-force-push.json"),
-        mockTreeBlob("rules/experimental/drafts/trial.json"),
-        // dir entries and non-rules files are present too, to confirm they're dropped
-        mockTreeDir("rules/security"),
-        mockTreeDir("rules/git"),
+        mockTreeBlob("hooks/defaults.json"),
+        mockTreeBlob("hooks/security/writes.json"),
+        mockTreeBlob("hooks/security/reads.json"),
+        mockTreeBlob("hooks/git/no-force-push.json"),
+        mockTreeBlob("hooks/experimental/drafts/trial.json"),
+        // Directory entries and non-Hook files are present too, confirming they are dropped.
+        mockTreeDir("hooks/security"),
+        mockTreeDir("hooks/git"),
         mockTreeBlob("package.json"),
       ],
       expected: [
-        { name: "defaults", path: "rules/defaults.json" },
-        { name: "experimental/drafts/trial", path: "rules/experimental/drafts/trial.json" },
-        { name: "git/no-force-push", path: "rules/git/no-force-push.json" },
-        { name: "security/reads", path: "rules/security/reads.json" },
-        { name: "security/writes", path: "rules/security/writes.json" },
+        { name: "defaults", path: "hooks/defaults.json" },
+        { name: "experimental/drafts/trial", path: "hooks/experimental/drafts/trial.json" },
+        { name: "git/no-force-push", path: "hooks/git/no-force-push.json" },
+        { name: "security/reads", path: "hooks/security/reads.json" },
+        { name: "security/writes", path: "hooks/security/writes.json" },
       ],
     },
   ];
@@ -176,7 +176,7 @@ describe("fetchRuleFiles", () => {
     it(label, async () => {
       mockTreesFetch(tree);
       assert.deepStrictEqual(
-        await fetchRuleFiles("meffmadd/pi-assert-rules"),
+        await fetchHookFiles("meffmadd/HooKit-rules"),
         expected,
       );
     });
@@ -201,7 +201,7 @@ describe("fetchRuleFiles", () => {
     },
     {
       label: "throws when tree is truncated (too many entries)",
-      tree: [mockTreeBlob("rules/a.json")],
+      tree: [mockTreeBlob("hooks/a.json")],
       truncated: true,
       errorPattern: /truncated/i,
     },
@@ -211,7 +211,7 @@ describe("fetchRuleFiles", () => {
     it(label, async () => {
       mockTreesFetch(tree ?? [], { status, truncated });
       await assert.rejects(
-        () => fetchRuleFiles("meffmadd/pi-assert-rules"),
+        () => fetchHookFiles("meffmadd/HooKit-rules"),
         errorPattern,
       );
     });
@@ -224,7 +224,7 @@ describe("fetchRuleFiles", () => {
       throw new Error("connect ECONNREFUSED");
     });
     await assert.rejects(
-      () => fetchRuleFiles("meffmadd/pi-assert-rules"),
+      () => fetchHookFiles("meffmadd/HooKit-rules"),
       /ECONNREFUSED/,
     );
   });
@@ -237,7 +237,7 @@ describe("fetchRuleFiles", () => {
       calls.push(url);
       return mockJsonResponse({ tree: [], truncated: false });
     });
-    await fetchRuleFiles("meffmadd/pi-assert-rules", "develop");
+    await fetchHookFiles("meffmadd/HooKit-rules", "develop");
     assert.strictEqual(calls.length, 1, "exactly one fetch call");
     assert.match(calls[0]!, /\/git\/trees\/develop\?recursive=1$/, calls[0]!);
   });
@@ -248,37 +248,37 @@ describe("fetchRuleFiles", () => {
       calls.push(url);
       return mockJsonResponse({ tree: [], truncated: false });
     });
-    await fetchRuleFiles("meffmadd/pi-assert-rules", "refs/heads/main");
+    await fetchHookFiles("meffmadd/HooKit-rules", "refs/heads/main");
     assert.match(calls[0]!, /\/git\/trees\/main\?recursive=1$/, calls[0]!);
     assert.doesNotMatch(calls[0]!, /refs\/heads\/refs\/heads/);
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// fetchRuleFile
+// fetchHookFile
 // ═══════════════════════════════════════════════════════════════════
 
-describe("fetchRuleFile", () => {
-  type PassCase = { label: string; content: unknown; expected: RuleEntries };
+describe("fetchHookFile", () => {
+  type PassCase = { label: string; content: unknown; expected: HookEntries };
 
   const passCases: PassCase[] = [
     {
-      label: "parses a valid rules file with multiple entries",
+      label: "parses a valid Hook file with multiple entries",
       content: {
         "block-write": {
           description: "Blocks all write calls.",
-          hook: "tool_call",
+          event: "tool_call",
           filter: { toolName: "write" },
           shell: "false",
         },
         "no-rm-rf": {
           description: "Blocks rm -rf in bash.",
-          hook: "tool_call",
+          event: "tool_call",
           shell: "grep rm",
         },
         notify: {
           description: "Notify another extension.",
-          hook: "assert_result",
+          event: "hook_result",
           action: {
             type: "emit-custom-event",
             outcome: "pass",
@@ -290,18 +290,18 @@ describe("fetchRuleFile", () => {
       expected: {
         "block-write": {
           description: "Blocks all write calls.",
-          hook: "tool_call",
+          event: "tool_call",
           filter: { toolName: "write" },
           shell: "false",
         },
         "no-rm-rf": {
           description: "Blocks rm -rf in bash.",
-          hook: "tool_call",
+          event: "tool_call",
           shell: "grep rm",
         },
         notify: {
           description: "Notify another extension.",
-          hook: "assert_result",
+          event: "hook_result",
           action: {
             type: "emit-custom-event",
             outcome: "pass",
@@ -314,31 +314,31 @@ describe("fetchRuleFile", () => {
     {
       label: "skips entries missing description",
       content: {
-        valid: { description: "Valid entry.", hook: "tool_call", shell: "true" },
-        "no-desc": { hook: "tool_call", shell: "false" },
+        valid: { description: "Valid entry.", event: "tool_call", shell: "true" },
+        "no-desc": { event: "tool_call", shell: "false" },
       },
       expected: {
-        valid: { description: "Valid entry.", hook: "tool_call", shell: "true" },
+        valid: { description: "Valid entry.", event: "tool_call", shell: "true" },
       },
     },
     {
-      label: "skips entries missing hook",
+      label: "skips entries missing event",
       content: {
-        "no-hook": { description: "Missing hook.", shell: "false" },
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        "no-event": { description: "Missing event.", shell: "false" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
       expected: {
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
     },
     {
       label: "skips entries missing shell",
       content: {
-        "no-shell": { description: "Missing shell.", hook: "tool_call" },
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        "no-shell": { description: "Missing shell.", event: "tool_call" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
       expected: {
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
     },
     {
@@ -346,10 +346,10 @@ describe("fetchRuleFile", () => {
       content: {
         nil: null,
         str: "just a string",
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
       expected: {
-        valid: { description: "Valid.", hook: "tool_call", shell: "true" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
     },
   ];
@@ -358,11 +358,11 @@ describe("fetchRuleFile", () => {
     it(label, async () => {
       mock.method(globalThis, "fetch", () =>
         mockJsonResponse(
-          mockFileResponse("defaults.json", "rules/defaults.json", content),
+          mockFileResponse("defaults.json", "hooks/defaults.json", content),
         ),
       );
       assert.deepStrictEqual(
-        await fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+        await fetchHookFile("meffmadd/HooKit-rules", "hooks/defaults.json"),
         expected,
       );
     });
@@ -372,36 +372,36 @@ describe("fetchRuleFile", () => {
 
   it("fetches a nested path with per-segment URL encoding (slashes preserved)", async () => {
     const calls: string[] = [];
-    const content = { x: { description: "d", hook: "tool_call", shell: "true" } };
+    const content = { x: { description: "d", event: "tool_call", shell: "true" } };
     mock.method(globalThis, "fetch", (url: string) => {
       calls.push(url);
       return mockJsonResponse(
-        mockFileResponse("writes.json", "rules/security/writes.json", content),
+        mockFileResponse("writes.json", "hooks/security/writes.json", content),
       );
     });
-    const result = await fetchRuleFile(
-      "meffmadd/pi-assert-rules",
-      "rules/security/writes.json",
+    const result = await fetchHookFile(
+      "meffmadd/HooKit-rules",
+      "hooks/security/writes.json",
     );
     assert.ok(calls[0], "fetch was called");
     // Slashes must be preserved in the contents path.
-    assert.match(calls[0]!, /\/contents\/rules\/security\/writes\.json/, calls[0]!);
+    assert.match(calls[0]!, /\/contents\/hooks\/security\/writes\.json/, calls[0]!);
     assert.doesNotMatch(calls[0]!, /%2F/, `slash must not be encoded: ${calls[0]}`);
     assert.deepStrictEqual(result, content);
   });
 
   it("encodes special characters within a single path segment", async () => {
     const calls: string[] = [];
-    const content = { x: { description: "d", hook: "tool_call", shell: "true" } };
+    const content = { x: { description: "d", event: "tool_call", shell: "true" } };
     mock.method(globalThis, "fetch", (url: string) => {
       calls.push(url);
       return mockJsonResponse(
-        mockFileResponse("my rules.json", "rules/my rules/x.json", content),
+        mockFileResponse("my hooks.json", "hooks/my hooks/x.json", content),
       );
     });
-    await fetchRuleFile("meffmadd/pi-assert-rules", "rules/my rules/x.json");
+    await fetchHookFile("meffmadd/HooKit-rules", "hooks/my hooks/x.json");
     // Space within a segment is encoded, slashes between segments are not.
-    assert.match(calls[0]!, /\/contents\/rules\/my%20rules\/x\.json/, calls[0]!);
+    assert.match(calls[0]!, /\/contents\/hooks\/my%20hooks\/x\.json/, calls[0]!);
   });
 
   // ── Throws cases ────────────────────────────────────────────────
@@ -411,7 +411,7 @@ describe("fetchRuleFile", () => {
   const throwsCases: ThrowsCase[] = [
     {
       label: "throws when response has no content (not a file)",
-      response: mockJsonResponse({ type: "dir", name: "rules", path: "rules" }),
+      response: mockJsonResponse({ type: "dir", name: "hooks", path: "hooks" }),
       errorPattern: /Not a file/,
     },
     {
@@ -419,7 +419,7 @@ describe("fetchRuleFile", () => {
       response: mockJsonResponse({
         type: "file",
         name: "defaults.json",
-        path: "rules/defaults.json",
+        path: "hooks/defaults.json",
         content: Buffer.from("not valid json!!!").toString("base64"),
         encoding: "base64",
       }),
@@ -428,7 +428,7 @@ describe("fetchRuleFile", () => {
     {
       label: "throws when content is a JSON array",
       response: mockJsonResponse(
-        mockFileResponse("defaults.json", "rules/defaults.json", [1, 2, 3]),
+        mockFileResponse("defaults.json", "hooks/defaults.json", [1, 2, 3]),
       ),
       errorPattern: /not a JSON object/,
     },
@@ -443,7 +443,7 @@ describe("fetchRuleFile", () => {
     it(label, async () => {
       mock.method(globalThis, "fetch", () => response as Response);
       await assert.rejects(
-        () => fetchRuleFile("meffmadd/pi-assert-rules", "rules/defaults.json"),
+        () => fetchHookFile("meffmadd/HooKit-rules", "hooks/defaults.json"),
         errorPattern,
       );
     });
@@ -491,16 +491,16 @@ describe("fetchRepoEntries", () => {
   it("flattens all entries from all files into a name→entry map", async () => {
     clearRepoEntriesCache();
     mockMultiFileFetch(
-      ["rules/defaults.json", "rules/security/writes.json"],
+      ["hooks/defaults.json", "hooks/security/writes.json"],
       {
-        "rules/defaults.json": {
-          "rule-a": { description: "A.", hook: "tool_call", shell: "false" },
-          "rule-b": { description: "B.", hook: "tool_call", shell: "true" },
+        "hooks/defaults.json": {
+          "hook-a": { description: "A.", event: "tool_call", shell: "false" },
+          "hook-b": { description: "B.", event: "tool_call", shell: "true" },
         },
-        "rules/security/writes.json": {
+        "hooks/security/writes.json": {
           "block-write": {
             description: "Blocks writes.",
-            hook: "tool_call",
+            event: "tool_call",
             filter: { toolName: "write" },
             shell: "false",
           },
@@ -510,14 +510,14 @@ describe("fetchRepoEntries", () => {
 
     const result = await fetchRepoEntries("some/repo");
     assert.strictEqual(result.size, 3);
-    assert.deepStrictEqual(result.get("rule-a"), {
+    assert.deepStrictEqual(result.get("hook-a"), {
       description: "A.",
-      hook: "tool_call",
+      event: "tool_call",
       shell: "false",
     });
     assert.deepStrictEqual(result.get("block-write"), {
       description: "Blocks writes.",
-      hook: "tool_call",
+      event: "tool_call",
       filter: { toolName: "write" },
       shell: "false",
     });
@@ -526,24 +526,24 @@ describe("fetchRepoEntries", () => {
   it("rejects duplicate names across files deterministically", async () => {
     clearRepoEntriesCache();
     mockMultiFileFetch(
-      ["rules/b.json", "rules/a.json"],
+      ["hooks/b.json", "hooks/a.json"],
       {
-        "rules/a.json": {
-          duplicate: { description: "A.", hook: "tool_call", shell: "true" },
+        "hooks/a.json": {
+          duplicate: { description: "A.", event: "tool_call", shell: "true" },
         },
-        "rules/b.json": {
-          duplicate: { description: "B.", hook: "tool_call", shell: "false" },
+        "hooks/b.json": {
+          duplicate: { description: "B.", event: "tool_call", shell: "false" },
         },
       },
     );
 
     await assert.rejects(
       () => fetchRepoEntries("duplicate/repo"),
-      /Duplicate rule name "duplicate".*rules\/a\.json.*rules\/b\.json/,
+      /Duplicate hook name "duplicate".*hooks\/a\.json.*hooks\/b\.json/,
     );
   });
 
-  it("returns an empty map for a repo with no rule files", async () => {
+  it("returns an empty map for a repo with no hook files", async () => {
     clearRepoEntriesCache();
     mockTreesFetch([]);
     const result = await fetchRepoEntries("empty/repo");
@@ -580,13 +580,13 @@ describe("fetchRepoEntries", () => {
     assert.ok(callCount > 1, "second call re-fetched (failure was not cached)");
   });
 
-  it("skips invalid entries (missing description/hook/shell)", async () => {
+  it("skips invalid entries (missing description/event/shell)", async () => {
     clearRepoEntriesCache();
-    mockMultiFileFetch(["rules/defaults.json"], {
-      "rules/defaults.json": {
-        valid: { description: "V.", hook: "tool_call", shell: "true" },
-        "no-desc": { hook: "tool_call", shell: "false" },
-        "no-shell": { description: "D.", hook: "tool_call" },
+    mockMultiFileFetch(["hooks/defaults.json"], {
+      "hooks/defaults.json": {
+        valid: { description: "V.", event: "tool_call", shell: "true" },
+        "no-desc": { event: "tool_call", shell: "false" },
+        "no-shell": { description: "D.", event: "tool_call" },
         nil: null,
       },
     });

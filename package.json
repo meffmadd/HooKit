@@ -1,11 +1,11 @@
 {
-  "name": "pi-assert",
+  "name": "@meffmadd/hookit",
   "version": "0.1.0",
-  "description": "Shell Assertions with outcome-selected Pi Actions for tool and lifecycle events.",
+  "description": "Hooks with outcome-selected Pi Actions for Pi events.",
   "type": "module",
-  "main": "./pi-assert/index.ts",
+  "main": "./hookit/index.ts",
   "files": [
-    "pi-assert/",
+    "hookit/",
     "skills/",
     "AGENTS.md"
   ],
@@ -13,14 +13,14 @@
     "pi",
     "guard",
     "security",
-    "assert",
+    "hook",
     "shell",
     "actions"
   ],
   "license": "MIT",
   "pi": {
     "extensions": [
-      "./pi-assert/index.ts"
+      "./hookit/index.ts"
     ],
     "skills": [
       "./skills"

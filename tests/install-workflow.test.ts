@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { clearRepoEntriesCache } from "../pi-assert/installer.js";
-import { installRepositoryEntry } from "../pi-assert/ui/install.js";
-import { AssertsState } from "../pi-assert/ui/state.js";
+import { clearRepoEntriesCache } from "../hookit/installer.js";
+import { installRepositoryEntry } from "../hookit/ui/install.js";
+import { HooksState } from "../hookit/ui/state.js";
 
 const roots: string[] = [];
 
@@ -23,17 +23,17 @@ function response(body: unknown): Response {
 
 describe("preset installation workflow", () => {
   it("persists the preset and every fetched member as one batch while unavailable members remain dangling", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-assert-install-workflow-"));
+    const root = mkdtempSync(join(tmpdir(), "HooKit-install-workflow-"));
     roots.push(root);
     const global = join(root, "global.json");
-    const project = join(root, "project", ".pi", "asserts.json");
-    const state = new AssertsState({ appendEntry() {} } as unknown as ExtensionAPI);
+    const project = join(root, "project", ".pi", "hookit.json");
+    const state = new HooksState({ appendEntry() {} } as unknown as ExtensionAPI);
     state.load({ global, project });
 
     const goodEntry = {
       guard: {
         description: "Fetched member",
-        hook: "tool_call",
+        event: "tool_call",
         shell: "false",
       },
     };
@@ -44,10 +44,10 @@ describe("preset installation workflow", () => {
       }
       if (url.includes("/repos/good/repo/git/trees/")) {
         return response({
-          tree: [{ path: "rules/defaults.json", type: "blob", sha: "member" }],
+          tree: [{ path: "hooks/defaults.json", type: "blob", sha: "member" }],
         });
       }
-      if (url.includes("/repos/good/repo/contents/rules/defaults.json")) {
+      if (url.includes("/repos/good/repo/contents/hooks/defaults.json")) {
         return response({
           type: "file",
           content: Buffer.from(JSON.stringify(goodEntry)).toString("base64"),

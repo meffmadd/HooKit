@@ -1,7 +1,7 @@
 /**
- * Tests for the pure fuzzy matcher (`pi-assert/ui/fuzzy.ts`).
+ * Tests for the pure fuzzy matcher (`HooKit/ui/fuzzy.ts`).
  *
- * These assert subsequence match/non-match, returned highlighting positions,
+ * These hook subsequence match/non-match, returned highlighting positions,
  * and the four coarse field-tier orderings with stable within-section order —
  * not raw scores (there are none).
  */
@@ -14,10 +14,10 @@ import {
   matchQuery,
   filterSection,
   highlightSegments,
-} from "../pi-assert/ui/fuzzy.js";
-import type { CatalogEntry } from "../pi-assert/assertion-catalog/index.js";
+} from "../hookit/ui/fuzzy.js";
+import type { CatalogEntry } from "../hookit/hook-catalog/index.js";
 
-function makeAssert(
+function makeHook(
   name: string,
   opts: {
     source?: string;
@@ -30,7 +30,7 @@ function makeAssert(
     name,
     source: opts.source ?? "local",
     description: opts.description ?? "",
-    hook: "tool_call",
+    event: "tool_call",
     shell: opts.shell ?? "true",
     when: opts.when,
     default: false,
@@ -43,7 +43,7 @@ function makeAction(name: string): CatalogEntry {
     name,
     source: "local",
     description: "integration notification",
-    hook: "assert_result",
+    event: "hook_result",
     shell: "true",
     action: {
       type: "message",
@@ -56,7 +56,7 @@ function makeAction(name: string): CatalogEntry {
   };
 }
 
-/** Build a `PresetAssert` (a `preset`-ref bundle) for `filterSection` tests. */
+/** Build a Preset (`preset`-ref bundle) for `filterSection` tests. */
 function makePreset(
   name: string,
   refs: string[] = [],
@@ -182,53 +182,53 @@ describe("highlightSegments", () => {
 
 describe("filterSection", () => {
   it("empty query returns all entries in original order", () => {
-    const a = makeAssert("alpha");
-    const b = makeAssert("beta");
+    const a = makeHook("alpha");
+    const b = makeHook("beta");
     const out = filterSection("", [a, b]);
     assert.deepEqual(out, [a, b]);
   });
 
   it("whitespace-only query returns all entries in original order", () => {
-    const a = makeAssert("alpha");
-    const b = makeAssert("beta");
+    const a = makeHook("alpha");
+    const b = makeHook("beta");
     const out = filterSection("   ", [a, b]);
     assert.deepEqual(out, [a, b]);
   });
 
   it("filters to matching entries", () => {
-    const a = makeAssert("write-guard");
-    const b = makeAssert("no-env");
+    const a = makeHook("write-guard");
+    const b = makeHook("no-env");
     const out = filterSection("env", [a, b]);
     assert.deepEqual(out, [b]);
   });
 
   it("name outranks description", () => {
-    const perfectDesc = makeAssert("zzz", { description: "env" });
-    const poorName = makeAssert("env", { description: "unrelated" });
+    const perfectDesc = makeHook("zzz", { description: "env" });
+    const poorName = makeHook("env", { description: "unrelated" });
     const out = filterSection("env", [perfectDesc, poorName]);
     assert.deepEqual(out, [poorName, perfectDesc],
       "a name match outranks a description match");
   });
 
   it("description outranks source", () => {
-    const descMatch = makeAssert("x", { description: "env" });
-    const sourceMatch = makeAssert("y", { source: "owner/env-tools" });
+    const descMatch = makeHook("x", { description: "env" });
+    const sourceMatch = makeHook("y", { source: "owner/env-tools" });
     const out = filterSection("env", [descMatch, sourceMatch]);
     assert.deepEqual(out, [descMatch, sourceMatch],
       "description outranks source");
   });
 
   it("source outranks body fields", () => {
-    const sourceMatch = makeAssert("x", { source: "owner/env-tools" });
-    const shellMatch = makeAssert("y", { shell: "grep env .env" });
+    const sourceMatch = makeHook("x", { source: "owner/env-tools" });
+    const shellMatch = makeHook("y", { shell: "grep env .env" });
     const out = filterSection("env", [sourceMatch, shellMatch]);
     assert.deepEqual(out, [sourceMatch, shellMatch],
       "source outranks shell");
   });
 
   it("shell, when, Action detail, and Preset refs share one tier", () => {
-    const shellMatch = makeAssert("s", { shell: "grep env .env" });
-    const whenMatch = makeAssert("w", { when: "test -f ./env" });
+    const shellMatch = makeHook("s", { shell: "grep env .env" });
+    const whenMatch = makeHook("w", { when: "test -f ./env" });
     const actionMatch = makeAction("a");
     const presetMatch = makePreset("p", ["local/env-guard"]);
     // Each matches only via its body field: same tier → catalog order.
@@ -241,8 +241,8 @@ describe("filterSection", () => {
   it("same-tier matches preserve catalog order regardless of match gaps", () => {
     // Both match only via shell (same tier); the scattered one must NOT
     // outrank the tight one (no match-gap quality heuristics).
-    const tight = makeAssert("t", { shell: "env " });
-    const scattered = makeAssert("s", {
+    const tight = makeHook("t", { shell: "env " });
+    const scattered = makeHook("s", {
       shell: "e" + "x".repeat(40) + "n" + "x".repeat(40) + "v",
     });
     const out = filterSection("env", [scattered, tight]);
@@ -251,8 +251,8 @@ describe("filterSection", () => {
   });
 
   it("is stable on ties (original within-section order preserved)", () => {
-    const first = makeAssert("aaa-env");
-    const second = makeAssert("bbb-env");
+    const first = makeHook("aaa-env");
+    const second = makeHook("bbb-env");
     const out = filterSection("env", [first, second]);
     assert.deepEqual(out, [first, second]);
   });
@@ -261,7 +261,7 @@ describe("filterSection", () => {
     const a: CatalogEntry = {
       name: "no-env",
       source: "local",
-      hook: "tool_call",
+      event: "tool_call",
       shell: "true",
       default: false,
       // description intentionally omitted
@@ -271,7 +271,7 @@ describe("filterSection", () => {
   });
 
   it("matches against the `when` field", () => {
-    const a = makeAssert("x", { when: "test -f ./env" });
+    const a = makeHook("x", { when: "test -f ./env" });
     assert.deepEqual(filterSection("env", [a]), [a]);
   });
 
@@ -283,8 +283,8 @@ describe("filterSection", () => {
   });
 
   it("excludes entries that match no field", () => {
-    const a = makeAssert("write-guard");
-    const b = makeAssert("no-secrets");
+    const a = makeHook("write-guard");
+    const b = makeHook("no-secrets");
     assert.deepEqual(filterSection("zzz", [a, b]), []);
   });
 });
@@ -295,7 +295,7 @@ describe("filterSection — preset field", () => {
   it("matches a preset via its `preset` refs (coerced to a joined string)", () => {
     const p = makePreset("my-preset", [
       "local/block-rm-rf",
-      "meffmadd/pi-assert-rules/protect-env",
+      "meffmadd/HooKit-rules/protect-env",
     ]);
     assert.deepEqual(filterSection("protect-env", [p]), [p]);
   });
@@ -324,8 +324,8 @@ describe("filterSection — preset field", () => {
     assert.deepEqual(filterSection("bar", [p]), []);
   });
 
-  it("shell asserts are unaffected (preset field is undefined → coerce yields \"\")", () => {
-    const a = makeAssert("write-guard", { shell: "echo hi" });
+  it("shell hooks are unaffected (preset field is undefined → coerce yields \"\")", () => {
+    const a = makeHook("write-guard", { shell: "echo hi" });
     assert.deepEqual(filterSection("hi", [a]), [a]);
   });
 });

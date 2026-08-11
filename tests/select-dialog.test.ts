@@ -8,13 +8,13 @@
  * `custom` to capture the `{render, invalidate, handleInput}` triple and the
  * `done` resolver, then drive input directly — the same way the real TUI
  * would.  The mock theme wraps accent text in `[...]` and success text in
- * `<...>` so assertions can tell which colour a span landed in.
+ * `<...>` so hooks can tell which colour a span landed in.
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { selectDialog, type SelectDialogResult } from "../pi-assert/ui/components.js";
+import { selectDialog, type SelectDialogResult } from "../hookit/ui/components.js";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 
 // ── Mock theme ────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ describe("selectDialog confirmOnSelect", () => {
       items: [{ value: "a", label: "alpha" }],
       confirmOnSelect: {
         shouldConfirm: () => true,
-        title: "Uninstall assert",
+        title: "Uninstall hook",
         message: (it) => `  Uninstall "${it.value}"?`,
       },
     });
@@ -378,7 +378,7 @@ describe("selectDialog confirmOnSelect", () => {
     t.handleInput(ENTER);
     const lines = t.render(80);
     assert.ok(
-      lines.some((l) => l.includes("Uninstall assert")),
+      lines.some((l) => l.includes("Uninstall hook")),
       "confirm shell uses the custom title",
     );
     assert.ok(

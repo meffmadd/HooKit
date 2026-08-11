@@ -10,35 +10,35 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Hook, NativeHook } from "../pi-assert/domain/entry.js";
-import { adapterFor } from "../pi-assert/hook-evaluation/adapters.js";
-import { invokeAssertions } from "../pi-assert/hook-evaluation/invocations.js";
+import type { Event, NativeEvent } from "../hookit/domain/entry.js";
+import { adapterFor } from "../hookit/hook-evaluation/adapters.js";
+import { invokeHooks } from "../hookit/hook-evaluation/invocations.js";
 import type {
-  ActiveAssertion,
-} from "../pi-assert/hook-evaluation/index.js";
+  ActiveHook,
+} from "../hookit/hook-evaluation/index.js";
 import {
   HookEvaluation,
-  createActiveAssertionSet,
-  type AssertionExecutionReport,
+  createActiveHookSet,
+  type HookExecutionReport,
   type EvaluationReportRow,
-  type HookEventMap,
-  type HookExecutionContext,
+  type EventMap,
+  type EvaluationContext,
   type HookEvaluationResult,
-} from "../pi-assert/hook-evaluation/index.js";
+} from "../hookit/hook-evaluation/index.js";
 
-/** Ordered assertion rows of one report (or none). */
-function assertionRows(
-  report?: AssertionExecutionReport,
-): Array<Extract<EvaluationReportRow, { type: "assertion" }>> {
+/** Ordered hook rows of one report (or none). */
+function hookRows(
+  report?: HookExecutionReport,
+): Array<Extract<EvaluationReportRow, { type: "hook" }>> {
   return (report?.rows ?? []).filter(
-    (row): row is Extract<EvaluationReportRow, { type: "assertion" }> =>
-      row.type === "assertion",
+    (row): row is Extract<EvaluationReportRow, { type: "hook" }> =>
+      row.type === "hook",
   );
 }
 
 /** Ordered action rows of one report (or none). */
 function actionRows(
-  report?: AssertionExecutionReport,
+  report?: HookExecutionReport,
 ): Array<Extract<EvaluationReportRow, { type: "action" }>> {
   return (report?.rows ?? []).filter(
     (row): row is Extract<EvaluationReportRow, { type: "action" }> =>
@@ -52,7 +52,7 @@ const UUID_PATTERN =
 let root: string;
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), "pi-assert-hook-evaluation-"));
+  root = mkdtempSync(join(tmpdir(), "HooKit-hook-evaluation-"));
 });
 
 after(() => {
@@ -65,45 +65,43 @@ function caseDirectory(name: string): string {
   return directory;
 }
 
-function assertion(
+function hook(
   name: string,
-  hook: Hook,
+  event: Event,
   shell = "true",
-  extra: Partial<ActiveAssertion> = {},
-): ActiveAssertion {
+  extra: Partial<ActiveHook> = {},
+): ActiveHook {
   return {
     name,
     source: "local",
-    description: "test assertion",
-    hook,
-    shell,
+    description: "test hook",
+    event,    shell,
     ...extra,
   };
 }
 
-function assertionWithAction(
+function hookWithAction(
   name: string,
-  hook: Hook,
-  action: Omit<NonNullable<ActiveAssertion["action"]>, "outcome"> & {
-    outcome?: NonNullable<ActiveAssertion["action"]>["outcome"];
+  event: Event,
+  action: Omit<NonNullable<ActiveHook["action"]>, "outcome"> & {
+    outcome?: NonNullable<ActiveHook["action"]>["outcome"];
   },
-  extra: Partial<ActiveAssertion> = {},
-): ActiveAssertion {
+  extra: Partial<ActiveHook> = {},
+): ActiveHook {
   return {
     name,
     source: "local",
-    description: "test Assertion with Action",
-    hook,
-    shell: "true",
-    action: { outcome: "pass", ...action } as NonNullable<ActiveAssertion["action"]>,
+    description: "test Hook with Action",
+    event,    shell: "true",
+    action: { outcome: "pass", ...action } as NonNullable<ActiveHook["action"]>,
     ...extra,
   };
 }
 
 function context(
   cwd: string,
-  extra: Partial<HookExecutionContext> = {},
-): HookExecutionContext {
+  extra: Partial<EvaluationContext> = {},
+): EvaluationContext {
   return {
     cwd,
     metadata: {},
@@ -123,19 +121,19 @@ const toolResult = {
   isError: false,
 };
 
-async function evaluate<H extends NativeHook>(
+async function evaluate<H extends NativeEvent>(
   evaluator: HookEvaluation,
-  hook: H,
-  event: HookEventMap[H],
-  assertions: readonly ActiveAssertion[],
+  event: H,
+  payload: EventMap[H],
+  hooks: readonly ActiveHook[],
   cwd = root,
-  executionContext: HookExecutionContext = context(cwd),
+  executionContext: EvaluationContext = context(cwd),
 ): Promise<HookEvaluationResult> {
   return evaluator.evaluate(
-    hook,
     event,
+    payload,
     executionContext,
-    createActiveAssertionSet(assertions),
+    createActiveHookSet(hooks),
   );
 }
 
@@ -146,16 +144,16 @@ function presentationMessages(result: HookEvaluationResult): string[] {
 }
 
 describe("Hook Evaluation native outcomes", () => {
-  it("aggregates a block while continuing matching tool-call Assertions", async () => {
+  it("aggregates a block while continuing matching tool-call Hooks", async () => {
     const cwd = caseDirectory("tool-call-block");
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
       [
-        assertion("passes", "tool_call", "true"),
-        assertion("blocks", "tool_call", "exit 7"),
-        assertion("not-run", "tool_call", "touch not-run"),
+        hook("passes", "tool_call", "true"),
+        hook("blocks", "tool_call", "exit 7"),
+        hook("not-run", "tool_call", "touch not-run"),
       ],
       cwd,
     );
@@ -164,19 +162,19 @@ describe("Hook Evaluation native outcomes", () => {
     if (result.outcome === "block") {
       assert.equal(
         result.reason,
-        'pi-assert: assertion "blocks" rejected bash — `exit 7`',
+        'hookit: hook "blocks" rejected bash — `exit 7`',
       );
     }
     assert.equal(existsSync(join(cwd, "not-run")), true);
     assert.deepEqual(
-      assertionRows(result.executionReport).map(({ assertionRef, passed }) => ({
-        assertionRef,
+      hookRows(result.executionReport).map(({ hookRef, passed }) => ({
+        hookRef,
         passed,
       })),
       [
-        { assertionRef: "local/passes", passed: true },
-        { assertionRef: "local/blocks", passed: false },
-        { assertionRef: "local/not-run", passed: true },
+        { hookRef: "local/passes", passed: true },
+        { hookRef: "local/blocks", passed: false },
+        { hookRef: "local/not-run", passed: true },
       ],
     );
   });
@@ -187,15 +185,15 @@ describe("Hook Evaluation native outcomes", () => {
       "tool_call",
       toolCall,
       [
-        assertion("first", "tool_call", "false"),
-        assertion("second", "tool_call", "exit 7"),
+        hook("first", "tool_call", "false"),
+        hook("second", "tool_call", "exit 7"),
       ],
     );
     assert.equal(call.outcome, "block");
     if (call.outcome === "block") {
-      assert.match(call.reason, /2 assertions rejected bash/);
-      assert.match(call.reason, /assertion "first"/);
-      assert.match(call.reason, /assertion "second"/);
+      assert.match(call.reason, /2 hooks rejected bash/);
+      assert.match(call.reason, /hook "first"/);
+      assert.match(call.reason, /hook "second"/);
     }
 
     const toolOutput = await evaluate(
@@ -203,16 +201,16 @@ describe("Hook Evaluation native outcomes", () => {
       "tool_result",
       toolResult,
       [
-        assertion("first", "tool_result", "false"),
-        assertion("second", "tool_result", "exit 9"),
+        hook("first", "tool_result", "false"),
+        hook("second", "tool_result", "exit 9"),
       ],
     );
     assert.equal(toolOutput.outcome, "patch");
     if (toolOutput.outcome === "patch") {
       const text = toolOutput.patch.content?.[0];
       assert.ok(text?.type === "text");
-      assert.match(text.text, /assertion "first"/);
-      assert.match(text.text, /assertion "second"/);
+      assert.match(text.text, /hook "first"/);
+      assert.match(text.text, /hook "second"/);
     }
   });
 
@@ -222,13 +220,13 @@ describe("Hook Evaluation native outcomes", () => {
       "tool_call",
       toolCall,
       [
-        assertion("write-only", "tool_call", "false", {
+        hook("write-only", "tool_call", "false", {
           filter: { toolName: "^write$" },
         }),
-        assertion("nested", "tool_call", "true", {
+        hook("nested", "tool_call", "true", {
           filter: { "request.target.path": "(^|/)\\.env$" },
         }),
-        assertion("passes", "tool_call", "true", {
+        hook("passes", "tool_call", "true", {
           filter: { toolName: "ash$" },
         }),
       ],
@@ -249,7 +247,7 @@ describe("Hook Evaluation native outcomes", () => {
           dryRun: false,
         },
       },
-      [assertion("nested", "tool_call", "false", {
+      [hook("nested", "tool_call", "false", {
         filter: {
           toolName: "_write$",
           "request.target.path": "(^|/)\\.env$",
@@ -270,7 +268,7 @@ describe("Hook Evaluation native outcomes", () => {
         toolCallId: "shadow",
         input: { toolName: "write" },
       },
-      [assertion("bash", "tool_call", "false", {
+      [hook("bash", "tool_call", "false", {
         filter: { toolName: "^bash$" },
       })],
     );
@@ -283,7 +281,7 @@ describe("Hook Evaluation native outcomes", () => {
       new HookEvaluation(),
       "tool_result",
       { ...toolResult, details },
-      [assertion("redact", "tool_result", "false")],
+      [hook("redact", "tool_result", "false")],
     );
 
     assert.equal(result.outcome, "patch");
@@ -307,18 +305,18 @@ describe("Hook Evaluation native outcomes", () => {
       "turn_end",
       { turnIndex: 4 },
       [
-        assertion("one", "turn_end", "false", { filter: { turnIndex: 4 } }),
-        assertion("two", "turn_end", "exit 2"),
+        hook("one", "turn_end", "false", { filter: { turnIndex: 4 } }),
+        hook("two", "turn_end", "exit 2"),
       ],
     );
     assert.equal(result.outcome, "report");
     assert.equal(result.effects.length, 1);
     assert.equal(result.effects[0]?.type, "present");
-    assert.match(presentationMessages(result)[0] ?? "", /2 turn_end assertions failed/);
+    assert.match(presentationMessages(result)[0] ?? "", /2 turn_end hooks failed/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*one\*\*/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*two\*\*/);
     assert.deepEqual(
-      assertionRows(result.executionReport).map((row) => row.assertionRef),
+      hookRows(result.executionReport).map((row) => row.hookRef),
       ["local/one", "local/two"],
     );
   });
@@ -329,8 +327,8 @@ describe("Hook Evaluation native outcomes", () => {
       "agent_settled",
       {},
       [
-        assertion("one", "agent_settled", "false"),
-        assertion("two", "agent_settled", "false"),
+        hook("one", "agent_settled", "false"),
+        hook("two", "agent_settled", "false"),
       ],
     );
     assert.equal(result.outcome, "report");
@@ -344,15 +342,15 @@ describe("Hook Evaluation native outcomes", () => {
       "session_before_switch",
       { reason: "new" },
       [
-        assertion("new-only", "session_before_switch", "false", {
+        hook("new-only", "session_before_switch", "false", {
           filter: { reason: "^new$" },
         }),
-        assertion("always", "session_before_switch", "false"),
+        hook("always", "session_before_switch", "false"),
       ],
     );
     assert.equal(switching.outcome, "cancel");
     if (switching.outcome === "cancel") {
-      assert.match(switching.reason, /session switch cancelled by 2 assertions/);
+      assert.match(switching.reason, /session switch cancelled by 2 hooks/);
     }
 
     const forking = await evaluate(
@@ -360,15 +358,15 @@ describe("Hook Evaluation native outcomes", () => {
       "session_before_fork",
       { entryId: "entry-1", position: "at" },
       [
-        assertion("clone-only", "session_before_fork", "false", {
+        hook("clone-only", "session_before_fork", "false", {
           filter: { position: "^at$" },
         }),
-        assertion("always", "session_before_fork", "false"),
+        hook("always", "session_before_fork", "false"),
       ],
     );
     assert.equal(forking.outcome, "cancel");
     if (forking.outcome === "cancel") {
-      assert.match(forking.reason, /session fork cancelled by 2 assertions/);
+      assert.match(forking.reason, /session fork cancelled by 2 hooks/);
     }
   });
 
@@ -377,7 +375,7 @@ describe("Hook Evaluation native outcomes", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("pass", "tool_call", "true", { source: "owner/rules" })],
+      [hook("pass", "tool_call", "true", { source: "owner/hooks" })],
     );
     assert.deepEqual(Object.keys(result).sort(), [
       "effects",
@@ -388,44 +386,45 @@ describe("Hook Evaluation native outcomes", () => {
     assert.ok(Object.isFrozen(result.effects));
     assert.ok(Object.isFrozen(result.executionReport));
     assert.ok(Object.isFrozen(result.executionReport?.rows));
-    assert.equal(assertionRows(result.executionReport).length, 1);
-    const row = assertionRows(result.executionReport)[0];
-    assert.equal(row?.assertionRef, "owner/rules/pass");
-    assert.equal(row?.type, "assertion");
+    assert.equal(hookRows(result.executionReport).length, 1);
+    const row = hookRows(result.executionReport)[0];
+    assert.equal(row?.hookRef, "owner/hooks/pass");
+    assert.equal(row?.type, "hook");
     assert.equal(row?.passed, true);
     assert.ok((row?.durationMs ?? -1) >= 0);
     assert.ok(Object.isFrozen(row));
-    // Reporting rows carry no invocation identity or row-level hook.
+    // Reporting rows carry no invocation identity or evaluated Event.
     assert.ok(!("runId" in (row ?? {})), "no runId on a report row");
-    assert.ok(!("hook" in (row ?? {})), "no row-level hook");
+    assert.ok(!("evaluatedEvent" in (row ?? {})), "no Event on a report row");
   });
 });
 
-describe("Assertion Invocation semantics", () => {
-  it("freezes each individual Assertion Result at Invocation creation", async () => {
-    const batch = await invokeAssertions(
-      [assertion("immutable", "tool_call")],
+describe("Hook Invocation semantics", () => {
+  it("freezes each individual Hook Result at Invocation creation", async () => {
+    const batch = await invokeHooks(
+      [hook("immutable", "tool_call")],
       adapterFor("tool_call"),
       toolCall,
       context(root),
     );
 
     assert.equal(batch.invocations.length, 1);
+    assert.equal(batch.invocations[0]!.result.evaluatedEvent, "tool_call");
     assert.ok(Object.isFrozen(batch.invocations[0]!.result));
   });
 
   it("runs filter then when then shell with one shared environment", async () => {
     const cwd = caseDirectory("when-shell-environment");
     const print =
-      "printf '%s|%s|%s|%s|%s\\n' \"$PI_ASSERT_REF\" \"$PI_ASSERT_HOOK\" \"$PI_ASSERT_RUN_ID\" \"$PI_EVENT\" \"$PI_SESSION_ID\"";
+      "printf '%s|%s|%s|%s|%s\\n' \"$PI_HOOK_REF\" \"$PI_HOOK_EVENT\" \"$PI_HOOK_RUN_ID\" \"$PI_EVENT\" \"$PI_SESSION_ID\"";
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("identity", "tool_call", `${print} > shell.log`, {
+      [hook("identity", "tool_call", `${print} > shell.log`, {
         filter: { toolName: "^bash$", command: "echo" },
         when: `${print} > when.log`,
-        source: "owner/rules",
+        source: "owner/hooks",
       })],
       cwd,
       context(cwd, { metadata: { PI_SESSION_ID: "session-123" } }),
@@ -435,10 +434,10 @@ describe("Assertion Invocation semantics", () => {
     const whenIdentity = readFileSync(join(cwd, "when.log"), "utf8").trim();
     const shellIdentity = readFileSync(join(cwd, "shell.log"), "utf8").trim();
     assert.equal(shellIdentity, whenIdentity);
-    assert.equal(assertionRows(result.executionReport).length, 1);
-    const [ref, hook, runId, event, session] = shellIdentity.split("|");
-    assert.equal(ref, "owner/rules/identity");
-    assert.equal(hook, "tool_call");
+    assert.equal(hookRows(result.executionReport).length, 1);
+    const [ref, hookEvent, runId, event, session] = shellIdentity.split("|");
+    assert.equal(ref, "owner/hooks/identity");
+    assert.equal(hookEvent, "tool_call");
     assert.match(runId ?? "", UUID_PATTERN);
     assert.equal(event, "tool_call");
     assert.equal(session, "session-123");
@@ -451,8 +450,8 @@ describe("Assertion Invocation semantics", () => {
       "turn_end",
       { turnIndex: 1 },
       [
-        assertion("one", "turn_end", "printf '%s\\n' \"$PI_ASSERT_RUN_ID\" >> ids.log"),
-        assertion("two", "turn_end", "printf '%s\\n' \"$PI_ASSERT_RUN_ID\" >> ids.log"),
+        hook("one", "turn_end", "printf '%s\\n' \"$PI_HOOK_RUN_ID\" >> ids.log"),
+        hook("two", "turn_end", "printf '%s\\n' \"$PI_HOOK_RUN_ID\" >> ids.log"),
       ],
       cwd,
     );
@@ -491,7 +490,7 @@ describe("Assertion Invocation semantics", () => {
         ],
         isError: true,
       },
-      [assertion(
+      [hook(
         "environment",
         "tool_result",
         "test \"$PI_EVENT\" = tool_result && " +
@@ -511,8 +510,8 @@ describe("Assertion Invocation semantics", () => {
     const lifecycle = await evaluate(
       new HookEvaluation(),
       "turn_end",
-      { turnIndex: 3, rich: "not exposed" } as HookEventMap["turn_end"],
-      [assertion(
+      { turnIndex: 3, rich: "not exposed" } as EventMap["turn_end"],
+      [hook(
         "payload",
         "turn_end",
         "printf '%s' \"$PI_EVENT_PAYLOAD\" > payload.json",
@@ -533,15 +532,15 @@ describe("Assertion Invocation semantics", () => {
       "tool_call",
       toolCall,
       [
-        assertion("skip", "tool_call", "touch should-not-run", { when: "exit 9" }),
-        assertion("pass", "tool_call", "true"),
+        hook("skip", "tool_call", "touch should-not-run", { when: "exit 9" }),
+        hook("pass", "tool_call", "true"),
       ],
       cwd,
     );
     assert.equal(result.outcome, "pass");
     assert.equal(existsSync(join(cwd, "should-not-run")), false);
     assert.deepEqual(
-      assertionRows(result.executionReport).map((row) => row.assertionRef),
+      hookRows(result.executionReport).map((row) => row.hookRef),
       ["local/pass"],
     );
   });
@@ -552,10 +551,10 @@ describe("Assertion Invocation semantics", () => {
       "tool_call",
       toolCall,
       [
-        assertion("miss", "tool_call", "true", {
+        hook("miss", "tool_call", "true", {
           filter: { toolName: "^read$" },
         }),
-        assertion("skip", "tool_call", "true", { when: "exit 9" }),
+        hook("skip", "tool_call", "true", { when: "exit 9" }),
       ],
     );
     assert.equal(result.outcome, "pass");
@@ -567,7 +566,7 @@ describe("Assertion Invocation semantics", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("broken-when", "tool_call", "true", {
+      [hook("broken-when", "tool_call", "true", {
         when: String.fromCharCode(0),
       })],
     );
@@ -584,7 +583,7 @@ describe("Assertion Invocation semantics", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("broken-shell", "tool_call", String.fromCharCode(0))],
+      [hook("broken-shell", "tool_call", String.fromCharCode(0))],
     );
     assert.equal(result.outcome, "block");
     assert.equal(result.executionReport, undefined);
@@ -596,7 +595,7 @@ describe("Assertion Invocation semantics", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("cwd", "tool_call", "test \"$PWD\" = \"$PI_CWD\" && touch marker")],
+      [hook("cwd", "tool_call", "test \"$PWD\" = \"$PI_CWD\" && touch marker")],
       cwd,
     );
     assert.equal(result.outcome, "pass");
@@ -609,20 +608,20 @@ describe("Assertion Invocation semantics", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("slow", "tool_call", "sleep 30")],
+      [hook("slow", "tool_call", "sleep 30")],
     );
     assert.equal(result.outcome, "block");
     assert.ok(Date.now() - startedAt < 8_000);
   });
 
-  it("fails closed when aborted during a tool assertion", async () => {
+  it("fails closed when aborted during a tool Hook Invocation", async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 50);
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("slow", "tool_call", "sleep 30")],
+      [hook("slow", "tool_call", "sleep 30")],
       root,
       context(root, { signal: controller.signal }),
     );
@@ -637,7 +636,7 @@ describe("Assertion Invocation semantics", () => {
       new HookEvaluation(),
       "agent_end",
       {},
-      [assertion("would-run", "agent_end", "touch marker; false")],
+      [hook("would-run", "agent_end", "touch marker; false")],
       cwd,
       context(cwd, { signal: controller.signal }),
     );
@@ -655,7 +654,7 @@ describe("Assertion Invocation semantics", () => {
         new HookEvaluation(),
         "tool_call",
         toolCall,
-        [assertion(
+        [hook(
           "environment",
           "tool_call",
           "test \"$PI_SESSION_ID\" = current && test \"$PI_CODING_AGENT\" = true",
@@ -673,19 +672,19 @@ describe("Assertion Invocation semantics", () => {
   });
 });
 
-describe("Active Assertion Set", () => {
-  it("copies its ordered membership while reusing immutable catalog Assertions", async () => {
-    const first = assertion("first", "tool_call", "false");
-    const second = assertion("second", "tool_call", "true");
+describe("Active Hook Set", () => {
+  it("copies its ordered membership while reusing immutable catalog Hooks", async () => {
+    const first = hook("first", "tool_call", "false");
+    const second = hook("second", "tool_call", "true");
     const input = [first, second];
-    const activeSet = createActiveAssertionSet(input);
+    const activeSet = createActiveHookSet(input);
     assert.ok(Object.isFrozen(activeSet));
     assert.equal(activeSet.size, 2);
 
     // Later activation or catalog replacement cannot affect the captured set:
     // membership is copied, not aliased.
     input.length = 0;
-    input.push(assertion("replacement", "tool_call", "true"));
+    input.push(hook("replacement", "tool_call", "true"));
 
     const result = await new HookEvaluation().evaluate(
       "tool_call",
@@ -701,14 +700,14 @@ describe("Active Assertion Set", () => {
   it("captures one set and metadata snapshot for origin and handlers", async () => {
     const cwd = caseDirectory("captured-set-and-metadata");
     const metadata = { PI_SESSION_ID: "captured" };
-    // Catalog-owned Assertions are already immutable; capture reuses them.
-    const origin = Object.freeze(assertion("origin", "tool_call", "sleep 0.05; true"));
-    const handler = Object.freeze(assertion(
+    // Catalog-owned Hooks are already immutable; capture reuses them.
+    const origin = Object.freeze(hook("origin", "tool_call", "sleep 0.05; true"));
+    const handler = Object.freeze(hook(
       "handler",
-      "assert_result",
+      "hook_result",
       "printf '%s' \"$PI_SESSION_ID\" > captured.log",
     ));
-    const activeSet = createActiveAssertionSet([origin, handler]);
+    const activeSet = createActiveHookSet([origin, handler]);
     const evaluation = new HookEvaluation().evaluate(
       "tool_call",
       toolCall,
@@ -726,15 +725,15 @@ describe("Active Assertion Set", () => {
 });
 
 describe("owned Action evaluation", () => {
-  it("skips already-aborted turn-end Assertions before traversal", async () => {
+  it("skips already-aborted turn-end Hooks before traversal", async () => {
     const signal = AbortSignal.abort();
     const result = await evaluate(
       new HookEvaluation(),
       "turn_end",
       { turnIndex: 1 },
       [
-        assertionWithAction("always", "turn_end", { type: "interrupt" }),
-        assertionWithAction("gated", "turn_end", { type: "shutdown" }, {
+        hookWithAction("always", "turn_end", { type: "interrupt" }),
+        hookWithAction("gated", "turn_end", { type: "shutdown" }, {
           when: "true",
         }),
       ],
@@ -750,21 +749,21 @@ describe("owned Action evaluation", () => {
   it("shares one fresh identity between each passing precondition and action request", async () => {
     const cwd = caseDirectory("action-identities");
     const identityCheck = (name: string) =>
-      `test "$PI_ASSERT_REF" = "local/${name}" && ` +
-      "test \"$PI_ASSERT_HOOK\" = tool_call && " +
+      `test "$PI_HOOK_REF" = "local/${name}" && ` +
+      "test \"$PI_HOOK_EVENT\" = tool_call && " +
       "test \"$PI_EVENT\" = tool_call && " +
       "test \"$PI_TOOL_NAME\" = bash && " +
-      `printf '%s' "$PI_ASSERT_RUN_ID" > ${name}.id`;
+      `printf '%s' "$PI_HOOK_RUN_ID" > ${name}.id`;
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
       [
-        assertionWithAction("first", "tool_call", { type: "interrupt" }, {
+        hookWithAction("first", "tool_call", { type: "interrupt" }, {
           filter: { toolName: "^bash$" },
           when: identityCheck("first"),
         }),
-        assertionWithAction("second", "tool_call", { type: "shutdown" }, {
+        hookWithAction("second", "tool_call", { type: "shutdown" }, {
           when: identityCheck("second"),
         }),
       ],
@@ -779,7 +778,7 @@ describe("owned Action evaluation", () => {
     assert.match(effects[1]?.runId ?? "", UUID_PATTERN);
     assert.notEqual(effects[0]?.runId, effects[1]?.runId);
     assert.deepEqual(
-      assertionRows(result.executionReport).map((row) => row.assertionRef),
+      hookRows(result.executionReport).map((row) => row.hookRef),
       ["local/first", "local/second"],
     );
   });
@@ -790,32 +789,32 @@ describe("owned Action evaluation", () => {
       "tool_call",
       toolCall,
       [
-        assertion("blocks", "tool_call", "false"),
-        assertion("not-run", "tool_call", "true"),
-        assertionWithAction("message", "tool_call", {
+        hook("blocks", "tool_call", "false"),
+        hook("not-run", "tool_call", "true"),
+        hookWithAction("message", "tool_call", {
           type: "message",
           message: "blocked",
           delivery: "followUp",
         }),
-        assertionWithAction("miss", "tool_call", { type: "interrupt" }, {
+        hookWithAction("miss", "tool_call", { type: "interrupt" }, {
           filter: { toolName: "^read$" },
         }),
-        assertionWithAction("skip", "tool_call", { type: "shutdown" }, {
+        hookWithAction("skip", "tool_call", { type: "shutdown" }, {
           when: "false",
         }),
-        assertionWithAction("interrupt", "tool_call", { type: "interrupt" }),
+        hookWithAction("interrupt", "tool_call", { type: "interrupt" }),
       ],
     );
 
     assert.equal(result.outcome, "block");
     const effects = result.effects.filter((effect) => effect.type === "request-action");
-    assert.deepEqual(effects.map((effect) => effect.assertionRef), [
+    assert.deepEqual(effects.map((effect) => effect.hookRef), [
       "local/message",
       "local/interrupt",
     ]);
     assert.deepEqual(
       actionRows(result.executionReport).map((request) => ({
-        ref: request.assertionRef,
+        ref: request.hookRef,
         type: request.actionType,
       })),
       [
@@ -832,14 +831,14 @@ describe("owned Action evaluation", () => {
       "tool_call",
       toolCall,
       [
-        assertionWithAction("broken-when", "tool_call", {
+        hookWithAction("broken-when", "tool_call", {
           type: "interrupt",
           outcome: "block",
           code: null,
         }, {
           when: "bad\0command",
         }),
-        assertionWithAction("sibling", "tool_call", { type: "shutdown" }),
+        hookWithAction("sibling", "tool_call", { type: "shutdown" }),
       ],
     );
 
@@ -850,7 +849,7 @@ describe("owned Action evaluation", () => {
     ]);
     assert.deepEqual(
       actionRows(result.executionReport).map((request) => ({
-        ref: request.assertionRef,
+        ref: request.hookRef,
         outcome: request.outcome,
       })),
       [
@@ -867,17 +866,17 @@ describe("owned Action evaluation", () => {
       "turn_end",
       { turnIndex: 4 },
       [
-        assertionWithAction("exact-true", "turn_end", {
+        hookWithAction("exact-true", "turn_end", {
           type: "interrupt",
           code: 0,
         }),
-        assertionWithAction("exact-false", "turn_end", {
+        hookWithAction("exact-false", "turn_end", {
           type: "shutdown",
           outcome: "report",
           code: 1,
         }, { shell: "false" }),
-        assertion("compound", "turn_end", "false || true"),
-        assertion("not-trimmed", "turn_end", " true && touch ordinary-shell"),
+        hook("compound", "turn_end", "false || true"),
+        hook("not-trimmed", "turn_end", " true && touch ordinary-shell"),
       ],
       cwd,
     );
@@ -885,22 +884,22 @@ describe("owned Action evaluation", () => {
     assert.equal(result.outcome, "report");
     assert.equal(existsSync(join(cwd, "ordinary-shell")), true);
     assert.deepEqual(
-      assertionRows(result.executionReport).map(({ assertionRef, passed }) => ({
-        assertionRef,
+      hookRows(result.executionReport).map(({ hookRef, passed }) => ({
+        hookRef,
         passed,
       })),
       [
-        { assertionRef: "local/exact-true", passed: true },
-        { assertionRef: "local/exact-false", passed: false },
-        { assertionRef: "local/compound", passed: true },
-        { assertionRef: "local/not-trimmed", passed: true },
+        { hookRef: "local/exact-true", passed: true },
+        { hookRef: "local/exact-false", passed: false },
+        { hookRef: "local/compound", passed: true },
+        { hookRef: "local/not-trimmed", passed: true },
       ],
     );
     const requested = result.effects.filter(
       (effect) => effect.type === "request-action",
     );
     assert.deepEqual(
-      requested.map((effect) => ({ ref: effect.assertionRef, action: effect.action })),
+      requested.map((effect) => ({ ref: effect.hookRef, action: effect.action })),
       [
         { ref: "local/exact-true", action: { type: "interrupt" } },
         { ref: "local/exact-false", action: { type: "shutdown" } },
@@ -914,7 +913,7 @@ describe("owned Action evaluation", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertionWithAction("aborted", "tool_call", {
+      [hookWithAction("aborted", "tool_call", {
         type: "interrupt",
         outcome: "block",
         code: null,
@@ -924,13 +923,13 @@ describe("owned Action evaluation", () => {
     );
 
     assert.equal(result.outcome, "block");
-    assert.equal(assertionRows(result.executionReport).length, 0);
+    assert.equal(hookRows(result.executionReport).length, 0);
     assert.deepEqual(
-      actionRows(result.executionReport).map(({ assertionRef, outcome }) => ({
-        assertionRef,
+      actionRows(result.executionReport).map(({ hookRef, outcome }) => ({
+        hookRef,
         outcome,
       })),
-      [{ assertionRef: "local/aborted", outcome: "block" }],
+      [{ hookRef: "local/aborted", outcome: "block" }],
     );
   });
 
@@ -940,17 +939,17 @@ describe("owned Action evaluation", () => {
       "tool_call",
       toolCall,
       [
-        assertionWithAction("matches", "tool_call", {
+        hookWithAction("matches", "tool_call", {
           type: "interrupt",
           outcome: ["pass", "block"],
           code: [0, 1],
         }, { shell: "false" }),
-        assertionWithAction("wrong-code", "tool_call", {
+        hookWithAction("wrong-code", "tool_call", {
           type: "shutdown",
           outcome: "block",
           code: null,
         }, { shell: "false" }),
-        assertionWithAction("pass-but-code-misses", "tool_call", {
+        hookWithAction("pass-but-code-misses", "tool_call", {
           type: "compact",
           outcome: ["pass", "block"],
           code: [1, null],
@@ -962,14 +961,14 @@ describe("owned Action evaluation", () => {
     assert.deepEqual(
       result.effects
         .filter((effect) => effect.type === "request-action")
-        .map((effect) => effect.assertionRef),
+        .map((effect) => effect.hookRef),
       ["local/matches"],
     );
   });
 
-  it("can react separately to every originating Assertion outcome", async () => {
+  it("can react separately to every originating Hook outcome", async () => {
     const watcher = (outcome: "pass" | "block" | "patch" | "cancel" | "report") =>
-      assertionWithAction("watch", "assert_result", { type: "interrupt" }, {
+      hookWithAction("watch", "hook_result", { type: "interrupt" }, {
         filter: { outcome },
       });
     const cases = [
@@ -977,26 +976,26 @@ describe("owned Action evaluation", () => {
         new HookEvaluation(),
         "tool_call",
         toolCall,
-        [assertion("origin", "tool_call", "true"), watcher("pass")],
+        [hook("origin", "tool_call", "true"), watcher("pass")],
       ),
       await evaluate(
         new HookEvaluation(),
         "tool_call",
         toolCall,
-        [assertion("origin", "tool_call", "false"), watcher("block")],
+        [hook("origin", "tool_call", "false"), watcher("block")],
       ),
       await evaluate(
         new HookEvaluation(),
         "tool_result",
         toolResult,
-        [assertion("origin", "tool_result", "false"), watcher("patch")],
+        [hook("origin", "tool_result", "false"), watcher("patch")],
       ),
       await evaluate(
         new HookEvaluation(),
         "session_before_switch",
         { reason: "new" },
         [
-          assertion("origin", "session_before_switch", "false"),
+          hook("origin", "session_before_switch", "false"),
           watcher("cancel"),
         ],
       ),
@@ -1004,7 +1003,7 @@ describe("owned Action evaluation", () => {
         new HookEvaluation(),
         "turn_end",
         { turnIndex: 1 },
-        [assertion("origin", "turn_end", "false"), watcher("report")],
+        [hook("origin", "turn_end", "false"), watcher("report")],
       ),
     ];
 
@@ -1024,10 +1023,10 @@ describe("owned Action evaluation", () => {
       "turn_end",
       { turnIndex: 3 },
       [
-        assertion("passes", "turn_end", "true"),
-        assertion("fails", "turn_end", "false"),
-        assertionWithAction("first", "assert_result", { type: "interrupt" }),
-        assertionWithAction("second", "assert_result", {
+        hook("passes", "turn_end", "true"),
+        hook("fails", "turn_end", "false"),
+        hookWithAction("first", "hook_result", { type: "interrupt" }),
+        hookWithAction("second", "hook_result", {
           type: "emit-custom-event",
           name: "test:event",
           data: { value: 1 },
@@ -1036,7 +1035,7 @@ describe("owned Action evaluation", () => {
     );
 
     const actions = result.effects.filter((effect) => effect.type === "request-action");
-    assert.deepEqual(actions.map((effect) => effect.assertionRef), [
+    assert.deepEqual(actions.map((effect) => effect.hookRef), [
       "local/first",
       "local/second",
       "local/first",
@@ -1044,7 +1043,7 @@ describe("owned Action evaluation", () => {
     ]);
     assert.deepEqual(
       actionRows(result.executionReport).map((row) =>
-        row.origin?.assertionRef
+        row.origin?.hookRef
       ),
       ["local/passes", "local/passes", "local/fails", "local/fails"],
     );
@@ -1060,39 +1059,39 @@ describe("owned Action evaluation", () => {
       "turn_end",
       { turnIndex: 2 },
       [
-        assertion("first", "turn_end", "true"),
-        assertionWithAction("steer", "turn_end", { type: "interrupt" }),
-        assertion("second", "turn_end", "false"),
-        assertion("after", "assert_result", "true"),
+        hook("first", "turn_end", "true"),
+        hookWithAction("steer", "turn_end", { type: "interrupt" }),
+        hook("second", "turn_end", "false"),
+        hook("after", "hook_result", "true"),
       ],
     );
 
-    // For each native result: its Assertion row, its owned Action row, then its
-    // synthetic `assert_result` rows — one ordered sequence.
+    // For each originating Hook Result: its Hook row, owned Action row, then its
+    // synthetic `hook_result` rows — one ordered sequence.
     const rows = result.executionReport?.rows ?? [];
     assert.deepEqual(
       rows.map((row) =>
-        row.type === "assertion"
-          ? `a:${row.assertionRef}`
-          : `x:${row.assertionRef}`
+        row.type === "hook"
+          ? `a:${row.hookRef}`
+          : `x:${row.hookRef}`
       ),
       [
-        "a:local/first",  // native result 1
-        "a:local/after",  // synthetic for result 1
-        "a:local/steer",  // native result 2
-        "x:local/steer",  // its owned Action row directly after its Assertion
-        "a:local/after",  // synthetic for result 2
-        "a:local/second", // native result 3
-        "a:local/after",  // synthetic for result 3
+        "a:local/first",  // origin 1
+        "a:local/after",  // synthetic for origin 1
+        "a:local/steer",  // origin 2
+        "x:local/steer",  // its owned Action row directly after its Hook
+        "a:local/after",  // synthetic for origin 2
+        "a:local/second", // origin 3
+        "a:local/after",  // synthetic for origin 3
       ],
     );
-    // The owned Action row directly follows its owner's Assertion row.
+    // The owned Action row directly follows its owner's Hook row.
     const interruptIndex = rows.findIndex(
-      (row) => row.type === "action" && row.assertionRef === "local/steer",
+      (row) => row.type === "action" && row.hookRef === "local/steer",
     );
     assert.ok(interruptIndex > 0);
-    assert.equal(rows[interruptIndex - 1]?.type, "assertion");
-    assert.equal(rows[interruptIndex - 1]?.assertionRef, "local/steer");
+    assert.equal(rows[interruptIndex - 1]?.type, "hook");
+    assert.equal(rows[interruptIndex - 1]?.hookRef, "local/steer");
   });
 
   it("measures a passing when plus shell in the reported duration", async () => {
@@ -1100,10 +1099,10 @@ describe("owned Action evaluation", () => {
       new HookEvaluation(),
       "tool_call",
       toolCall,
-      [assertion("slow-when", "tool_call", "true", { when: "sleep 0.06" })],
+      [hook("slow-when", "tool_call", "true", { when: "sleep 0.06" })],
     );
-    const row = assertionRows(result.executionReport)[0];
-    assert.ok(row, "a passing when still yields an Assertion row");
+    const row = hookRows(result.executionReport)[0];
+    assert.ok(row, "a passing when still yields a Hook row");
     assert.ok(
       (row?.durationMs ?? 0) >= 50,
       "duration includes the passing when interval",
@@ -1111,7 +1110,7 @@ describe("owned Action evaluation", () => {
   });
 });
 
-describe("synthetic assert_result phase", () => {
+describe("synthetic hook_result phase", () => {
   it("awaits handlers in result-major, configured-handler order", async () => {
     const cwd = caseDirectory("synthetic-order");
     const result = await evaluate(
@@ -1119,16 +1118,16 @@ describe("synthetic assert_result phase", () => {
       "turn_end",
       { turnIndex: 2 },
       [
-        assertion("origin-pass", "turn_end", "true"),
-        assertion("origin-fail", "turn_end", "exit 7"),
-        assertion(
+        hook("origin-pass", "turn_end", "true"),
+        hook("origin-fail", "turn_end", "exit 7"),
+        hook(
           "first",
-          "assert_result",
+          "hook_result",
           "sleep 0.02; printf 'first:%s\\n' \"$PI_EVENT_PAYLOAD\" >> order.log",
         ),
-        assertion(
+        hook(
           "second",
-          "assert_result",
+          "hook_result",
           "printf 'second:%s\\n' \"$PI_EVENT_PAYLOAD\" >> order.log",
         ),
       ],
@@ -1148,10 +1147,10 @@ describe("synthetic assert_result phase", () => {
 
     const rows = result.executionReport?.rows ?? [];
     const executions = rows.filter(
-      (row): row is Extract<EvaluationReportRow, { type: "assertion" }> =>
-        row.type === "assertion",
+      (row): row is Extract<EvaluationReportRow, { type: "hook" }> =>
+        row.type === "hook",
     );
-    assert.deepEqual(executions.map((row) => row.assertionRef), [
+    assert.deepEqual(executions.map((row) => row.hookRef), [
       "local/origin-pass",
       "local/first",
       "local/second",
@@ -1160,10 +1159,10 @@ describe("synthetic assert_result phase", () => {
       "local/second",
     ]);
     // Synthetic handler rows carry the projected origin; they are interleaved
-    // result-major (native row, then its handlers).
+    // result-major (originating row, then its handlers).
     const synthetic = executions.filter((row) => row.origin !== undefined);
     assert.deepEqual(
-      synthetic.map((row) => row.origin?.assertionRef),
+      synthetic.map((row) => row.origin?.hookRef),
       [
         "local/origin-pass",
         "local/origin-pass",
@@ -1174,38 +1173,38 @@ describe("synthetic assert_result phase", () => {
     assert.ok(Object.isFrozen(executions[1]?.origin));
   });
 
-  it("matches assertion refs by regex, outcomes exactly, and codes strictly", async () => {
+  it("matches hook refs by regex, outcomes exactly, and codes strictly", async () => {
     const cwd = caseDirectory("synthetic-filters");
     const result = await evaluate(
       new HookEvaluation(),
       "turn_end",
       { turnIndex: 1 },
       [
-        assertion("passes", "turn_end", "true"),
-        assertion("fails", "turn_end", "exit 7"),
-        assertion("matching", "assert_result", "printf 'match\\n' >> match.log", {
+        hook("passes", "turn_end", "true"),
+        hook("fails", "turn_end", "exit 7"),
+        hook("matching", "hook_result", "printf 'match\\n' >> match.log", {
           filter: {
-            assertionRef: "^local/fails$",
+            hookRef: "^local/fails$",
             runId: "^[0-9a-f-]+$",
             outcome: "report",
             code: 7,
           },
         }),
-        assertion("not-regex", "assert_result", "touch bad", {
+        hook("not-regex", "hook_result", "touch bad", {
           filter: { outcome: "r.*" },
         }),
-        assertion("wrong-code", "assert_result", "touch bad", {
+        hook("wrong-code", "hook_result", "touch bad", {
           filter: { code: 8 },
         }),
-        assertionWithAction("matching-action", "assert_result", { type: "interrupt" }, {
+        hookWithAction("matching-action", "hook_result", { type: "interrupt" }, {
           filter: {
-            assertionRef: "^local/fails$",
+            hookRef: "^local/fails$",
             runId: "^[0-9a-f-]+$",
             outcome: "report",
             code: 7,
           },
         }),
-        assertionWithAction("wrong-action", "assert_result", { type: "shutdown" }, {
+        hookWithAction("wrong-action", "hook_result", { type: "shutdown" }, {
           filter: { outcome: "r.*" },
         }),
       ],
@@ -1217,7 +1216,7 @@ describe("synthetic assert_result phase", () => {
     assert.deepEqual(
       result.effects
         .filter((effect) => effect.type === "request-action")
-        .map((effect) => effect.assertionRef),
+        .map((effect) => effect.hookRef),
       ["local/matching-action"],
     );
   });
@@ -1231,9 +1230,9 @@ describe("synthetic assert_result phase", () => {
       "tool_call",
       toolCall,
       [
-        assertion("origin", "tool_call", "true"),
-        assertion("handler", "assert_result", "touch handled"),
-        assertionWithAction("action", "assert_result", { type: "interrupt" }, {
+        hook("origin", "tool_call", "true"),
+        hook("handler", "hook_result", "touch handled"),
+        hookWithAction("action", "hook_result", { type: "interrupt" }, {
           when: "true",
         }),
       ],
@@ -1244,7 +1243,7 @@ describe("synthetic assert_result phase", () => {
     assert.ok(existsSync(join(cwd, "handled")));
     assert.ok(
       result.effects.some((effect) =>
-        effect.type === "request-action" && effect.assertionRef === "local/action"
+        effect.type === "request-action" && effect.hookRef === "local/action"
       ),
     );
   });
@@ -1256,11 +1255,11 @@ describe("synthetic assert_result phase", () => {
       "tool_call",
       toolCall,
       [
-        assertion("origin", "tool_call", "true"),
-        assertion(
+        hook("origin", "tool_call", "true"),
+        hook(
           "handler",
-          "assert_result",
-          "printf '%s|%s\\n' \"$PI_ASSERT_RUN_ID\" \"$PI_EVENT_PAYLOAD\" > identities.log",
+          "hook_result",
+          "printf '%s|%s\\n' \"$PI_HOOK_RUN_ID\" \"$PI_EVENT_PAYLOAD\" > identities.log",
         ),
       ],
       cwd,
@@ -1282,16 +1281,16 @@ describe("synthetic assert_result phase", () => {
       "tool_call",
       toolCall,
       [
-        assertion("origin", "tool_call", "true"),
-        assertion("bad-filter", "assert_result", "true", {
-          filter: { assertionRef: "[" },
+        hook("origin", "tool_call", "true"),
+        hook("bad-filter", "hook_result", "true", {
+          filter: { hookRef: "[" },
         }),
-        assertion("fails", "assert_result", "false"),
-        assertion("sibling", "assert_result", "touch sibling"),
-        assertionWithAction("bad-action-filter", "assert_result", { type: "interrupt" }, {
-          filter: { assertionRef: "[" },
+        hook("fails", "hook_result", "false"),
+        hook("sibling", "hook_result", "touch sibling"),
+        hookWithAction("bad-action-filter", "hook_result", { type: "interrupt" }, {
+          filter: { hookRef: "[" },
         }),
-        assertionWithAction("action-sibling", "assert_result", { type: "shutdown" }),
+        hookWithAction("action-sibling", "hook_result", { type: "shutdown" }),
       ],
       cwd,
     );
@@ -1309,7 +1308,7 @@ describe("synthetic assert_result phase", () => {
       presentationMessages(result)[1] ?? "",
       /bad-action-filter.*failed to execute/,
     );
-    assert.match(presentationMessages(result)[2] ?? "", /1 assert_result assertion failed/);
+    assert.match(presentationMessages(result)[2] ?? "", /1 hook_result hook failed/);
   });
 
   it("suppresses recursion when a result handler fails", async () => {
@@ -1318,21 +1317,21 @@ describe("synthetic assert_result phase", () => {
       "tool_call",
       toolCall,
       [
-        assertion("origin", "tool_call", "true"),
-        assertion("handler", "assert_result", "false"),
+        hook("origin", "tool_call", "true"),
+        hook("handler", "hook_result", "false"),
       ],
     );
     assert.equal(result.outcome, "pass");
     assert.equal(result.effects.length, 1);
-    assert.match(presentationMessages(result)[0] ?? "", /assert_result assertion failed/);
+    assert.match(presentationMessages(result)[0] ?? "", /hook_result hook failed/);
     assert.deepEqual(
-      assertionRows(result.executionReport).map((row) => ({
-        assertionRef: row.assertionRef,
-        origin: row.origin?.assertionRef,
+      hookRows(result.executionReport).map((row) => ({
+        hookRef: row.hookRef,
+        origin: row.origin?.hookRef,
       })),
       [
-        { assertionRef: "local/origin", origin: undefined },
-        { assertionRef: "local/handler", origin: "local/origin" },
+        { hookRef: "local/origin", origin: undefined },
+        { hookRef: "local/handler", origin: "local/origin" },
       ],
     );
   });
@@ -1345,17 +1344,17 @@ describe("session policy state", () => {
       evaluator,
       "tool_call",
       toolCall,
-      [assertion("tool", "tool_call", "true")],
+      [hook("tool", "tool_call", "true")],
     );
 
-    const failing = [assertion("clean", "agent_end", "false")];
+    const failing = [hook("clean", "agent_end", "false")];
     const first = await evaluate(evaluator, "agent_end", {}, failing);
     assert.equal(first.outcome, "report");
     assert.deepEqual(first.effects.map((effect) => effect.type), [
       "request-corrective-turn",
     ]);
     assert.deepEqual(
-      assertionRows(first.executionReport).map((row) => row.assertionRef),
+      hookRows(first.executionReport).map((row) => row.hookRef),
       ["local/clean"],
     );
 
@@ -1369,7 +1368,7 @@ describe("session policy state", () => {
       evaluator,
       "agent_end",
       {},
-      [assertion("clean", "agent_end", "true")],
+      [hook("clean", "agent_end", "true")],
     );
     assert.equal(passing.outcome, "pass");
 
@@ -1384,8 +1383,8 @@ describe("session policy state", () => {
       "tool_call",
       toolCall,
       [
-        assertion("tool", "tool_call", "true"),
-        assertionWithAction("tool-action", "tool_call", { type: "interrupt" }),
+        hook("tool", "tool_call", "true"),
+        hookWithAction("tool-action", "tool_call", { type: "interrupt" }),
       ],
     );
     const end = await evaluate(
@@ -1393,24 +1392,24 @@ describe("session policy state", () => {
       "agent_end",
       {},
       [
-        assertion("end", "agent_end", "true"),
-        assertionWithAction("end-action", "agent_end", { type: "shutdown" }),
+        hook("end", "agent_end", "true"),
+        hookWithAction("end-action", "agent_end", { type: "shutdown" }),
       ],
     );
     assert.deepEqual(
-      assertionRows(tool.executionReport).map((row) => row.assertionRef),
+      hookRows(tool.executionReport).map((row) => row.hookRef),
       ["local/tool", "local/tool-action"],
     );
     assert.deepEqual(
-      assertionRows(end.executionReport).map((row) => row.assertionRef),
+      hookRows(end.executionReport).map((row) => row.hookRef),
       ["local/end", "local/end-action"],
     );
     assert.deepEqual(
-      actionRows(tool.executionReport).map((row) => row.assertionRef),
+      actionRows(tool.executionReport).map((row) => row.hookRef),
       ["local/tool-action"],
     );
     assert.deepEqual(
-      actionRows(end.executionReport).map((row) => row.assertionRef),
+      actionRows(end.executionReport).map((row) => row.hookRef),
       ["local/end-action"],
     );
   });
@@ -1427,8 +1426,8 @@ describe("session policy state", () => {
         "tool_call",
         { ...toolCall, toolCallId: "parallel-a" },
         [
-          assertion("a", "tool_call", waitFor("a.started", "b.started")),
-          assertionWithAction("action-a", "tool_call", { type: "interrupt" }),
+          hook("a", "tool_call", waitFor("a.started", "b.started")),
+          hookWithAction("action-a", "tool_call", { type: "interrupt" }),
         ],
         cwd,
       ),
@@ -1437,8 +1436,8 @@ describe("session policy state", () => {
         "tool_call",
         { ...toolCall, toolCallId: "parallel-b" },
         [
-          assertion("b", "tool_call", waitFor("b.started", "a.started")),
-          assertionWithAction("action-b", "tool_call", { type: "shutdown" }),
+          hook("b", "tool_call", waitFor("b.started", "a.started")),
+          hookWithAction("action-b", "tool_call", { type: "shutdown" }),
         ],
         cwd,
       ),
@@ -1447,19 +1446,19 @@ describe("session policy state", () => {
     assert.equal(first.outcome, "pass");
     assert.equal(second.outcome, "pass");
     assert.deepEqual(
-      assertionRows(first.executionReport).map((row) => row.assertionRef),
+      hookRows(first.executionReport).map((row) => row.hookRef),
       ["local/a", "local/action-a"],
     );
     assert.deepEqual(
-      assertionRows(second.executionReport).map((row) => row.assertionRef),
+      hookRows(second.executionReport).map((row) => row.hookRef),
       ["local/b", "local/action-b"],
     );
     assert.deepEqual(
-      actionRows(first.executionReport).map((row) => row.assertionRef),
+      actionRows(first.executionReport).map((row) => row.hookRef),
       ["local/action-a"],
     );
     assert.deepEqual(
-      actionRows(second.executionReport).map((row) => row.assertionRef),
+      actionRows(second.executionReport).map((row) => row.hookRef),
       ["local/action-b"],
     );
   });
@@ -1475,12 +1474,12 @@ describe("unexpected failures fail closed", () => {
       "tool_call",
       toolCall,
       [
-        assertion("completed", "tool_call", "true"),
-        assertion("crashes", "tool_call", "true", { filter: invalidFilter }),
-        assertion("later-sibling", "tool_call", "true"),
-        assertion(
+        hook("completed", "tool_call", "true"),
+        hook("crashes", "tool_call", "true", { filter: invalidFilter }),
+        hook("later-sibling", "tool_call", "true"),
+        hook(
           "handler",
-          "assert_result",
+          "hook_result",
           "printf '%s\\n' \"$PI_EVENT_PAYLOAD\" >> completed.log",
         ),
       ],
@@ -1492,8 +1491,8 @@ describe("unexpected failures fail closed", () => {
     }
     const records = readFileSync(join(cwd, "completed.log"), "utf8").trim().split("\n");
     assert.equal(records.length, 2);
-    assert.match(records[0] ?? "", /"assertionRef":"local\/completed"/);
-    assert.match(records[1] ?? "", /"assertionRef":"local\/later-sibling"/);
+    assert.match(records[0] ?? "", /"hookRef":"local\/completed"/);
+    assert.match(records[1] ?? "", /"hookRef":"local\/later-sibling"/);
     assert.ok(!records.some((record) => record.includes("local/crashes")));
   });
 
@@ -1502,7 +1501,7 @@ describe("unexpected failures fail closed", () => {
       new HookEvaluation(),
       "tool_result",
       toolResult,
-      [assertion("crashes", "tool_result", "true", { filter: invalidFilter })],
+      [hook("crashes", "tool_result", "true", { filter: invalidFilter })],
     );
     assert.equal(result.outcome, "patch");
     if (result.outcome === "patch") {
@@ -1517,7 +1516,7 @@ describe("unexpected failures fail closed", () => {
       evaluator,
       "session_before_switch",
       { reason: "new" },
-      [assertion("crashes", "session_before_switch", "true", {
+      [hook("crashes", "session_before_switch", "true", {
         filter: { reason: "[" },
       })],
     );
@@ -1527,7 +1526,7 @@ describe("unexpected failures fail closed", () => {
       evaluator,
       "session_before_fork",
       { entryId: "entry", position: "at" },
-      [assertion("crashes", "session_before_fork", "true", {
+      [hook("crashes", "session_before_fork", "true", {
         filter: { position: "[" },
       })],
     );
@@ -1535,15 +1534,15 @@ describe("unexpected failures fail closed", () => {
   });
 
   it("turn and settled infrastructure errors become presentation feedback", async () => {
-    for (const [hook, event] of [
+    for (const [kind, event] of [
       ["turn_end", { turnIndex: 1 }],
       ["agent_settled", {}],
     ] as const) {
       const result = await evaluate(
         new HookEvaluation(),
-        hook,
+        kind,
         event,
-        [assertion("crashes", hook, "true", {
+        [hook("crashes", kind, "true", {
           filter: { event: "[" },
         })],
       );
@@ -1558,7 +1557,7 @@ describe("unexpected failures fail closed", () => {
       new HookEvaluation(),
       "agent_end",
       {},
-      [assertion("crashes", "agent_end", "true", {
+      [hook("crashes", "agent_end", "true", {
         filter: { event: "[" },
       })],
     );
