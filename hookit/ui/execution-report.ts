@@ -96,7 +96,7 @@ export interface ReporterObservation {
   readonly startMs: number;
   endMs?: number;
   completed: boolean;
-  rows?: EvaluationReport;
+  report?: EvaluationReport;
 }
 
 function isToolEvent(event: NativeEvent): boolean {
@@ -288,7 +288,8 @@ export class ExecutionReporter {
   }
 
   /**
-   * Close one observation with its optional Hook Evaluation report. Tool
+   * Close one observation after Effect delivery with its optional Evaluation
+   * Report. Tool
    * observations join the pending Execution Wave; ordinary observations build
    * and append their one-segment report immediately when they carry data.
    * Must be called on every exit (including an unexpected escape) so an open
@@ -296,11 +297,11 @@ export class ExecutionReporter {
    */
   complete(
     observation: ReporterObservation,
-    accounting?: EvaluationReport,
+    evaluationReport?: EvaluationReport,
   ): void {
     if (observation.completed) return; // never double-append a report
     observation.endMs = this.now();
-    observation.rows = accounting;
+    observation.report = evaluationReport;
     observation.completed = true;
     if (!isToolEvent(observation.event)) {
       this.appendSingle(observation);
@@ -336,7 +337,7 @@ export class ExecutionReporter {
 
     const hasData = observations.some(
       (observation) =>
-        (observation.rows?.rows.length ?? 0) > 0,
+        (observation.report?.rows.length ?? 0) > 0,
     );
     if (!hasData) return;
 
@@ -365,7 +366,7 @@ export class ExecutionReporter {
               ? eventContext.toolCallId
               : "unknown",
         },
-        rows: snapshotRows(observation.rows),
+        rows: snapshotRows(observation.report),
       };
     });
 
@@ -381,7 +382,7 @@ export class ExecutionReporter {
   }
 
   private appendSingle(observation: ReporterObservation): void {
-    const rows = observation.rows;
+    const rows = observation.report;
     if (rows === undefined || rows.rows.length === 0) return;
     const durationMs = boundedDurationMs(
       (observation.endMs ?? observation.startMs) - observation.startMs,
@@ -408,8 +409,8 @@ export class ExecutionReporter {
   }
 }
 
-function snapshotRows(accounting: EvaluationReport | undefined): EvaluationReportRow[] {
-  return (accounting?.rows ?? []).map(snapshotRow);
+function snapshotRows(report: EvaluationReport | undefined): EvaluationReportRow[] {
+  return (report?.rows ?? []).map(snapshotRow);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

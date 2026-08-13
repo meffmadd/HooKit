@@ -109,9 +109,7 @@ export class HooksState {
     this.entries = Array.from(catalog.entries);
     const valid = new Set(this.entries.map((entry) => this.keyOf(entry)));
     if (this.enablementMode === "defaults") {
-      this.enabledEntries = new Set(
-        this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
-      );
+      this.enabledEntries = this.enabledEntriesFromDefaults();
       return;
     }
     this.enabledEntries = new Set(
@@ -176,6 +174,15 @@ export class HooksState {
     return this.enabledEntries.has(this.keyOf(entry));
   }
 
+  /** Derive direct enablement from the current Catalog defaults. */
+  private enabledEntriesFromDefaults(): Set<string> {
+    return new Set(
+      this.entries
+        .filter((entry) => entry.default)
+        .map((entry) => this.keyOf(entry)),
+    );
+  }
+
   /** Canonical key. UI callers pass Catalog entries; strings must be canonical. */
   private resolveKey(value: CatalogEntry | string): string {
     if (typeof value !== "string") return this.keyOf(value);
@@ -218,9 +225,7 @@ export class HooksState {
       ));
       this.enablementMode = "saved";
     } else {
-      this.enabledEntries = new Set(
-        this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
-      );
+      this.enabledEntries = this.enabledEntriesFromDefaults();
       this.enablementMode = "defaults";
     }
   }

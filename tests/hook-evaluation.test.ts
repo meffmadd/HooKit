@@ -455,12 +455,12 @@ describe("Hook Evaluation Native Event Outcomes", () => {
     assert.equal(row?.passed, true);
     assert.ok((row?.durationMs ?? -1) >= 0);
     assert.ok(Object.isFrozen(row));
-    // Reporting rows carry no Invocation ID or evaluated Event.
+    // Reporting rows carry no Invocation ID or row-level Event.
     assert.ok(
       !("invocationId" in (row ?? {})),
       "no Invocation ID on a report row",
     );
-    assert.ok(!("evaluatedEvent" in (row ?? {})), "no Event on a report row");
+    assert.ok(!("event" in (row ?? {})), "no Event on a report row");
   });
 });
 
@@ -613,6 +613,34 @@ describe("Hook Invocation semantics", () => {
     assert.equal(result.evaluationReport, undefined);
   });
 
+  it("omits a report when presentation and control Effects have no accounted work", async () => {
+    const controlOnly = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [hook("broken-filter", "tool_call", "true", {
+        filter: { toolName: "[" },
+      })],
+    );
+    assert.equal(controlOnly.eventOutcomes[0].outcome, "block");
+    assert.equal(controlOnly.effects.length, 0);
+    assert.equal(controlOnly.evaluationReport, undefined);
+
+    const presentationOnly = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 1 },
+      [hook("broken-filter", "turn_end", "true", {
+        filter: { event: "[" },
+      })],
+    );
+    assert.equal(presentationOnly.eventOutcomes[0].outcome, "report");
+    assert.deepEqual(presentationOnly.effects.map((effect) => effect.type), [
+      "present",
+    ]);
+    assert.equal(presentationOnly.evaluationReport, undefined);
+  });
+
   it("fails closed when a when process cannot execute", async () => {
     const result = await evaluate(
       new HookEvaluation(),
@@ -700,11 +728,11 @@ describe("Hook Invocation semantics", () => {
     const previousSession = process.env.PI_SESSION_ID;
     const previousAgent = process.env.PI_CODING_AGENT;
     const previousInvocationId = process.env.PI_HOOK_INVOCATION_ID;
-    const previousRunId = process.env.PI_HOOK_RUN_ID;
+    const previousLegacyIdentity = process.env.PI_HOOK_RUN_ID;
     process.env.PI_SESSION_ID = "stale";
     process.env.PI_CODING_AGENT = "true";
     process.env.PI_HOOK_INVOCATION_ID = "stale-invocation";
-    process.env.PI_HOOK_RUN_ID = "stale-run";
+    process.env.PI_HOOK_RUN_ID = "stale-invocation";
     try {
       const result = await evaluate(
         new HookEvaluation(),
@@ -731,8 +759,11 @@ describe("Hook Invocation semantics", () => {
       if (previousInvocationId === undefined) {
         delete process.env.PI_HOOK_INVOCATION_ID;
       } else process.env.PI_HOOK_INVOCATION_ID = previousInvocationId;
-      if (previousRunId === undefined) delete process.env.PI_HOOK_RUN_ID;
-      else process.env.PI_HOOK_RUN_ID = previousRunId;
+      if (previousLegacyIdentity === undefined) {
+        delete process.env.PI_HOOK_RUN_ID;
+      } else {
+        process.env.PI_HOOK_RUN_ID = previousLegacyIdentity;
+      }
     }
   });
 });
@@ -1086,6 +1117,43 @@ describe("owned Action evaluation", () => {
       }),
       ["pass", "block", "patch", "cancel", "report"],
     );
+  });
+
+  it("returns deeply immutable Effects in result-major order", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 3 },
+      [
+        hookWithAction("origin", "turn_end", {
+          type: "emit-custom-event",
+          name: "origin:event",
+          data: { nested: { value: 1 } },
+        }),
+        hookWithAction("reactive", "hook_result", {
+          type: "emit-custom-event",
+          name: "reactive:event",
+          data: { nested: { value: 2 } },
+        }),
+      ],
+    );
+
+    const effects = result.effects.filter(
+      (effect) => effect.type === "request-action",
+    );
+    assert.deepEqual(effects.map((effect) => effect.hookRef), [
+      "local/origin",
+      "local/reactive",
+    ]);
+    assert.ok(Object.isFrozen(result.effects));
+    for (const effect of effects) {
+      assert.ok(Object.isFrozen(effect));
+      assert.ok(Object.isFrozen(effect.action));
+      if (effect.action.type === "emit-custom-event") {
+        assert.ok(Object.isFrozen(effect.action.data));
+        assert.ok(Object.isFrozen(effect.action.data?.nested));
+      }
+    }
   });
 
   it("dispatches reactive Actions result-major with origin association", async () => {

@@ -173,7 +173,7 @@ stay distinct; Pi's steering and follow-up settings own batching. Message,
 compact, interrupt, and shutdown Actions can intentionally cause later Pi
 events, so broad Hooks can create continuation loops.
 
-A Hook that should run unconditionally after a native event can omit shell
+A Hook that should run unconditionally after a Native Event can omit shell
 and select `pass`; it becomes an optimized canonical `shell: "true"` Hook.
 It still emits an ordinary `hook_result` event.
 
@@ -274,11 +274,15 @@ but excludes local `default` preference. Updates preserve that preference.
 ## Execution summaries
 
 The optional Evaluation Report on a Hook Evaluation Outcome contains the flat,
-ordered rows for that Evaluation. A durable context-neutral Execution Report
-entry is appended when at least one Hook row or one requested Action is
-recorded. Tool calls and their
-results in one tool execution lifecycle join one combined Execution Wave with a
-single end-to-end duration; ordinary Hook Evaluations append immediately. Exact `true`/`false`
+ordered rows for that Evaluation. It is absent when no main Hook shell starts
+and no Action is selected; Filter misses, false Preconditions, and
+presentation/control Effects alone create no report. A durable context-neutral
+Execution Report entry is appended when at least one Hook row or one requested
+Action is recorded. Tool calls and their results in one tool execution
+lifecycle join one combined Execution Wave with a single end-to-end duration;
+ordinary Hook Evaluations append immediately. Each Evaluation keeps its own
+Event Outcomes; an Execution Wave combines only their Evaluation Reports.
+Exact `true`/`false`
 shortcuts count as normal commands with normal duration presentation. Passing
 preconditions are not counted separately; a `when` infrastructure failure
 before the main command does not invent a command row (only a selected Action
@@ -290,7 +294,10 @@ in Hook Evaluation order with `from <ref> <outcome>` annotations on reactive
 rows — no causal nesting. Action rows show type and owner outcome. Persisted
 report rows contain only bounded identity and outcome data; Invocation IDs,
 row-level Event, Action payload text, shell command text,
-rich callback objects, and storage paths are not persisted.
+rich callback objects, Event Outcomes, and storage paths are not persisted.
+Execution Duration includes Hook Evaluation and every ordered best-effort Effect
+delivery attempt. An incomplete tool lifecycle is discarded rather than given
+an invented duration or report.
 
 ## Commands and trust
 

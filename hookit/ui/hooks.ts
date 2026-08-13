@@ -964,7 +964,7 @@ export function registerHooksCommand(
   state: HooksState,
 ): void {
   pi.registerCommand("hooks", {
-    description: "Activate / deactivate hooks",
+    description: "Enable / disable Hooks and Presets",
     handler: async (_args, ctx) => {
       const trustAware = ctx as ExtensionContext & {
         isProjectTrusted?: () => boolean;

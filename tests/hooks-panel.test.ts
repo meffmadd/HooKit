@@ -320,7 +320,7 @@ describe("HooksPanel", () => {
     );
     assert.ok(
       lines.some((l) => l.includes("active-0")),
-      "shows at least one active hook",
+      "shows at least one Hook in the focused section",
     );
     assert.ok(
       lines.some((l) => l.includes("(1/10)")),
@@ -1144,6 +1144,27 @@ describe("HooksPanel fuzzy search", () => {
     assert.ok(panel.isSearchActive, "search is active after /");
     const lines = panel.render(80);
     assert.ok(queryLine(lines), "renders the /query▏ line");
+  });
+
+  it("registers /hooks with enable/disable language", () => {
+    const state = {
+      entries: [],
+      enabledEntries: new Set<string>(),
+      broken: false,
+      projectTrusted: false,
+      refresh() {},
+      updateStatus() {},
+    } as unknown as HooksState;
+    let description: string | undefined;
+    const pi = {
+      registerCommand(_name: string, command: { description: string }) {
+        description = command.description;
+      },
+    } as unknown as ExtensionAPI;
+
+    registerHooksCommand(pi, state);
+
+    assert.equal(description, "Enable / disable Hooks and Presets");
   });
 
   it("keeps the bottom search hint visible inside the /hooks overlay", async () => {

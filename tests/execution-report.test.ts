@@ -268,6 +268,35 @@ describe("ExecutionReporter tool lifecycle collection", () => {
     assert.ok(!expanded.includes("id empty"), "empty segment header omitted");
   });
 
+  it("5. combines Evaluation Reports without carrying Event Outcomes", () => {
+    const entries: ExecutionReportEntryData[] = [];
+    const clock = makeClock(1000);
+    const reporter = makeReporter(entries, clock);
+
+    reporter.toolStarted("read", "first");
+    const first = reporter.begin("tool_call", toolEventContext("read", "first"));
+    clock.advance(2);
+    reporter.complete(first, makeReport([makeHookRow({ hookRef: "local/first" })]));
+    reporter.toolEnded("read", "first");
+
+    reporter.toolStarted("read", "second");
+    const second = reporter.begin("tool_call", toolEventContext("read", "second"));
+    clock.advance(2);
+    reporter.complete(second, makeReport([makeHookRow({ hookRef: "local/second" })]));
+    reporter.toolEnded("read", "second");
+    reporter.flush();
+
+    assert.equal(entries.length, 1);
+    const entry = entries[0]!;
+    assert.equal(entry.type, "tool-wave");
+    assert.deepEqual(
+      entry.segments.map((segment) => segment.rows[0]?.hookRef),
+      ["local/first", "local/second"],
+    );
+    assert.equal(JSON.stringify(entry).includes("eventOutcomes"), false);
+    assert.equal(JSON.stringify(entry).includes("invocationId"), false);
+  });
+
   it("5. appends nothing for an entirely empty wave", () => {
     const entries: ExecutionReportEntryData[] = [];
     const clock = makeClock(1000);

@@ -506,6 +506,64 @@ describe("index execution entries", () => {
     });
   });
 
+  it("includes every Effect delivery attempt in non-tool Execution Duration", async () => {
+    await withTemporaryHome("HooKit-index-effect-duration-", async (root) => {
+      const ctx = catalogCtx(root);
+      const harness = extensionHarness();
+      let now = 100;
+      const originalNow = performance.now;
+      Object.defineProperty(performance, "now", {
+        configurable: true,
+        value: () => now,
+      });
+      (ctx as unknown as { compact: () => void }).compact = () => {
+        now += 4;
+        throw new Error("first delivery failed");
+      };
+      (harness.pi as unknown as { sendMessage: () => void }).sendMessage = () => {
+        now += 6;
+      };
+      try {
+        await startSession(harness, ctx, {
+          local: {
+            first: {
+              description: "fail one Effect delivery",
+              event: "agent_settled",
+              action: { type: "compact", outcome: "pass" },
+              default: true,
+            },
+            second: {
+              description: "deliver a later Effect",
+              event: "agent_settled",
+              action: {
+                type: "message",
+                outcome: "pass",
+                message: "later",
+                delivery: "followUp",
+              },
+              default: true,
+            },
+          },
+        });
+
+        await harness.handler("agent_settled")({}, ctx);
+
+        assert.equal(harness.entries.length, 1);
+        const entry = harness.entries[0]?.data as {
+          type: string;
+          durationMs: number;
+        };
+        assert.equal(entry.type, "event");
+        assert.equal(entry.durationMs, 10);
+      } finally {
+        Object.defineProperty(performance, "now", {
+          configurable: true,
+          value: originalNow,
+        });
+      }
+    });
+  });
+
   it("finishes tool-result Effect delivery before the matching lifecycle end", async () => {
     await withTemporaryHome("HooKit-index-effect-lifecycle-", async (root) => {
       const ctx = catalogCtx(root);

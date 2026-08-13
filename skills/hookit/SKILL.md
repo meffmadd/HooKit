@@ -119,12 +119,12 @@ Supported payloads:
 
 Selectors are removed from the Action Request Effect. Payload text/data is
 static: there is no environment, template, event, or stdout expansion. Effect
-delivery is ordered and best-effort and cannot alter the already-frozen Native
-Event Outcome.
+delivery is ordered and best-effort and cannot alter any already-frozen Event
+Outcome.
 Multiple message Actions remain distinct; Pi owns steering/follow-up batching.
 Broad Actions can cause later Pi events, so avoid accidental continuation loops.
 
-To request an unconditional Action after a native Event, omit shell and select `pass`.
+To request an unconditional Action after a Native Event, omit shell and select `pass`.
 It remains one Hook, runs as optimized canonical `true`, counts as a normal
 command, and emits an ordinary `hook_result` event.
 
@@ -217,13 +217,17 @@ comparison includes canonical shell and the owned Action but excludes local
 A Hook Evaluation returns one deeply immutable Hook Evaluation Outcome: a
 non-empty ordered `eventOutcomes` sequence (Native Event first), ordered
 Effects, and an optional Evaluation Report. Every Event that records a main
-command or requests an Action is observed. Consecutive Hook Evaluations for
-`tool_call` or `tool_result` in one Execution Wave are combined into a single
-bounded Execution Report that flushes at the
-next event's entry; ordinary events append their report immediately. Optimized commands
+command or requests an Action is observed; Filter misses, false Preconditions,
+and presentation/control Effects alone create no Evaluation Report.
+Consecutive Hook Evaluations for `tool_call` or `tool_result` in one Execution
+Wave contribute only their Evaluation Reports to a single bounded Execution
+Report—Event Outcomes remain separate. The report flushes at the next Event's
+entry; ordinary Events append their report immediately. Optimized commands
 count and render
 normally; preconditions do not count separately. Rows stay flat in Hook
 Evaluation order; reactive work carries an inline `from` origin annotation.
 Durable rows retain bounded Hook refs, outcomes, Action types, pass/fail state,
 and durations—not invocation IDs, message bodies, instructions, event data,
-rich Pi objects, or storage paths.
+rich Pi objects, Event Outcomes, or storage paths. Execution Duration includes
+Hook Evaluation plus every ordered best-effort Effect delivery attempt;
+incomplete tool lifecycles receive no invented duration or report.

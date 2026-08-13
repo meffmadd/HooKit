@@ -347,20 +347,20 @@ export default function (pi: ExtensionAPI) {
       executionEventContext(event, payload),
     );
     let result: HookEvaluationOutcome<H>;
-    let accounting: EvaluationReport | undefined;
+    let evaluationReport: EvaluationReport | undefined;
     try {
       // Both values are captured synchronously at callback entry. Enablement or
       // rich Pi-context changes during awaits apply only to the next Evaluation.
       const enabledSet = state.enabledHookSet();
       const context = hookContext(pi, ctx);
       result = await hookEvaluation.evaluate(event, payload, context, enabledSet);
-      accounting = result.evaluationReport;
+      evaluationReport = result.evaluationReport;
       await deliverEffects(result.effects, ctx);
       await displayControlOutcome(result.eventOutcomes[0], ctx);
     } finally {
       // Completion must also happen on an unexpected escape so an open
       // observation can never poison later reporting.
-      executionReporter.complete(observation, accounting);
+      executionReporter.complete(observation, evaluationReport);
     }
     return result;
   }

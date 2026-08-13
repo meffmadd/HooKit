@@ -1,7 +1,7 @@
 # HooKit
 
 Hooks with outcome-selected owned Actions for Pi events. Reads
-`hookit.json` to decide native outcomes and request supported Pi effects.
+`hookit.json` to decide Event Outcomes and request supported Pi Effects.
 
 ## Architecture
 
@@ -9,11 +9,13 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   checking project trust, loads session state, snapshots Pi's rich callback
   context onto bounded scalar metadata, captures one Enabled Hook Set,
   subscribes passively to Pi's `tool_execution_start`/`_end` lifecycle,
-  brackets each supported native callback with the session ExecutionReporter
+  brackets each supported Native Event callback with the session
+  ExecutionReporter
   (tool-wave collection + combined Execution Wave flush + late append),
   translates the first Event Outcome in each Hook Evaluation Outcome into
-  Pi callbacks, and delivers ordered Effects best-effort. It maps
-  delivery-neutral Action Requests onto ordinary
+  Pi callbacks, and delivers ordered Effects best-effort without changing
+  Event Outcomes when delivery fails. It maps delivery-neutral Action Requests
+  onto ordinary
   Pi context/API operations; it owns no catalog or hook policy.
 - **`hookit/hook-catalog/`** — the session-scoped deep Hook Catalog
   module. Its facade exposes immutable `HookCatalog` snapshots, entries
@@ -62,7 +64,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   tool Hook Evaluation for one tool execution lifecycle into one combined
   Execution Wave that flushes a single report at the next non-tool event entry,
   appends
-  ordinary events immediately, waits for `session_shutdown` to flush a pending
+  ordinary Events immediately, waits for `session_shutdown` to flush a pending
   wave, discards an incomplete tool lifecycle rather than inventing an end, and
   persists one end-to-end `durationMs` = `max(end) − min(start)` across tool
   lifecycle) plus the shared defensive renderer (strict new-shape-only
@@ -127,23 +129,23 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   always have an effective shell.
 - Owned Actions require `outcome`, may select `code`, and observe only their
   immutable owner's Hook Outcome and code. Their selector metadata is stripped
-  from the delivery-neutral Action Request. Selector semantics are shared with the
-  outcome/code fields of `hook_result` filters.
+  from the delivery-neutral Action Request Effect. Selector semantics are
+  shared with the outcome/code fields of `hook_result` Filters.
 - Hook Evaluation freezes the aggregate Native Event Outcome before result-major
   reactions. For each originating Hook Result, the owned Action is considered
   before its Hook Result Event is evaluated through the same private mechanism.
   The outer Evaluation does not project an Event from a reactive Hook Result,
   so that local result can select its owned Action but is never dispatched
   recursively.
-- Tool and lifecycle/session events run all matching Hooks
+- Tool and lifecycle/session Events run all matching Hooks
   sequentially and aggregate failures. Unexpected per-Hook errors fail the
   event closed without stopping siblings and invent no result or Action.
-- The thin adapter maps requests to `ctx.abort`, `ctx.shutdown`, `ctx.compact`,
-  HooKit custom messages, or `pi.events.emit` and delivers siblings
-  best-effort without changing the frozen Native Event Outcome. Reactive Event
-  Outcomes remain observable but have no native-control authority.
+- The thin adapter maps Effects to `ctx.abort`, `ctx.shutdown`, `ctx.compact`,
+  HooKit custom messages, or `pi.events.emit` and delivers them in order,
+  best-effort, without changing Event Outcomes. Only the first Native Event
+  Outcome has Pi control authority; reactive Event Outcomes remain observable.
 - Lifecycle adapters expose bounded scalar candidates through both Filters and
-  JSON `PI_EVENT_PAYLOAD`; rich/native event objects are intentionally deferred.
+  JSON `PI_EVENT_PAYLOAD`; rich Native Event objects are intentionally deferred.
   `hook_result` exposes only `event`, canonical `hookRef`, originating
   `invocationId`, individual Hook `outcome`, and numeric/`null` `code`. Its
   handlers are awaited without the originating abort signal and can never alter
@@ -175,11 +177,15 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   overrides defaults.
 - **One Execution Wave per tool execution lifecycle; one end-to-end duration.** Every
   `tool_call`/`tool_result` Hook Evaluation for a batch joins a single combined
-  wave bracketed by `tool_execution_start`/`_end` lifecycle. The report has one
+  wave bracketed by `tool_execution_start`/`_end` lifecycle. Only Evaluation
+  Reports join the wave; Event Outcomes from independent Evaluations remain
+  separate. The report has one
   `durationMs` = `max(end) − min(start)`; there is no `criticalPathMs`.
   Individual Hook rows measure passing `when` + main `shell`. A wave with
   an incomplete tool lifecycle is discarded rather than assigned an invented
-  end. Tool call and result reports are never split by event.
+  end. Tool call and result reports are never split by Event. Evaluation and
+  every Effect delivery attempt complete before the observation closes, so
+  Execution Duration includes the complete callback-owned work.
 - **Reports are flat ordered rows.** A Hook Evaluation Outcome optionally emits
   one Evaluation Report with one ordered `rows` sequence (originating Hook row, its owned Action row, then reactive
   `hook_result` rows and their Actions, per originating Hook Result). Reporting
