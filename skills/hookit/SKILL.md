@@ -172,9 +172,11 @@ A 5-second timeout bounds shell and precondition execution.
 
 ## Presets and repositories
 
-Presets contain one-level qualified Hook refs (`local/name` or
-`owner/repo/name`). Nested Presets are ignored; duplicate Hooks are
-source-qualified and deduplicated.
+Presets contain unique qualified Hook References (`local/name` or
+`owner/repo/name`). Catalog Entry names are non-empty and contain neither `/`
+nor NUL. Unresolved references remain valid and dangling; a reference resolving
+to another installed Preset makes the Catalog invalid until nesting is
+supported.
 
 ```json
 {

@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type { Action, PersistedEntry } from "./domain/entry.js";
-import { validateHookEntry } from "./domain/validation.js";
+import {
+  isValidEntryName,
+  validateHookEntry,
+} from "./domain/validation.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -135,7 +138,7 @@ export async function fetchHookFile(
   const entries: HookEntries = {};
   for (const [name, def] of Object.entries(parsed as Record<string, unknown>)) {
     const kind = validateHookEntry(def);
-    if (kind) entries[name] = def as PersistedEntry;
+    if (isValidEntryName(name) && kind) entries[name] = def as PersistedEntry;
   }
 
   return entries;

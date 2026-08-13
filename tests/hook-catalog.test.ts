@@ -149,6 +149,22 @@ describe("Hook Catalog creation", () => {
     assert.equal("path" in shared, false, "storage provenance is not exposed");
   });
 
+  it("uses Source plus name as identity regardless of Catalog Entry kind", () => {
+    const paths = locations("identity-across-kinds");
+    writeJson(paths.global, {
+      local: { shared: localShell("global-hook") },
+    });
+    writeJson(paths.project!, {
+      local: { shared: { description: "Project Preset", preset: [] } },
+    });
+
+    const loaded = catalog(HookCatalog.open(paths));
+
+    assert.equal(loaded.entries.length, 1);
+    const shared = find(loaded, id("local", "shared"));
+    assert.ok(shared && "preset" in shared);
+  });
+
   it("loads and clones normalized Hooks with owned Actions", () => {
     const paths = locations("actions");
     const action = {
@@ -410,6 +426,129 @@ describe("Hook Catalog creation", () => {
       assert.match(result.diagnostics[0]!.reason, /unknown event/);
     }
   });
+
+  for (const [label, name] of [
+    ["empty", ""],
+    ["slash", "nested/name"],
+    ["NUL", "nul\x00name"],
+  ] as const) {
+    it(`rejects a Catalog Entry with an ${label} name`, () => {
+      const paths = locations(`invalid-${label}-name`);
+      writeJson(paths.project!, { local: { [name]: localShell() } });
+
+      const result = HookCatalog.open(paths);
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(result.diagnostics[0]!.storage, "project");
+        assert.match(result.diagnostics[0]!.reason, /entry name/);
+      }
+    });
+  }
+
+  it("rejects duplicate Hook References within one Preset", () => {
+    const paths = locations("duplicate-preset-refs");
+    writeJson(paths.project!, {
+      local: {
+        guard: localShell(),
+        bundle: {
+          description: "Repeated member",
+          preset: ["local/guard", "local/guard"],
+        },
+      },
+    });
+
+    const result = HookCatalog.open(paths);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "project");
+      assert.match(result.diagnostics[0]!.reason, /local\/bundle/);
+      assert.match(result.diagnostics[0]!.reason, /Hook or Preset schema/);
+    }
+  });
+
+  it("accepts Preset references that resolve to Hooks or remain dangling", () => {
+    const paths = locations("valid-preset-relations");
+    writeJson(paths.global, {
+      "owner/hooks": { remote: remoteShell },
+    });
+    writeJson(paths.project!, {
+      local: {
+        "local guard": localShell(),
+        bundle: {
+          description: "Available and missing members",
+          preset: [
+            "local/local guard",
+            "owner/hooks/remote",
+            "owner/hooks/missing guard",
+          ],
+        },
+      },
+    });
+
+    const loaded = catalog(HookCatalog.open(paths));
+
+    const bundle = find(loaded, id("local", "bundle"));
+    assert.ok(bundle && "preset" in bundle);
+    assert.deepEqual(bundle.preset, [
+      "local/local guard",
+      "owner/hooks/remote",
+      "owner/hooks/missing guard",
+    ]);
+  });
+
+  it("rejects a cross-Source Preset reference resolved to a Preset after storage merge", () => {
+    const paths = locations("nested-after-merge");
+    writeJson(paths.global, {
+      local: {
+        bundle: { description: "Bundle", preset: ["owner/hooks/member"] },
+      },
+      "owner/hooks": {
+        member: localShell("global-hook"),
+      },
+    });
+    writeJson(paths.project!, {
+      repos: ["owner/hooks"],
+      "owner/hooks": {
+        member: { description: "Project Preset", preset: [] },
+      },
+    });
+
+    const result = HookCatalog.open(paths);
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.diagnostics[0]!.storage, "global");
+      assert.match(result.diagnostics[0]!.reason, /local\/bundle/);
+      assert.match(result.diagnostics[0]!.reason, /owner\/hooks\/member/);
+      assert.match(result.diagnostics[0]!.reason, /Preset/);
+    }
+  });
+
+  it("rejects Preset nesting introduced before refresh without changing the snapshot", () => {
+    const paths = locations("nested-refresh");
+    writeJson(paths.project!, {
+      local: {
+        member: localShell(),
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+    const initial = catalog(HookCatalog.open(paths));
+    writeJson(paths.project!, {
+      local: {
+        member: { description: "Nested", preset: [] },
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+
+    const result = initial.refresh();
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    const member = find(initial, id("local", "member"));
+    assert.ok(member && "shell" in member);
+  });
 });
 
 describe("Hook Catalog mutations", () => {
@@ -506,6 +645,23 @@ describe("Hook Catalog mutations", () => {
     assert.equal(find(initial, id("owner/hooks", "bad")), undefined);
   });
 
+  it("rejects invalid installation names without writing", () => {
+    const paths = locations("invalid-install-name");
+    writeJson(paths.project!, { local: { keep: localShell() } });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [{ identity: id("local", "nested/name"), entry: remoteShell }],
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /entry name/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    assert.equal(find(initial, id("local", "nested/name")), undefined);
+  });
+
   it("rejects duplicate batch identities without writing", () => {
     const paths = locations("duplicate-batch");
     const initial = catalog(HookCatalog.open(paths));
@@ -518,6 +674,56 @@ describe("Hook Catalog mutations", () => {
     });
     assert.equal(result.ok, false);
     assert.equal(existsSync(paths.project!), false);
+  });
+
+  it("atomically rejects a batch that resolves a Preset member to a Preset", () => {
+    const paths = locations("nested-batch");
+    writeJson(paths.project!, { local: { keep: localShell() } });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [
+        {
+          identity: id("owner/hooks", "bundle"),
+          entry: { description: "Bundle", preset: ["owner/hooks/member"] },
+        },
+        {
+          identity: id("owner/hooks", "member"),
+          entry: { description: "Nested", preset: [] },
+        },
+      ],
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    assert.equal(find(initial, id("owner/hooks", "bundle")), undefined);
+  });
+
+  it("rejects installing a Preset at a dangling Hook Reference", () => {
+    const paths = locations("nested-at-dangling-ref");
+    writeJson(paths.project!, {
+      local: {
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "install",
+      entries: [{
+        identity: id("local", "member"),
+        entry: { description: "Nested", preset: [] },
+      }],
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    assert.ok(find(initial, id("local", "bundle")));
   });
 
   it("re-reads before install so unrelated external edits survive", () => {
@@ -647,6 +853,31 @@ describe("Hook Catalog mutations", () => {
     assert.equal(handler.default, true);
   });
 
+  it("atomically rejects an update that turns a referenced Hook into a Preset", () => {
+    const paths = locations("nested-update");
+    writeJson(paths.project!, {
+      local: {
+        member: localShell("keep-hook"),
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "update",
+      identity: id("local", "member"),
+      entry: { description: "Nested", preset: [] },
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    const member = find(initial, id("local", "member"));
+    assert.ok(member && "shell" in member);
+    assert.equal(member.shell, "keep-hook");
+  });
+
   it("uses provenance from the mandatory re-read rather than the old snapshot", () => {
     const paths = locations("fresh-provenance");
     writeJson(paths.global, { local: { moving: localShell("global-old") } });
@@ -699,6 +930,61 @@ describe("Hook Catalog mutations", () => {
     assert.ok(find(fresh, id("owner/other", "same")));
   });
 
+  it("atomically rejects removal when an override would reveal Preset nesting", () => {
+    const paths = locations("remove-reveals-nesting");
+    writeJson(paths.global, {
+      local: {
+        member: { description: "Hidden Preset", preset: [] },
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+    writeJson(paths.project!, {
+      local: { member: localShell("visible-hook") },
+    });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "remove",
+      identity: id("local", "member"),
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    const member = find(initial, id("local", "member"));
+    assert.ok(member && "shell" in member);
+    assert.equal(member.shell, "visible-hook");
+  });
+
+  it("allows Hook removal to leave a dangling Preset member and later resolve it", () => {
+    const paths = locations("remove-to-dangling");
+    writeJson(paths.project!, {
+      local: {
+        member: localShell("original"),
+        bundle: { description: "Bundle", preset: ["local/member"] },
+      },
+    });
+    const initial = catalog(HookCatalog.open(paths));
+
+    const dangling = catalog(initial.mutate({
+      type: "remove",
+      identity: id("local", "member"),
+    }));
+    assert.equal(find(dangling, id("local", "member")), undefined);
+    const bundle = find(dangling, id("local", "bundle"));
+    assert.ok(bundle && "preset" in bundle);
+    assert.deepEqual(bundle.preset, ["local/member"]);
+
+    const resolved = catalog(dangling.mutate({
+      type: "install",
+      entries: [{ identity: id("local", "member"), entry: localShell("restored") }],
+    }));
+    const restored = find(resolved, id("local", "member"));
+    assert.ok(restored && "shell" in restored);
+    assert.equal(restored.shell, "restored");
+  });
+
   it("fails a stale mutation when the identity disappeared after re-read", () => {
     const paths = locations("stale-missing");
     writeJson(paths.project!, { local: { stale: localShell() } });
@@ -748,6 +1034,30 @@ describe("Hook Catalog mutations", () => {
     });
     assert.equal(locked.ok, false);
     if (!locked.ok) assert.match(locked.diagnostics[0]!.reason, /only local/);
+  });
+
+  it("atomically rejects editing a local Preset to reference a Preset", () => {
+    const paths = locations("nested-edit");
+    writeJson(paths.project!, {
+      local: {
+        editable: { description: "Original", preset: [] },
+        nested: { description: "Nested", preset: [] },
+      },
+    });
+    const before = readFileSync(paths.project!, "utf8");
+    const initial = catalog(HookCatalog.open(paths));
+
+    const result = initial.mutate({
+      type: "edit-local-preset",
+      identity: id("local", "editable"),
+      description: "Invalid edit",
+      preset: ["local/nested"],
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.diagnostics[0]!.reason, /nested Presets/);
+    assert.equal(readFileSync(paths.project!, "utf8"), before);
+    assert.equal(find(initial, id("local", "editable"))?.description, "Original");
   });
 
   it("toggles default on the current owner without changing entry content", () => {

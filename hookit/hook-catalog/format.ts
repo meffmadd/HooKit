@@ -9,6 +9,7 @@ import { dirname } from "node:path";
 import { LIFECYCLE_EVENTS, isLifecycleEvent } from "../domain/entry.js";
 import {
   findInvalidFilterRegex,
+  isValidEntryName,
   validateHookEntry,
 } from "../domain/validation.js";
 
@@ -68,6 +69,10 @@ export function validateSectionedFile(file: SectionedFile): string | null {
     if (META_KEYS.has(source)) continue;
     if (!isPlainObject(entries)) return `section "${source}" must be an object`;
     for (const [name, entry] of Object.entries(entries)) {
+      if (!isValidEntryName(name)) {
+        return `section ${JSON.stringify(source)} has invalid entry name ${JSON.stringify(name)}; ` +
+          "names must be non-empty and contain neither / nor NUL";
+      }
       if (validateHookEntry(entry)) continue;
       if (isPlainObject(entry) && typeof entry.event === "string" &&
           !isLifecycleEvent(entry.event)) {

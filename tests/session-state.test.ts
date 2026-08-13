@@ -212,7 +212,7 @@ describe("session state catalog replacement", () => {
 });
 
 describe("session state Active Hook Set", () => {
-  it("expands presets in ref order, deduplicates, and skips dangling or nested refs", async () => {
+  it("expands presets in ref order and skips dangling refs", async () => {
     const { root, global, project, state } = setup("preset");
     const log = join(root, "order.log");
     const append = (name: string) => `printf '${name}\\n' >> '${log}'`;
@@ -220,15 +220,12 @@ describe("session state Active Hook Set", () => {
       local: {
         a: shell(append("a")),
         b: shell(append("b")),
-        nested: { description: "nested", preset: ["local/a"] },
         bundle: {
           description: "bundle",
           preset: [
             "local/b",
             "local/a",
-            "local/a",
             "local/missing",
-            "local/nested",
           ],
         },
       },

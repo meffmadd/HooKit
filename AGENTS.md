@@ -23,9 +23,9 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   canonical source and storage eligibility, whole-record source-preserving
   merge, provenance,
   canonical persisted Hook and Preset records (including effective
-  `shell: "true"`), re-read-before-write mutations, local-default preservation,
-  and best-effort
-  atomic replacement. Every successful mutation
+  `shell: "true"`), post-merge Preset relationship validation, candidate
+  validation before persistence, re-read-before-write mutations, local-default
+  preservation, and best-effort atomic replacement. Every successful mutation
   returns a fresh catalog; failures leave the caller's prior snapshot intact.
 - **`hookit/hook-evaluation/`** — the session-scoped deep Hook Evaluation
   module. Its facade exposes `HookEvaluation`, `createActiveHookSet`, the
@@ -144,6 +144,13 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   is not a supported Event because Pi exposes no cancellation result.
 - Trusted project entries replace global entries only when Hook Source and
   name both match; whole records replace rather than merging fields.
+- **Catalog relationships validate after merge.** Catalog Entry names are
+  non-empty and contain neither `/` nor NUL; Preset Hook References are unique.
+  An unresolved reference remains valid and dangling, while a reference that
+  resolves to a Preset fails the complete Catalog until nesting is supported.
+  Mutation candidates undergo the same validation before persistence, so
+  installing, updating, or editing into known nesting fails atomically; removing
+  a referenced Hook may leave a dangling reference.
 - **Canonical source eligibility is one catalog policy.** A section is valid
   only as `local` or one `owner/repo`. Global canonical sections merge
   independently of project `repos`; every project `owner/repo` section must be

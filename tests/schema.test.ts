@@ -11,7 +11,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import Ajv from "ajv";
-import { validateHookEntry } from "../hookit/domain/validation.js";
+import {
+  isValidEntryName,
+  validateHookEntry,
+} from "../hookit/domain/validation.js";
 
 // ── Load the schema ────────────────────────────────────────────────
 
@@ -102,6 +105,47 @@ describe("owned Action runtime/schema parity", () => {
       assert.equal(runtimeAccepts, expected);
     });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Runtime/schema parity for Catalog Entry identity and Presets
+// ═══════════════════════════════════════════════════════════════════
+
+describe("Catalog Entry runtime/schema parity", () => {
+  for (const [label, name, expected] of [
+    ["ordinary", "guard", true],
+    ["empty", "", false],
+    ["slash", "nested/guard", false],
+    ["NUL", "nul\x00guard", false],
+  ] as const) {
+    it(`keeps ${label} names aligned`, () => {
+      const config = {
+        local: {
+          [name]: { description: "d", event: "tool_call", shell: "true" },
+        },
+      };
+      assert.equal(validate(config), expected, JSON.stringify(validate.errors));
+      assert.equal(isValidEntryName(name), expected);
+    });
+  }
+
+  it("accepts Hook References whose names use otherwise valid characters", () => {
+    const preset = {
+      description: "d",
+      preset: ["local/local guard", "owner/repo/remote guard"],
+    };
+    assert.equal(validate({ local: { bundle: preset } }), true);
+    assert.deepEqual(validateHookEntry(preset), { kind: "preset" });
+  });
+
+  it("rejects duplicate Preset references in schema and runtime validation", () => {
+    const preset = {
+      description: "d",
+      preset: ["local/guard", "local/guard"],
+    };
+    assert.equal(validate({ local: { bundle: preset } }), false);
+    assert.equal(validateHookEntry(preset), null);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

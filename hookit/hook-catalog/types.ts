@@ -26,7 +26,7 @@ export interface CatalogHook extends CatalogEntryBase {
   readonly action?: Action;
 }
 
-/** A validated one-level preset available to session activation. */
+/** A validated Preset containing only available or dangling Hook References. */
 export interface CatalogPreset extends CatalogEntryBase {
   readonly preset: readonly string[];
 }

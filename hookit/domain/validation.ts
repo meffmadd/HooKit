@@ -274,7 +274,7 @@ export function validateEntryShape(
 
 /** Qualified preset refs are `local/name` or `owner/repo/name`. */
 export const REF_RE =
-  /^local\/[A-Za-z0-9._-]+$|^(?!local\/)[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+  /^local\/[^/\x00]+$|^(?!local\/)[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/[^/\x00]+$/;
 
 export function validatePresetShape(
   definition: unknown,
@@ -286,9 +286,16 @@ export function validatePresetShape(
     return false;
   }
   return Array.isArray(definition.preset) &&
+    new Set(definition.preset).size === definition.preset.length &&
     definition.preset.every(
       (ref) => typeof ref === "string" && REF_RE.test(ref),
     );
+}
+
+/** Catalog Entry names keep source-qualified identity and refs unambiguous. */
+export function isValidEntryName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 &&
+    !value.includes("/") && !value.includes("\x00");
 }
 
 export type HookEntryKind = { kind: "hook" } | { kind: "preset" };

@@ -12,6 +12,9 @@
     "local": {
       "type": "object",
       "description": "User-defined Hooks and Presets.",
+      "propertyNames": {
+        "$ref": "#/$defs/entryName"
+      },
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }
@@ -30,6 +33,12 @@
     "$ref": "#/$defs/repo"
   },
   "$defs": {
+    "entryName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\u0000]+$",
+      "description": "Catalog Entry name. Source-qualified identity reserves slash and NUL."
+    },
     "entry": {
       "oneOf": [
         {
@@ -230,7 +239,7 @@
       "additionalProperties": false
     },
     "preset": {
-      "description": "A one-level bundle of source-qualified Hook refs.",
+      "description": "A named list of unique source-qualified Hook References. Unresolved references may dangle; references resolving to Presets are rejected.",
       "type": "object",
       "required": [
         "description",
@@ -242,9 +251,10 @@
         },
         "preset": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^(local/[A-Za-z0-9._-]+|(?!local/)[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"
+            "pattern": "^(local/[^/\\u0000]+|(?!local/)[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[^/\\u0000]+)$"
           }
         },
         "default": {
@@ -782,6 +792,9 @@
     "repo": {
       "type": "object",
       "description": "Hooks and Presets installed from one repository.",
+      "propertyNames": {
+        "$ref": "#/$defs/entryName"
+      },
       "additionalProperties": {
         "$ref": "#/$defs/entry"
       }

@@ -352,6 +352,18 @@ describe("fetchHookFile", () => {
         valid: { description: "Valid.", event: "tool_call", shell: "true" },
       },
     },
+    {
+      label: "skips entries whose names cannot form Catalog identities",
+      content: {
+        "": { description: "Empty name.", event: "tool_call", shell: "true" },
+        "nested/name": { description: "Slash name.", event: "tool_call", shell: "true" },
+        "nul\x00name": { description: "NUL name.", event: "tool_call", shell: "true" },
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
+      },
+      expected: {
+        valid: { description: "Valid.", event: "tool_call", shell: "true" },
+      },
+    },
   ];
 
   for (const { label, content, expected } of passCases) {

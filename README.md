@@ -65,6 +65,8 @@ An executable entry is always a **Hook**:
 - `action` is optional and singular.
 - A Preset uses `description`, `preset`, and optional `default`; it cannot carry
   executable fields.
+- Catalog Entry names are non-empty and contain neither `/` nor NUL.
+- Hook References within one Preset are unique.
 
 Boolean shell values are invalid. An entry with neither shell nor Action is
 invalid. Standalone Action records without `outcome` are invalid.
@@ -223,9 +225,10 @@ environment before each real shell so stale parent values cannot leak in.
 
 ## Presets, sources, and updates
 
-Presets contain qualified refs (`local/name` or `owner/repo/name`) and expand one
-level in ref order. They reference Hooks uniformly; nested Presets are not
-expanded. Duplicate members are removed by source-qualified identity.
+Presets contain unique qualified Hook References (`local/name` or
+`owner/repo/name`) and expand in reference order. Unresolved references remain
+valid and dangling. A reference that resolves to another installed Preset makes
+the complete Catalog invalid until nested Presets are supported.
 
 ```json
 {

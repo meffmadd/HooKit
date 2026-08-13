@@ -1,5 +1,5 @@
 import type { EntryFilter, PersistedEntry } from "../domain/entry.js";
-import { cloneAction, entryKey } from "../domain/entry.js";
+import { cloneAction, entryKey, HookIndex } from "../domain/entry.js";
 import {
   iterSections,
   readSectionedFile,
@@ -8,6 +8,7 @@ import {
   type SectionedFile,
 } from "./format.js";
 import {
+  isValidEntryName,
   validateEntryShape,
   validatePresetShape,
   validateHookEntry,
@@ -87,28 +88,13 @@ function cloneLocations(
   };
 }
 
-function readSnapshot(locations: CatalogStorageLocations): SnapshotResult {
-  const requested: Array<readonly [CatalogStorage, string]> = [
-    ["global", locations.global],
-  ];
-  if (locations.project !== undefined) {
-    requested.push(["project", locations.project]);
-  }
-
-  const files = new Map<CatalogStorage, AuthorizedFile>();
+function snapshotFromFiles(
+  files: ReadonlyMap<CatalogStorage, AuthorizedFile>,
+): SnapshotResult {
   const diagnostics: CatalogDiagnostic[] = [];
-  for (const [storage, path] of requested) {
-    try {
-      const content = readSectionedFile(path);
-      const validationError = validateSectionedFile(content);
-      if (validationError) {
-        diagnostics.push({ storage, reason: validationError });
-        continue;
-      }
-      files.set(storage, { storage, path, content });
-    } catch (error) {
-      diagnostics.push({ storage, reason: errorReason(error) });
-    }
+  for (const { storage, content } of files.values()) {
+    const validationError = validateSectionedFile(content);
+    if (validationError) diagnostics.push({ storage, reason: validationError });
   }
   if (diagnostics.length > 0) return { ok: false, diagnostics };
 
@@ -158,17 +144,61 @@ function readSnapshot(locations: CatalogStorageLocations): SnapshotResult {
 
   if (diagnostics.length > 0) return { ok: false, diagnostics };
 
+  const entries = Array.from(merged.values());
+  const index = new HookIndex(entries);
+  for (const entry of entries) {
+    if (!isCatalogPreset(entry)) continue;
+    for (const ref of entry.preset) {
+      const target = index.getRef(ref);
+      if (!target || !isCatalogPreset(target)) continue;
+      diagnostics.push({
+        storage: provenance.get(entryKey(entry.source, entry.name)),
+        reason: `Preset ${JSON.stringify(identityLabel(entry))} references Preset ` +
+          `${JSON.stringify(identityLabel(target))}; nested Presets are not supported`,
+      });
+    }
+  }
+  if (diagnostics.length > 0) return { ok: false, diagnostics };
+
   return {
     ok: true,
     snapshot: {
       files,
-      entries: Object.freeze(Array.from(merged.values())),
+      entries: Object.freeze(entries),
       repositories: Object.freeze(
         files.get("project")?.content.repos?.slice() ?? [],
       ),
       provenance,
     },
   };
+}
+
+function readSnapshot(locations: CatalogStorageLocations): SnapshotResult {
+  const requested: Array<readonly [CatalogStorage, string]> = [
+    ["global", locations.global],
+  ];
+  if (locations.project !== undefined) {
+    requested.push(["project", locations.project]);
+  }
+
+  const files = new Map<CatalogStorage, AuthorizedFile>();
+  const diagnostics: CatalogDiagnostic[] = [];
+  for (const [storage, path] of requested) {
+    try {
+      const content = readSectionedFile(path);
+      const validationError = validateSectionedFile(content);
+      if (validationError) {
+        diagnostics.push({ storage, reason: validationError });
+        continue;
+      }
+      files.set(storage, { storage, path, content });
+    } catch (error) {
+      diagnostics.push({ storage, reason: errorReason(error) });
+    }
+  }
+  return diagnostics.length > 0
+    ? { ok: false, diagnostics }
+    : snapshotFromFiles(files);
 }
 
 function cloneFilter(filter: EntryFilter): EntryFilter {
@@ -369,12 +399,15 @@ export class HookCatalog {
       return failure(errorReason(error));
     }
     if (!target.ok) return target;
-    if (target.file) {
-      try {
-        writeSectionedFile(target.file.path, target.file.content);
-      } catch (error) {
-        return failure(errorReason(error), target.file.storage);
-      }
+    const candidate = snapshotFromFiles(snapshot.files);
+    if (!candidate.ok) return candidate;
+    if (!target.file) {
+      return { ok: true, catalog: new HookCatalog(this.locations, candidate.snapshot) };
+    }
+    try {
+      writeSectionedFile(target.file.path, target.file.content);
+    } catch (error) {
+      return failure(errorReason(error), target.file.storage);
     }
 
     return HookCatalog.open(this.locations);
@@ -419,6 +452,12 @@ export class HookCatalog {
       if (identity.source !== "local" && !REPOSITORY_SOURCE.test(identity.source)) {
         return failure(
           `invalid hook source ${JSON.stringify(identity.source)}; expected local or owner/repo`,
+        );
+      }
+      if (!isValidEntryName(identity.name)) {
+        return failure(
+          `invalid entry name ${JSON.stringify(identity.name)}; ` +
+            "names must be non-empty and contain neither / nor NUL",
         );
       }
       const key = entryKey(identity.source, identity.name);
