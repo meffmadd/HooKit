@@ -30,12 +30,13 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **`hookit/hook-evaluation/`** — the session-scoped deep Hook Evaluation
   module. Its facade exposes `HookEvaluation`, `createEnabledHookSet`, the
   typed native event map, bounded execution context, explicit outcomes, and
-  delivery-neutral effects. Private collaborators own the exhaustive adapter
-  registry, candidate/filter/environment projection, filter → `when` → shell
-  Hook Invocations, immutable individual Hook Results, shared
-  outcome/code selector matching, result-major owned-Action plus synthetic
-  `hook_result` processing, fail-closed aggregation, one ordered report row
-  sequence, and corrective retry deduplication. Ordinary
+  delivery-neutral effects. One private Event-evaluation mechanism uses the
+  exhaustive adapter registry for candidate/filter/environment projection,
+  filter → `when` → shell Hook Invocations, immutable individual Hook Results,
+  fail-closed aggregation, owned-Action selection, Effects, and ordered report
+  rows for both Native Events and Hook Result Events. The outer Hook Evaluation
+  alone projects Hook Result Events and prevents recursion; corrective retry
+  deduplication remains session-scoped. Ordinary
   shells run via real `child_process.exec`; exact `true`/`false` shortcuts stay
   hidden in the shared evaluator. No shell port exists solely for tests.
 - **`hookit/domain/entry.ts` / `domain/validation.ts`** — shared persisted
@@ -124,10 +125,12 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   immutable owner result. Their selector metadata is stripped from the
   delivery-neutral Action Request. Selector semantics are shared with the
   outcome/code fields of `hook_result` filters.
-- Hook Evaluation freezes the aggregate native outcome before result-major
-  reactions. For each originating Hook Result, the owned Action is considered before
-  configured `hook_result` Hooks. A synthetic Hook's local result
-  can select its owned Action but is never redispatched recursively.
+- Hook Evaluation freezes the aggregate Native Event outcome before result-major
+  reactions. For each originating Hook Result, the owned Action is considered
+  before its Hook Result Event is evaluated through the same private mechanism.
+  The outer Evaluation does not project an Event from a reactive Hook Result,
+  so that local result can select its owned Action but is never dispatched
+  recursively.
 - Tool and lifecycle/session events run all matching Hooks
   sequentially and aggregate failures. Unexpected per-Hook errors fail the
   event closed without stopping siblings and invent no result or Action.

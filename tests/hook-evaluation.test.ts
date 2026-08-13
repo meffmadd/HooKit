@@ -296,6 +296,7 @@ describe("Hook Evaluation native outcomes", () => {
       );
       assert.ok(Object.isFrozen(result.patch));
       assert.ok(Object.isFrozen(result.patch.content));
+      assert.ok(Object.isFrozen(result.patch.details));
     }
   });
 
@@ -1133,6 +1134,81 @@ describe("owned Action evaluation", () => {
 });
 
 describe("synthetic hook_result phase", () => {
+  it("applies shared Event semantics to Native and Hook Result Events", async () => {
+    const cwd = caseDirectory("shared-event-semantics");
+    const result = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 2 },
+      [
+        hook("native-filter-miss", "turn_end", "touch native-filter-miss", {
+          filter: { turnIndex: 99 },
+        }),
+        hook("native-precondition-false", "turn_end", "touch native-when-false", {
+          when: "false",
+        }),
+        hookWithAction("native-action-only", "turn_end", {
+          type: "interrupt",
+        }),
+        hook("reactive-filter-miss", "hook_result", "touch reactive-filter-miss", {
+          filter: { hookRef: "^missing/" },
+        }),
+        hook("reactive-precondition-false", "hook_result", "touch reactive-when-false", {
+          when: "false",
+        }),
+        hookWithAction("reactive-action-only", "hook_result", {
+          type: "shutdown",
+        }),
+        hookWithAction("reactive-broken-precondition", "hook_result", {
+          type: "compact",
+          outcome: "report",
+          code: null,
+        }, {
+          when: "bad\0command",
+        }),
+      ],
+      cwd,
+    );
+
+    assert.equal(result.outcome, "pass");
+    for (const marker of [
+      "native-filter-miss",
+      "native-when-false",
+      "reactive-filter-miss",
+      "reactive-when-false",
+    ]) {
+      assert.equal(existsSync(join(cwd, marker)), false);
+    }
+    assert.deepEqual(
+      result.effects
+        .filter((effect) => effect.type === "request-action")
+        .map((effect) => ({ hookRef: effect.hookRef, action: effect.action.type })),
+      [
+        { hookRef: "local/native-action-only", action: "interrupt" },
+        { hookRef: "local/reactive-action-only", action: "shutdown" },
+        { hookRef: "local/reactive-broken-precondition", action: "compact" },
+      ],
+    );
+    assert.deepEqual(
+      hookRows(result.executionReport).map((row) => ({
+        hookRef: row.hookRef,
+        origin: row.origin?.hookRef,
+      })),
+      [
+        { hookRef: "local/native-action-only", origin: undefined },
+        {
+          hookRef: "local/reactive-action-only",
+          origin: "local/native-action-only",
+        },
+      ],
+      "code-null infrastructure failure selects its Action without inventing a shell row",
+    );
+    assert.match(
+      presentationMessages(result).at(-1) ?? "",
+      /1 hook_result hook failed/,
+    );
+  });
+
   it("awaits handlers in result-major, configured-handler order", async () => {
     const cwd = caseDirectory("synthetic-order");
     const result = await evaluate(
@@ -1308,6 +1384,41 @@ describe("synthetic hook_result phase", () => {
     assert.equal("runId" in payload, false);
   });
 
+  it("uses hook_result fail-closed policy for an unexpected handler error", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [
+        hook("origin", "tool_call", "true"),
+        hook("crashes", "hook_result", "true", {
+          filter: { hookRef: "[" },
+        }),
+        hookWithAction("later-sibling", "hook_result", {
+          type: "shutdown",
+        }),
+      ],
+    );
+
+    assert.equal(result.outcome, "pass");
+    assert.deepEqual(
+      result.effects
+        .filter((effect) => effect.type === "request-action")
+        .map((effect) => effect.hookRef),
+      ["local/later-sibling"],
+    );
+    assert.deepEqual(
+      hookRows(result.executionReport).map((row) => row.hookRef),
+      ["local/origin", "local/later-sibling"],
+      "the crashing Hook invents no result or report row",
+    );
+    assert.equal(presentationMessages(result).length, 1);
+    assert.match(
+      presentationMessages(result)[0] ?? "",
+      /^HooKit: hook_result hooks failed to execute —/,
+    );
+  });
+
   it("isolates handler errors and failures while continuing siblings", async () => {
     const cwd = caseDirectory("synthetic-isolation");
     const result = await evaluate(
@@ -1332,11 +1443,11 @@ describe("synthetic hook_result phase", () => {
     assert.equal(result.outcome, "pass");
     assert.ok(existsSync(join(cwd, "sibling")));
     assert.deepEqual(result.effects.map((effect) => effect.type), [
-      "present",
-      "present",
       "request-action",
       "present",
-    ]);
+      "present",
+      "present",
+    ], "result-major Action work precedes unrelated crash diagnostics");
     assert.match(presentationMessages(result)[0] ?? "", /bad-filter.*failed to execute/);
     assert.match(
       presentationMessages(result)[1] ?? "",
