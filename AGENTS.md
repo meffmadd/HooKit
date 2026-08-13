@@ -137,7 +137,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - Lifecycle adapters expose bounded scalar candidates through both filters and
   JSON `PI_EVENT_PAYLOAD`; rich/native event objects are intentionally deferred.
   `hook_result` exposes only `event`, canonical `hookRef`, originating
-  `runId`, individual `outcome`, and numeric/`null` `code`. Its handlers are
+  `invocationId`, individual `outcome`, and numeric/`null` `code`. Its handlers are
   awaited without the originating abort signal and can never alter the frozen
   originating outcome; handler Hook/invocation identity remains separate.
 - `session_before_switch` and `session_before_fork` can cancel. `session_shutdown`
@@ -174,7 +174,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **Reports are flat ordered rows.** Hook Evaluation emits one ordered
   `rows` sequence (originating Hook row, its owned Action row, then synthetic
   `hook_result` rows and their Actions, per originating Hook Result). Reporting rows
-  carry no `runId`, row-level event, origin `runId`, Action payload, shell text,
+  carry no Invocation ID, row-level event, origin Invocation ID, Action payload, shell text,
   or depth. The renderer draws those rows flat with `from` origin annotations —
   no causal maps, consumed sets, or synthetic display-only result rows.
 - **Fuzzy search ranks by coarse field tier, not relevance.** Entries rank by

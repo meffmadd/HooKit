@@ -455,7 +455,9 @@ type ReportedOrigin = {
 };
 
 function parseOrigin(value: unknown): ReportedOrigin | undefined {
-  if (!isRecord(value)) return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, ["hookRef", "outcome"])) {
+    return undefined;
+  }
   const hookRef = requiredText(value.hookRef, MAX_LABEL_LENGTH);
   if (hookRef === undefined || !isHookResultOutcome(value.outcome)) {
     return undefined;
@@ -463,10 +465,22 @@ function parseOrigin(value: unknown): ReportedOrigin | undefined {
   return { hookRef, outcome: value.outcome };
 }
 
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
 function parseRow(value: unknown): EvaluationReportRow | undefined {
   if (!isRecord(value) || value.type !== "hook" && value.type !== "action") {
     return undefined;
   }
+  const rowKeys = value.type === "hook"
+    ? ["type", "hookRef", "durationMs", "passed", "origin"]
+    : ["type", "hookRef", "actionType", "outcome", "origin"];
+  if (!hasOnlyKeys(value, rowKeys)) return undefined;
+
   const hookRef = requiredText(value.hookRef, MAX_LABEL_LENGTH);
   if (hookRef === undefined) return undefined;
 

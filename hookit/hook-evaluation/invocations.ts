@@ -48,7 +48,7 @@ interface InvocationOptions {
 
 export function invocationEnvironment<E>(
   hook: Pick<EnabledHook, "source" | "name" | "event">,
-  runId: string,
+  invocationId: string,
   adapter: EventAdapter<E>,
   event: E,
   context: EvaluationContext,
@@ -57,14 +57,14 @@ export function invocationEnvironment<E>(
     ...adapter.buildEnvironment(event, context),
     PI_HOOK_REF: entryRef(hook.source, hook.name),
     PI_HOOK_EVENT: hook.event,
-    PI_HOOK_RUN_ID: runId,
+    PI_HOOK_INVOCATION_ID: invocationId,
     PI_EVENT: adapter.event,
   };
 }
 
 function hookResult(
   hook: EnabledHook,
-  runId: string,
+  invocationId: string,
   outcome: HookResult["outcome"],
   code: number | null,
   originatingResult: OriginatingHookResult | undefined,
@@ -72,7 +72,7 @@ function hookResult(
   return Object.freeze({
     event: "hook_result",
     hookRef: entryRef(hook.source, hook.name),
-    runId,
+    invocationId,
     evaluatedEvent: hook.event,
     outcome,
     code,
@@ -110,10 +110,10 @@ export async function invokeHooks<E>(
       const matches = adapter.matchesFilter ?? matchFilter;
       if (!matches(hook.filter, adapter.candidate(event))) continue;
 
-      const runId = randomUUID();
+      const invocationId = randomUUID();
       const env = invocationEnvironment(
         hook,
-        runId,
+        invocationId,
         adapter,
         event,
         context,
@@ -140,7 +140,7 @@ export async function invokeHooks<E>(
           invocations.push({
             result: hookResult(
               hook,
-              runId,
+              invocationId,
               adapter.failureAction,
               null,
               options.originatingResult,
@@ -160,7 +160,7 @@ export async function invokeHooks<E>(
       invocations.push({
         result: hookResult(
           hook,
-          runId,
+          invocationId,
           shellResult.passed ? "pass" : adapter.failureAction,
           shellResult.code,
           options.originatingResult,

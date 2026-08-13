@@ -602,7 +602,29 @@ describe("ExecutionReport rendering", () => {
         tools: [{ toolName: "r", toolCallId: "x" }],
         segments: [{
           eventContext: toolEventContext("read", "x"),
-          rows: [{ type: "hook", runId: "bad-run" }],
+          rows: [{
+            type: "hook",
+            hookRef: "local/guard",
+            durationMs: 1,
+            passed: true,
+            invocationId: "bad-invocation",
+          }],
+        }],
+      },
+      {
+        type: "tool-wave",
+        durationMs: 2,
+        tools: [{ toolName: "r", toolCallId: "x" }],
+        segments: [{
+          eventContext: toolEventContext("read", "x"),
+          rows: [{
+            ...makeHookRow(),
+            origin: {
+              hookRef: "local/origin",
+              outcome: "pass",
+              invocationId: "bad-origin-invocation",
+            },
+          }],
         }],
       },
       {

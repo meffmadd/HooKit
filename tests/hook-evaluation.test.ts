@@ -393,8 +393,11 @@ describe("Hook Evaluation native outcomes", () => {
     assert.equal(row?.passed, true);
     assert.ok((row?.durationMs ?? -1) >= 0);
     assert.ok(Object.isFrozen(row));
-    // Reporting rows carry no invocation identity or evaluated Event.
-    assert.ok(!("runId" in (row ?? {})), "no runId on a report row");
+    // Reporting rows carry no Invocation ID or evaluated Event.
+    assert.ok(
+      !("invocationId" in (row ?? {})),
+      "no Invocation ID on a report row",
+    );
     assert.ok(!("evaluatedEvent" in (row ?? {})), "no Event on a report row");
   });
 });
@@ -416,7 +419,7 @@ describe("Hook Invocation semantics", () => {
   it("runs filter then when then shell with one shared environment", async () => {
     const cwd = caseDirectory("when-shell-environment");
     const print =
-      "printf '%s|%s|%s|%s|%s\\n' \"$PI_HOOK_REF\" \"$PI_HOOK_EVENT\" \"$PI_HOOK_RUN_ID\" \"$PI_EVENT\" \"$PI_SESSION_ID\"";
+      "printf '%s|%s|%s|%s|%s\\n' \"$PI_HOOK_REF\" \"$PI_HOOK_EVENT\" \"$PI_HOOK_INVOCATION_ID\" \"$PI_EVENT\" \"$PI_SESSION_ID\"";
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
@@ -435,23 +438,23 @@ describe("Hook Invocation semantics", () => {
     const shellIdentity = readFileSync(join(cwd, "shell.log"), "utf8").trim();
     assert.equal(shellIdentity, whenIdentity);
     assert.equal(hookRows(result.executionReport).length, 1);
-    const [ref, hookEvent, runId, event, session] = shellIdentity.split("|");
+    const [ref, hookEvent, invocationId, event, session] = shellIdentity.split("|");
     assert.equal(ref, "owner/hooks/identity");
     assert.equal(hookEvent, "tool_call");
-    assert.match(runId ?? "", UUID_PATTERN);
+    assert.match(invocationId ?? "", UUID_PATTERN);
     assert.equal(event, "tool_call");
     assert.equal(session, "session-123");
   });
 
-  it("uses distinct run IDs for sibling invocations", async () => {
-    const cwd = caseDirectory("sibling-run-ids");
+  it("uses distinct Invocation IDs for sibling Invocations", async () => {
+    const cwd = caseDirectory("sibling-invocation-ids");
     const result = await evaluate(
       new HookEvaluation(),
       "turn_end",
       { turnIndex: 1 },
       [
-        hook("one", "turn_end", "printf '%s\\n' \"$PI_HOOK_RUN_ID\" >> ids.log"),
-        hook("two", "turn_end", "printf '%s\\n' \"$PI_HOOK_RUN_ID\" >> ids.log"),
+        hook("one", "turn_end", "printf '%s\\n' \"$PI_HOOK_INVOCATION_ID\" >> ids.log"),
+        hook("two", "turn_end", "printf '%s\\n' \"$PI_HOOK_INVOCATION_ID\" >> ids.log"),
       ],
       cwd,
     );
@@ -644,11 +647,15 @@ describe("Hook Invocation semantics", () => {
     assert.equal(existsSync(join(cwd, "marker")), false);
   });
 
-  it("strips stale managed environment while inheriting unrelated values", async () => {
+  it("strips stale old and new managed identity variables", async () => {
     const previousSession = process.env.PI_SESSION_ID;
     const previousAgent = process.env.PI_CODING_AGENT;
+    const previousInvocationId = process.env.PI_HOOK_INVOCATION_ID;
+    const previousRunId = process.env.PI_HOOK_RUN_ID;
     process.env.PI_SESSION_ID = "stale";
     process.env.PI_CODING_AGENT = "true";
+    process.env.PI_HOOK_INVOCATION_ID = "stale-invocation";
+    process.env.PI_HOOK_RUN_ID = "stale-run";
     try {
       const result = await evaluate(
         new HookEvaluation(),
@@ -657,7 +664,11 @@ describe("Hook Invocation semantics", () => {
         [hook(
           "environment",
           "tool_call",
-          "test \"$PI_SESSION_ID\" = current && test \"$PI_CODING_AGENT\" = true",
+          "test \"$PI_SESSION_ID\" = current && " +
+            "test \"$PI_CODING_AGENT\" = true && " +
+            "test -n \"$PI_HOOK_INVOCATION_ID\" && " +
+            "test \"$PI_HOOK_INVOCATION_ID\" != stale-invocation && " +
+            "test -z \"${PI_HOOK_RUN_ID+x}\"",
         )],
         root,
         context(root, { metadata: { PI_SESSION_ID: "current" } }),
@@ -668,6 +679,11 @@ describe("Hook Invocation semantics", () => {
       else process.env.PI_SESSION_ID = previousSession;
       if (previousAgent === undefined) delete process.env.PI_CODING_AGENT;
       else process.env.PI_CODING_AGENT = previousAgent;
+      if (previousInvocationId === undefined) {
+        delete process.env.PI_HOOK_INVOCATION_ID;
+      } else process.env.PI_HOOK_INVOCATION_ID = previousInvocationId;
+      if (previousRunId === undefined) delete process.env.PI_HOOK_RUN_ID;
+      else process.env.PI_HOOK_RUN_ID = previousRunId;
     }
   });
 });
@@ -753,7 +769,7 @@ describe("owned Action evaluation", () => {
       "test \"$PI_HOOK_EVENT\" = tool_call && " +
       "test \"$PI_EVENT\" = tool_call && " +
       "test \"$PI_TOOL_NAME\" = bash && " +
-      `printf '%s' "$PI_HOOK_RUN_ID" > ${name}.id`;
+      `printf '%s' "$PI_HOOK_INVOCATION_ID" > ${name}.id`;
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
@@ -772,11 +788,17 @@ describe("owned Action evaluation", () => {
 
     const effects = result.effects.filter((effect) => effect.type === "request-action");
     assert.equal(effects.length, 2);
-    assert.equal(readFileSync(join(cwd, "first.id"), "utf8"), effects[0]?.runId);
-    assert.equal(readFileSync(join(cwd, "second.id"), "utf8"), effects[1]?.runId);
-    assert.match(effects[0]?.runId ?? "", UUID_PATTERN);
-    assert.match(effects[1]?.runId ?? "", UUID_PATTERN);
-    assert.notEqual(effects[0]?.runId, effects[1]?.runId);
+    assert.equal(
+      readFileSync(join(cwd, "first.id"), "utf8"),
+      effects[0]?.invocationId,
+    );
+    assert.equal(
+      readFileSync(join(cwd, "second.id"), "utf8"),
+      effects[1]?.invocationId,
+    );
+    assert.match(effects[0]?.invocationId ?? "", UUID_PATTERN);
+    assert.match(effects[1]?.invocationId ?? "", UUID_PATTERN);
+    assert.notEqual(effects[0]?.invocationId, effects[1]?.invocationId);
     assert.deepEqual(
       hookRows(result.executionReport).map((row) => row.hookRef),
       ["local/first", "local/second"],
@@ -1185,7 +1207,7 @@ describe("synthetic hook_result phase", () => {
         hook("matching", "hook_result", "printf 'match\\n' >> match.log", {
           filter: {
             hookRef: "^local/fails$",
-            runId: "^[0-9a-f-]+$",
+            invocationId: "^[0-9a-f-]+$",
             outcome: "report",
             code: 7,
           },
@@ -1199,7 +1221,7 @@ describe("synthetic hook_result phase", () => {
         hookWithAction("matching-action", "hook_result", { type: "interrupt" }, {
           filter: {
             hookRef: "^local/fails$",
-            runId: "^[0-9a-f-]+$",
+            invocationId: "^[0-9a-f-]+$",
             outcome: "report",
             code: 7,
           },
@@ -1248,30 +1270,42 @@ describe("synthetic hook_result phase", () => {
     );
   });
 
-  it("keeps origin and handler invocation identities separate", async () => {
+  it("shares the origin Invocation ID while keeping the handler ID separate", async () => {
     const cwd = caseDirectory("synthetic-identities");
     const result = await evaluate(
       new HookEvaluation(),
       "tool_call",
       toolCall,
       [
-        hook("origin", "tool_call", "true"),
-        hook(
-          "handler",
-          "hook_result",
-          "printf '%s|%s\\n' \"$PI_HOOK_RUN_ID\" \"$PI_EVENT_PAYLOAD\" > identities.log",
-        ),
+        hookWithAction("origin", "tool_call", { type: "interrupt" }, {
+          shell: "printf '%s' \"$PI_HOOK_INVOCATION_ID\" > origin.id",
+        }),
+        hookWithAction("handler", "hook_result", { type: "shutdown" }, {
+          shell:
+            "printf '%s|%s\\n' \"$PI_HOOK_INVOCATION_ID\" \"$PI_EVENT_PAYLOAD\" > identities.log",
+        }),
       ],
       cwd,
     );
     assert.equal(result.outcome, "pass");
     const line = readFileSync(join(cwd, "identities.log"), "utf8").trim();
     const separator = line.indexOf("|");
-    const handlerRunId = line.slice(0, separator);
-    const payload = JSON.parse(line.slice(separator + 1)) as { runId: string };
-    assert.match(handlerRunId, UUID_PATTERN);
-    assert.match(payload.runId, UUID_PATTERN);
-    assert.notEqual(handlerRunId, payload.runId);
+    const handlerInvocationId = line.slice(0, separator);
+    const payload = JSON.parse(line.slice(separator + 1)) as {
+      invocationId: string;
+    };
+    const originInvocationId = readFileSync(join(cwd, "origin.id"), "utf8");
+    const actionFor = (hookRef: string) =>
+      result.effects.find((effect) =>
+        effect.type === "request-action" && effect.hookRef === hookRef
+      );
+
+    assert.match(handlerInvocationId, UUID_PATTERN);
+    assert.equal(payload.invocationId, originInvocationId);
+    assert.equal(actionFor("local/origin")?.invocationId, originInvocationId);
+    assert.equal(actionFor("local/handler")?.invocationId, handlerInvocationId);
+    assert.notEqual(handlerInvocationId, originInvocationId);
+    assert.equal("runId" in payload, false);
   });
 
   it("isolates handler errors and failures while continuing siblings", async () => {

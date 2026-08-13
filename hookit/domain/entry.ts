@@ -36,7 +36,7 @@ export interface HookResultEvent {
   readonly event: "hook_result";
   readonly hookRef: string;
   /** Correlation ID of the originating Hook Invocation. */
-  readonly runId: string;
+  readonly invocationId: string;
   readonly outcome: HookResultOutcome;
   readonly code: number | null;
 }

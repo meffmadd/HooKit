@@ -180,10 +180,10 @@ Tool candidates are `{ ...event.input, toolName }`. Lifecycle candidates expose
 only documented bounded scalars. `hook_result` exposes:
 
 ```text
-{ event: "hook_result", hookRef, runId, outcome, code }
+{ event: "hook_result", hookRef, invocationId, outcome, code }
 ```
 
-Its filter is limited to `event`, source-qualified `hookRef`, `runId`,
+Its filter is limited to `event`, source-qualified `hookRef`, `invocationId`,
 `outcome`, and `code`. Identity fields use regex matching; outcome/code use the
 exact selector semantics above.
 
@@ -221,7 +221,7 @@ environment projection.
 Every reached `when` and main shell receives inherited environment plus bounded
 Pi metadata and invocation fields:
 
-- `PI_HOOK_REF`, `PI_HOOK_EVENT`, `PI_HOOK_RUN_ID`
+- `PI_HOOK_REF`, `PI_HOOK_EVENT`, `PI_HOOK_INVOCATION_ID`
 - `PI_EVENT`, `PI_CWD`
 - tool events: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`; tool results
   also receive `PI_TOOL_RESULT` and `PI_TOOL_IS_ERROR`
@@ -229,8 +229,8 @@ Pi metadata and invocation fields:
 - captured metadata such as session, model, provider, reasoning, trust, and
   context-window values when available
 
-A `when` and its main shell share one run ID. Owned Actions share that same
-source-qualified ref and run ID. Managed keys are cleared from the ambient
+A `when` and its main shell share one Invocation ID. Owned Actions share that
+same source-qualified ref and Invocation ID. Managed keys are cleared from the ambient
 environment before each real shell so stale parent values cannot leak in.
 
 ## Presets, sources, and updates
@@ -276,8 +276,8 @@ Expanded summaries show source-qualified Hook refs, pass/fail status,
 individual `when` + `shell` duration, and requested Action type, rendered flat
 in Hook Evaluation order with `from <ref> <outcome>` annotations on synthetic
 rows — no causal nesting. Action rows show type and owner outcome. Persisted
-report rows contain only bounded identity and outcome data; invocation
-identity (`runId`), row-level event, Action payload text, shell command text,
+report rows contain only bounded identity and outcome data; Invocation IDs,
+row-level event, Action payload text, shell command text,
 rich callback objects, and storage paths are not persisted.
 
 ## Commands and trust

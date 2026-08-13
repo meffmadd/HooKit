@@ -305,7 +305,7 @@
         "hookRef": {
           "$ref": "#/$defs/stringOrArray"
         },
-        "runId": {
+        "invocationId": {
           "$ref": "#/$defs/stringOrArray"
         },
         "outcome": {

@@ -25,7 +25,7 @@ export function requestOwnedAction(
     effects: [{
       type: "request-action",
       hookRef: result.hookRef,
-      runId: result.runId,
+      invocationId: result.invocationId,
       action: actionRequest(action),
     }],
     row: {

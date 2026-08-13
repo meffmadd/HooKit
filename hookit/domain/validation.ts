@@ -36,7 +36,7 @@ const ACTION_KEYS: Readonly<Record<Action["type"], ReadonlySet<string>>> = {
 const HOOK_RESULT_FILTER_KEYS = new Set([
   "event",
   "hookRef",
-  "runId",
+  "invocationId",
   "outcome",
   "code",
 ]);
@@ -212,8 +212,8 @@ function validHookResultFilter(filter: unknown): boolean {
       !scalarOrArray(filter.hookRef, (value) => typeof value === "string")) {
     return false;
   }
-  if (filter.runId !== undefined &&
-      !scalarOrArray(filter.runId, (value) => typeof value === "string")) {
+  if (filter.invocationId !== undefined &&
+      !scalarOrArray(filter.invocationId, (value) => typeof value === "string")) {
     return false;
   }
   if (filter.outcome !== undefined &&

@@ -146,6 +146,24 @@ describe("Catalog Entry runtime/schema parity", () => {
     assert.equal(validate({ local: { bundle: preset } }), false);
     assert.equal(validateHookEntry(preset), null);
   });
+
+  it("accepts invocationId and rejects legacy runId in hook_result filters", () => {
+    const entry = (filter: Record<string, string>) => ({
+      description: "d",
+      event: "hook_result",
+      filter,
+      shell: "true",
+    });
+
+    for (const [field, expected] of [
+      ["invocationId", true],
+      ["runId", false],
+    ] as const) {
+      const candidate = entry({ [field]: "^[0-9a-f-]+$" });
+      assert.equal(validate({ local: { handler: candidate } }), expected);
+      assert.equal(validateHookEntry(candidate)?.kind === "hook", expected);
+    }
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -475,7 +493,7 @@ describe("validate", () => {
             filter: {
               event: "^hook_result$",
               hookRef: "^local/",
-              runId: "^[0-9a-f-]+$",
+              invocationId: "^[0-9a-f-]+$",
               outcome: ["pass", "block", "patch", "cancel", "report"],
               code: [0, 1, null],
             },

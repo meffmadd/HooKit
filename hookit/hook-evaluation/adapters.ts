@@ -157,7 +157,7 @@ const hookResultCandidate = (
 ) => ({
   event: "hook_result",
   hookRef: event.hookRef,
-  runId: event.runId,
+  invocationId: event.invocationId,
   outcome: event.outcome,
   code: event.code,
 });

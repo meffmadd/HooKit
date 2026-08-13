@@ -112,7 +112,7 @@ export type EvaluationEffect =
   | {
       readonly type: "request-action";
       readonly hookRef: string;
-      readonly runId: string;
+      readonly invocationId: string;
       readonly action: ActionRequest;
     };
 
@@ -127,7 +127,7 @@ export interface HookResult extends HookResultEvent {
 /** Result identity that causally associates a synthetic handler execution. */
 export interface OriginatingHookResult {
   readonly hookRef: string;
-  readonly runId: string;
+  readonly invocationId: string;
   readonly outcome: HookResultOutcome;
 }
 
@@ -139,8 +139,8 @@ export interface ReportOrigin {
 
 /**
  * One ordered, delivery-neutral report row for a Hook Evaluation. Rows
- * intentionally carry no invocation identity (`runId`), row-level
- * `evaluatedEvent`, origin `runId`, Action payload text, or shell command text;
+ * intentionally carry no Invocation ID, row-level `evaluatedEvent`, origin
+ * Invocation ID, Action payload text, or shell command text;
  * those stay in Hook Results, Action Requests, `hook_result` dispatch, and shell
  * environment variables.
  */

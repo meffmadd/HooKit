@@ -92,12 +92,12 @@ Arrays are any-of. Dot-separated keys resolve nested tool input fields.
 
 Tool candidates contain `{ ...event.input, toolName }`. Lifecycle candidates
 contain `event` plus documented bounded scalar metadata. `hook_result` filters
-are limited to `event`, `hookRef`, `runId`, `outcome`, and `code`; identity
+are limited to `event`, `hookRef`, `invocationId`, `outcome`, and `code`; identity
 fields use regex matching while outcome/code match exactly.
 
 `when` is a shell precondition. Ordinary non-zero means “not applicable” and
 skips the Hook. A passing precondition and main shell share one
-`PI_HOOK_RUN_ID`.
+`PI_HOOK_INVOCATION_ID`.
 
 ## Owned Actions
 
@@ -163,14 +163,14 @@ mutate the origin.
 `PI_EVENT_PAYLOAD` for `hook_result` is bounded to:
 
 ```text
-{ event: "hook_result", hookRef, runId, outcome, code }
+{ event: "hook_result", hookRef, invocationId, outcome, code }
 ```
 
 ## Shell environment
 
 Reached preconditions and shells receive:
 
-- `PI_HOOK_REF`, `PI_HOOK_EVENT`, `PI_HOOK_RUN_ID`
+- `PI_HOOK_REF`, `PI_HOOK_EVENT`, `PI_HOOK_INVOCATION_ID`
 - `PI_EVENT`, `PI_CWD`
 - tool events: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and for
   results `PI_TOOL_RESULT` / `PI_TOOL_IS_ERROR`

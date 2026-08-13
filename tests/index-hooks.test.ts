@@ -785,7 +785,7 @@ describe("index execution entries", () => {
       const persisted = JSON.stringify(harness.entries[0]?.data);
       assert.ok(!persisted.includes("NATIVE_SECRET"));
       assert.ok(!persisted.includes("SYNTHETIC_SECRET"));
-      assert.ok(!persisted.includes("\"runId\""));
+      assert.ok(!persisted.includes("\"invocationId\""));
       // Report rows use `type: "hook"`, so the old no-event-kind guard becomes
       // a boundedness invariant: raw tool input is never persisted.
       assert.ok(!persisted.includes("\"input\""));
