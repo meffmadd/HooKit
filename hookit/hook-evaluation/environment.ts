@@ -35,7 +35,7 @@ function matchScalar(expected: unknown, actual: unknown): boolean {
   return actual === expected;
 }
 
-/** Exact, ANDed result-selector semantics shared by filters and Actions. */
+/** Exact, ANDed Hook selector semantics shared by Filters and Actions. */
 export function matchResultSelector(
   selector: { readonly outcome?: unknown; readonly code?: unknown },
   result: { readonly outcome: unknown; readonly code: unknown },
@@ -53,7 +53,7 @@ export function matchResultSelector(
   return true;
 }
 
-/** Shared filter semantics for native and synthetic Event candidates. */
+/** Shared Filter semantics for Native and Hook Result Event candidates. */
 export function matchFilter(
   filter: ReadonlyEntryFilter | undefined,
   candidate: Record<string, unknown>,

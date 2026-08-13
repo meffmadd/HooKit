@@ -10,13 +10,13 @@ export const NATIVE_EVENTS = [
   "session_before_fork",
 ] as const;
 
-/** Every configurable event, including HooKit's synthetic hook_result event. */
+/** Every configurable Event, including HooKit's Hook Result Event. */
 export const LIFECYCLE_EVENTS = [...NATIVE_EVENTS, "hook_result"] as const;
 
 export type NativeEvent = (typeof NATIVE_EVENTS)[number];
 export type Event = (typeof LIFECYCLE_EVENTS)[number];
 
-export const HOOK_RESULT_OUTCOMES = [
+export const HOOK_OUTCOMES = [
   "pass",
   "block",
   "patch",
@@ -24,20 +24,20 @@ export const HOOK_RESULT_OUTCOMES = [
   "report",
 ] as const;
 
-export type HookResultOutcome = (typeof HOOK_RESULT_OUTCOMES)[number];
+export type HookOutcome = (typeof HOOK_OUTCOMES)[number];
 
-export function isHookResultOutcome(value: unknown): value is HookResultOutcome {
+export function isHookOutcome(value: unknown): value is HookOutcome {
   return typeof value === "string" &&
-    (HOOK_RESULT_OUTCOMES as readonly string[]).includes(value);
+    (HOOK_OUTCOMES as readonly string[]).includes(value);
 }
 
-/** Bounded synthetic event emitted after one Hook Result is produced. */
+/** Bounded Event projected after one originating Hook Result is produced. */
 export interface HookResultEvent {
   readonly event: "hook_result";
   readonly hookRef: string;
   /** Correlation ID of the originating Hook Invocation. */
   readonly invocationId: string;
-  readonly outcome: HookResultOutcome;
+  readonly outcome: HookOutcome;
   readonly code: number | null;
 }
 
@@ -61,18 +61,18 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-export type ResultOutcomeSelector =
-  | HookResultOutcome
-  | readonly HookResultOutcome[];
-export type ResultCodeSelector =
+export type HookOutcomeSelector =
+  | HookOutcome
+  | readonly HookOutcome[];
+export type HookCodeSelector =
   | number
   | null
   | readonly (number | null)[];
 
 /** Result fields shared by owned Actions and `hook_result` filters. */
-export interface ReadonlyResultSelector {
-  readonly outcome: ResultOutcomeSelector;
-  readonly code?: ResultCodeSelector;
+export interface ReadonlyHookSelector {
+  readonly outcome: HookOutcomeSelector;
+  readonly code?: HookCodeSelector;
 }
 
 export interface InterruptAction {
@@ -111,7 +111,7 @@ export type ActionRequest =
   | EmitCustomEventAction;
 
 /** One outcome-selected Pi operation owned by a Hook. */
-export type Action = ActionRequest & ReadonlyResultSelector;
+export type Action = ActionRequest & ReadonlyHookSelector;
 
 export type ActionType = ActionRequest["type"];
 
@@ -197,7 +197,7 @@ export function actionRequest(action: Action): ActionRequest {
   }
 }
 
-/** Copy one validated owned Action, including its result selectors. */
+/** Copy one validated owned Action, including its Hook selectors. */
 export function cloneAction(action: Action): Action {
   return {
     ...actionRequest(action),

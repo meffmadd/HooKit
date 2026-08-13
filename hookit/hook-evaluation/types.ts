@@ -3,20 +3,20 @@ import type {
   Action,
   ActionRequest,
   ActionType,
-  HookResultEvent,
-  HookResultOutcome,
   Event,
+  HookOutcome,
+  HookResultEvent,
   NativeEvent,
 } from "../domain/entry.js";
 
-/** Minimal native tool-call event consumed by Hook Evaluation. */
+/** Minimal native tool-call Event consumed by Hook Evaluation. */
 export interface ToolCallEvent {
   readonly toolName: string;
   readonly toolCallId: string;
   readonly input: Record<string, unknown>;
 }
 
-/** Minimal native tool-result event consumed by Hook Evaluation. */
+/** Minimal native tool-result Event consumed by Hook Evaluation. */
 export interface ToolResultEvent {
   readonly toolName: string;
   readonly toolCallId: string;
@@ -49,7 +49,7 @@ export interface SessionBeforeForkEvent {
   readonly position: "before" | "at";
 }
 
-/** Compile-time coupling between each supported Event and its payload. */
+/** Compile-time coupling between each supported Native Event and its payload. */
 export interface EventMap {
   tool_call: ToolCallEvent;
   tool_result: ToolResultEvent;
@@ -60,7 +60,7 @@ export interface EventMap {
   session_before_fork: SessionBeforeForkEvent;
 }
 
-/** Internal extension of the native map used only for synthetic dispatch. */
+/** Internal extension of the native map used only for Hook Result Event dispatch. */
 export interface EvaluationEventMap extends EventMap {
   hook_result: HookResultEvent;
 }
@@ -72,7 +72,7 @@ export interface ToolResultPatch {
   readonly isError?: boolean;
 }
 
-/** Bounded, immutable Pi runtime metadata exposed to hook shells. */
+/** Bounded, immutable Pi runtime metadata exposed to Hook shells. */
 export interface RuntimeMetadataSnapshot {
   readonly PI_SESSION_ID?: string;
   readonly PI_SESSION_FILE?: string;
@@ -89,7 +89,7 @@ export interface RuntimeMetadataSnapshot {
   readonly [key: string]: string | undefined;
 }
 
-/** Non-Pi execution context captured once at native callback entry. */
+/** Non-Pi execution context captured once at Native Event callback entry. */
 export interface EvaluationContext {
   readonly cwd: string;
   readonly signal?: AbortSignal;
@@ -99,7 +99,7 @@ export interface EvaluationContext {
 export type PresentationSeverity = "info" | "warning" | "error";
 
 /** Delivery-neutral semantic work for the thin Pi adapter. */
-export type EvaluationEffect =
+export type Effect =
   | {
       readonly type: "present";
       readonly message: string;
@@ -116,33 +116,33 @@ export type EvaluationEffect =
       readonly action: ActionRequest;
     };
 
-/** Immutable result shared by aggregation, Actions, reporting, and dispatch. */
-export interface HookResult extends HookResultEvent {
-  /** Event matched by the Hook that produced this result. */
-  readonly evaluatedEvent: Event;
+/** Immutable result shared privately by aggregation, Actions, and projection. */
+export interface HookResult {
+  readonly hookRef: string;
+  readonly invocationId: string;
+  readonly outcome: HookOutcome;
+  readonly code: number | null;
   readonly action?: Action;
   readonly originatingResult?: OriginatingHookResult;
 }
 
-/** Result identity that causally associates a synthetic handler execution. */
+/** Result identity that causally associates a reactive Hook Invocation. */
 export interface OriginatingHookResult {
   readonly hookRef: string;
   readonly invocationId: string;
-  readonly outcome: HookResultOutcome;
+  readonly outcome: HookOutcome;
 }
 
-/** Projected identity of a synthetic origin annotation on a report row. */
+/** Projected identity of a reactive origin annotation on a report row. */
 export interface ReportOrigin {
   readonly hookRef: string;
-  readonly outcome: HookResultOutcome;
+  readonly outcome: HookOutcome;
 }
 
 /**
- * One ordered, delivery-neutral report row for a Hook Evaluation. Rows
- * intentionally carry no Invocation ID, row-level `evaluatedEvent`, origin
- * Invocation ID, Action payload text, or shell command text;
- * those stay in Hook Results, Action Requests, `hook_result` dispatch, and shell
- * environment variables.
+ * One ordered, delivery-neutral Evaluation Report row. Rows intentionally
+ * carry no Invocation ID, row-level Event, origin Invocation ID, Action payload
+ * text, or shell command text.
  */
 export type EvaluationReportRow =
   | {
@@ -156,55 +156,98 @@ export type EvaluationReportRow =
       readonly type: "action";
       readonly hookRef: string;
       readonly actionType: ActionType;
-      readonly outcome: HookResultOutcome;
+      readonly outcome: HookOutcome;
       readonly origin?: ReportOrigin;
     };
 
 /** Immutable, delivery-neutral accounting for one complete Hook Evaluation. */
-export interface HookExecutionReport {
+export interface EvaluationReport {
   readonly rows: readonly EvaluationReportRow[];
 }
 
-interface EvaluationResultBase {
-  readonly effects: readonly EvaluationEffect[];
-  readonly executionReport?: HookExecutionReport;
+interface EventOutcomeBase<H extends Event> {
+  readonly event: H;
 }
 
-export interface PassEvaluationResult extends EvaluationResultBase {
+export interface PassEventOutcome<H extends NativeEvent = NativeEvent>
+  extends EventOutcomeBase<H> {
   readonly outcome: "pass";
 }
 
-export interface BlockEvaluationResult extends EvaluationResultBase {
+export interface BlockEventOutcome
+  extends EventOutcomeBase<"tool_call"> {
   readonly outcome: "block";
   readonly reason: string;
 }
 
-export interface PatchEvaluationResult extends EvaluationResultBase {
+export interface PatchEventOutcome
+  extends EventOutcomeBase<"tool_result"> {
   readonly outcome: "patch";
   readonly reason: string;
   readonly patch: ToolResultPatch;
 }
 
-export interface CancelEvaluationResult extends EvaluationResultBase {
+export interface CancelEventOutcome<
+  H extends "session_before_switch" | "session_before_fork" =
+    "session_before_switch" | "session_before_fork",
+> extends EventOutcomeBase<H> {
   readonly outcome: "cancel";
   readonly reason: string;
 }
 
-export interface ReportEvaluationResult extends EvaluationResultBase {
+export interface ReportEventOutcome<
+  H extends "turn_end" | "agent_end" | "agent_settled" =
+    "turn_end" | "agent_end" | "agent_settled",
+> extends EventOutcomeBase<H> {
   readonly outcome: "report";
 }
 
-export interface HookEvaluationResultMap {
-  tool_call: PassEvaluationResult | BlockEvaluationResult;
-  tool_result: PassEvaluationResult | PatchEvaluationResult;
-  turn_end: PassEvaluationResult | ReportEvaluationResult;
-  agent_end: PassEvaluationResult | ReportEvaluationResult;
-  agent_settled: PassEvaluationResult | ReportEvaluationResult;
-  session_before_switch: PassEvaluationResult | CancelEvaluationResult;
-  session_before_fork: PassEvaluationResult | CancelEvaluationResult;
+export interface PassHookResultEventOutcome
+  extends EventOutcomeBase<"hook_result"> {
+  readonly hookRef: string;
+  readonly invocationId: string;
+  readonly outcome: "pass";
 }
 
-/** Minimal result of one complete, Event-typed transaction. */
-export type HookEvaluationResult<
-  H extends NativeEvent = NativeEvent,
-> = HookEvaluationResultMap[H];
+export interface ReportHookResultEventOutcome
+  extends EventOutcomeBase<"hook_result"> {
+  readonly hookRef: string;
+  readonly invocationId: string;
+  readonly outcome: "report";
+}
+
+export type HookResultEventOutcome =
+  | PassHookResultEventOutcome
+  | ReportHookResultEventOutcome;
+
+/** Event-typed map of every valid aggregate Event Outcome. */
+export interface EventOutcomeMap {
+  tool_call: PassEventOutcome<"tool_call"> | BlockEventOutcome;
+  tool_result: PassEventOutcome<"tool_result"> | PatchEventOutcome;
+  turn_end: PassEventOutcome<"turn_end"> | ReportEventOutcome<"turn_end">;
+  agent_end: PassEventOutcome<"agent_end"> | ReportEventOutcome<"agent_end">;
+  agent_settled:
+    | PassEventOutcome<"agent_settled">
+    | ReportEventOutcome<"agent_settled">;
+  session_before_switch:
+    | PassEventOutcome<"session_before_switch">
+    | CancelEventOutcome<"session_before_switch">;
+  session_before_fork:
+    | PassEventOutcome<"session_before_fork">
+    | CancelEventOutcome<"session_before_fork">;
+  hook_result: HookResultEventOutcome;
+}
+
+export type EventOutcome<H extends Event = Event> = EventOutcomeMap[H];
+export type NativeEventOutcome<H extends NativeEvent = NativeEvent> =
+  EventOutcomeMap[H];
+
+/** Deeply immutable output of one complete Hook Evaluation. */
+export interface HookEvaluationOutcome<H extends NativeEvent = NativeEvent> {
+  readonly eventOutcomes: readonly [
+    NativeEventOutcome<H>,
+    ...HookResultEventOutcome[],
+  ];
+  readonly effects: readonly Effect[];
+  readonly evaluationReport?: EvaluationReport;
+}

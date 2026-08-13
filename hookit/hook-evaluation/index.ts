@@ -1,4 +1,9 @@
-import { entryRef, type Event, type NativeEvent } from "../domain/entry.js";
+import {
+  entryRef,
+  type Event,
+  type HookResultEvent,
+  type NativeEvent,
+} from "../domain/entry.js";
 import type { EnabledHook } from "./hooks.js";
 import {
   hooksIn,
@@ -17,14 +22,17 @@ import {
   type InvocationError,
 } from "./invocations.js";
 import type {
-  HookExecutionReport,
-  HookResult,
-  EvaluationEffect,
-  EvaluationReportRow,
-  EvaluationEventMap,
-  HookEvaluationResult,
-  EventMap,
+  Effect,
   EvaluationContext,
+  EvaluationEventMap,
+  EvaluationReport,
+  EvaluationReportRow,
+  EventMap,
+  EventOutcome,
+  HookEvaluationOutcome,
+  HookResult,
+  HookResultEventOutcome,
+  NativeEventOutcome,
   RuntimeMetadataSnapshot,
   ToolResultPatch,
 } from "./types.js";
@@ -35,21 +43,22 @@ export type { EnabledHook } from "./hooks.js";
 export type {
   AgentEndEvent,
   AgentSettledEvent,
-  HookExecutionReport,
-  HookResult,
-  BlockEvaluationResult,
-  CancelEvaluationResult,
-  EvaluationEffect,
-  EvaluationReportRow,
-  HookEvaluationResult,
-  HookEvaluationResultMap,
-  EventMap,
+  BlockEventOutcome,
+  CancelEventOutcome,
+  Effect,
   EvaluationContext,
-  OriginatingHookResult,
-  PassEvaluationResult,
-  PatchEvaluationResult,
+  EvaluationReport,
+  EvaluationReportRow,
+  EventMap,
+  EventOutcome,
+  EventOutcomeMap,
+  HookEvaluationOutcome,
+  HookResultEventOutcome,
+  NativeEventOutcome,
+  PassEventOutcome,
+  PatchEventOutcome,
   PresentationSeverity,
-  ReportEvaluationResult,
+  ReportEventOutcome,
   ReportOrigin,
   RuntimeMetadataSnapshot,
   SessionBeforeForkEvent,
@@ -63,7 +72,7 @@ export type {
 function present(
   message: string,
   severity: "info" | "warning" | "error",
-): EvaluationEffect {
+): Effect {
   return { type: "present", message, severity };
 }
 
@@ -136,9 +145,9 @@ function reportRowsFor(
   return rows;
 }
 
-function freezeExecutionReport(
+function freezeEvaluationReport(
   rows: readonly EvaluationReportRow[],
-): HookExecutionReport | undefined {
+): EvaluationReport | undefined {
   if (rows.length === 0) return undefined;
   const frozenRows = Object.freeze(rows.map((row) => {
     const origin = row.origin === undefined
@@ -182,67 +191,91 @@ function combinedUnexpectedError(
   );
 }
 
-function freezeNested<T>(value: T): T {
+function freezeNested<T>(value: T, ancestors = new Set<object>()): T {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
     return value;
   }
-  for (const nested of Object.values(value)) freezeNested(nested);
+  if (ancestors.has(value)) return value;
+  ancestors.add(value);
+  for (const nested of Object.values(value)) freezeNested(nested, ancestors);
+  ancestors.delete(value);
   return Object.freeze(value);
 }
 
-function publicResult(
+function eventOutcome<H extends Event>(
+  event: H,
   outcome: AdapterOutcome | undefined,
-  pendingEffects: EvaluationEffect[],
-  executionReport?: HookExecutionReport,
-): HookEvaluationResult {
-  const effects = Object.freeze(
+  identity?: Pick<HookResultEvent, "hookRef" | "invocationId">,
+): EventOutcome<H> {
+  const complete = <T>(value: T): EventOutcome<H> =>
+    value as unknown as EventOutcome<H>;
+  const base = {
+    event,
+    ...(identity === undefined ? {} : identity),
+  };
+  if (outcome === undefined) {
+    return complete(Object.freeze({ ...base, outcome: "pass" }));
+  }
+  switch (outcome.action) {
+    case "block":
+      return complete(Object.freeze({
+        ...base,
+        outcome: "block",
+        reason: outcome.reason,
+      }));
+    case "patch":
+      return complete(Object.freeze({
+        ...base,
+        outcome: "patch",
+        reason: outcome.reason,
+        patch: outcome.patch,
+      }));
+    case "cancel":
+      return complete(Object.freeze({
+        ...base,
+        outcome: "cancel",
+        reason: outcome.reason,
+      }));
+    case "report":
+      return complete(Object.freeze({ ...base, outcome: "report" }));
+  }
+}
+
+function freezeEffects(pendingEffects: Effect[]): readonly Effect[] {
+  return Object.freeze(
     pendingEffects.map((effect) => {
       if (effect.type !== "request-action") return Object.freeze({ ...effect });
       const action = freezeNested({ ...effect.action });
       return Object.freeze({ ...effect, action });
     }),
   );
-  const reporting = executionReport === undefined ? {} : { executionReport };
-  if (!outcome) {
-    return Object.freeze({ outcome: "pass", effects, ...reporting });
-  }
-
-  switch (outcome.action) {
-    case "block":
-      return Object.freeze({
-        outcome: "block",
-        reason: outcome.reason,
-        effects,
-        ...reporting,
-      });
-    case "patch":
-      return Object.freeze({
-        outcome: "patch",
-        reason: outcome.reason,
-        patch: outcome.patch,
-        effects,
-        ...reporting,
-      });
-    case "cancel":
-      return Object.freeze({
-        outcome: "cancel",
-        reason: outcome.reason,
-        effects,
-        ...reporting,
-      });
-    case "report":
-      return Object.freeze({ outcome: "report", effects, ...reporting });
-  }
 }
 
-interface EventEvaluation {
-  readonly outcome: AdapterOutcome | undefined;
-  readonly effects: EvaluationEffect[];
+function publicOutcome<H extends NativeEvent>(
+  eventOutcomes: readonly [
+    NativeEventOutcome<H>,
+    ...HookResultEventOutcome[],
+  ],
+  pendingEffects: Effect[],
+  evaluationReport?: EvaluationReport,
+): HookEvaluationOutcome<H> {
+  return Object.freeze({
+    eventOutcomes: Object.freeze([...eventOutcomes]) as HookEvaluationOutcome<H>["eventOutcomes"],
+    effects: freezeEffects(pendingEffects),
+    ...(evaluationReport === undefined ? {} : { evaluationReport }),
+  });
+}
+
+interface EventEvaluation<H extends Event> {
+  readonly eventOutcome: EventOutcome<H>;
+  readonly effects: Effect[];
   readonly rows: EvaluationReportRow[];
+  readonly projectedOutcomes: HookResultEventOutcome[];
 }
 
 interface ResultProcessing {
-  readonly effects: readonly EvaluationEffect[];
+  readonly eventOutcome: HookResultEventOutcome;
+  readonly effects: readonly Effect[];
   readonly rows: readonly EvaluationReportRow[];
 }
 
@@ -259,7 +292,7 @@ export class HookEvaluation {
     payload: EventMap[H],
     context: EvaluationContext,
     enabledSet: EnabledHookSet,
-  ): Promise<HookEvaluationResult<H>> {
+  ): Promise<HookEvaluationOutcome<H>> {
     let adapter: EventAdapter<EvaluationEventMap[H]> | undefined;
     try {
       adapter = adapterFor(event);
@@ -277,9 +310,12 @@ export class HookEvaluation {
       const outcome = freezeOutcome(
         fallbackAdapter.internalError(error, payload as EvaluationEventMap[H]),
       );
-      const effects: EvaluationEffect[] = [];
+      const effects: Effect[] = [];
       this.appendFeedback(event, fallbackAdapter, outcome, effects);
-      return publicResult(outcome, effects) as HookEvaluationResult<H>;
+      return publicOutcome(
+        [eventOutcome(event, outcome) as NativeEventOutcome<H>],
+        effects,
+      );
     }
   }
 
@@ -289,7 +325,7 @@ export class HookEvaluation {
     context: EvaluationContext,
     hooks: readonly EnabledHook[],
     adapter: EventAdapter<EvaluationEventMap[H]>,
-  ): Promise<HookEvaluationResult<H>> {
+  ): Promise<HookEvaluationOutcome<H>> {
     const evaluated = await this.evaluateEvent(
       event,
       payload,
@@ -298,11 +334,14 @@ export class HookEvaluation {
       adapter,
       async (result) => this.evaluateHookResultEvent(hooks, result, context),
     );
-    return publicResult(
-      evaluated.outcome,
+    return publicOutcome(
+      [
+        evaluated.eventOutcome as NativeEventOutcome<H>,
+        ...evaluated.projectedOutcomes,
+      ],
       evaluated.effects,
-      freezeExecutionReport(evaluated.rows),
-    ) as HookEvaluationResult<H>;
+      freezeEvaluationReport(evaluated.rows),
+    );
   }
 
   /**
@@ -318,7 +357,7 @@ export class HookEvaluation {
     adapter: EventAdapter<EvaluationEventMap[H]>,
     processResult?: (result: HookResult) => Promise<ResultProcessing>,
     originatingResult?: HookResult,
-  ): Promise<EventEvaluation> {
+  ): Promise<EventEvaluation<H>> {
     const invocation = await invokeHooks(
       hooks,
       adapter,
@@ -349,8 +388,9 @@ export class HookEvaluation {
 
     // The aggregate Event decision and every immutable Hook Result exist
     // before Actions or projected Event work begins.
-    const effects: EvaluationEffect[] = [];
+    const effects: Effect[] = [];
     const rows: EvaluationReportRow[] = [];
+    const projectedOutcomes: HookResultEventOutcome[] = [];
     for (const record of invocation.invocations) {
       const owned = requestOwnedAction(record.result);
       effects.push(...owned.effects);
@@ -358,6 +398,7 @@ export class HookEvaluation {
 
       if (processResult !== undefined) {
         const processed = await processResult(record.result);
+        projectedOutcomes.push(processed.eventOutcome);
         effects.push(...processed.effects);
         rows.push(...processed.rows);
       }
@@ -371,7 +412,18 @@ export class HookEvaluation {
     }
 
     this.appendFeedback(event, adapter, outcome, effects);
-    return { outcome, effects, rows };
+    const identity = event === "hook_result"
+      ? {
+          hookRef: (payload as EvaluationEventMap["hook_result"]).hookRef,
+          invocationId: (payload as EvaluationEventMap["hook_result"]).invocationId,
+        }
+      : undefined;
+    return {
+      eventOutcome: eventOutcome(event, outcome, identity),
+      effects,
+      rows,
+      projectedOutcomes,
+    };
   }
 
   /** Outer Hook Evaluation projection point; reactive results never call it. */
@@ -387,21 +439,31 @@ export class HookEvaluation {
     });
     const evaluated = await this.evaluateEvent(
       "hook_result",
-      result,
+      {
+        event: "hook_result",
+        hookRef: result.hookRef,
+        invocationId: result.invocationId,
+        outcome: result.outcome,
+        code: result.code,
+      },
       detachedContext,
       hooks,
       adapter,
       undefined,
       result,
     );
-    return { effects: evaluated.effects, rows: evaluated.rows };
+    return {
+      eventOutcome: evaluated.eventOutcome,
+      effects: evaluated.effects,
+      rows: evaluated.rows,
+    };
   }
 
   private appendFeedback<E>(
     event: Event,
     adapter: EventAdapter<E>,
     outcome: AdapterOutcome | undefined,
-    effects: EvaluationEffect[],
+    effects: Effect[],
   ): void {
     if (!outcome) {
       if (adapter.feedback === "corrective-turn") {

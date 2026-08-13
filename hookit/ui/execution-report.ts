@@ -6,11 +6,11 @@ import {
 import { Box, Text, visibleWidth } from "@earendil-works/pi-tui";
 import {
   isActionType,
-  isHookResultOutcome,
+  isHookOutcome,
   type NativeEvent,
 } from "../domain/entry.js";
 import type {
-  HookExecutionReport,
+  EvaluationReport,
   EvaluationReportRow,
 } from "../hook-evaluation/index.js";
 
@@ -87,8 +87,8 @@ export type ExecutionReportEntryData =
 
 /**
  * Transient reporter handle for one native callback's observation. The
- * reporter owns timing and collection only; it never changes native outcomes
- * or effect selection/delivery.
+ * reporter owns timing and collection only; it never changes Event Outcomes
+ * or Effect selection/delivery.
  */
 export interface ReporterObservation {
   readonly event: NativeEvent;
@@ -96,7 +96,7 @@ export interface ReporterObservation {
   readonly startMs: number;
   endMs?: number;
   completed: boolean;
-  rows?: HookExecutionReport;
+  rows?: EvaluationReport;
 }
 
 function isToolEvent(event: NativeEvent): boolean {
@@ -206,7 +206,7 @@ interface PendingWave {
  * Session-scoped collector that turns every tool Hook Evaluation for one
  * Execution Wave into one combined report, and keeps non-tool Hook Evaluations
  * as
- * single immediate reports. It owns no native outcomes, effects, or Action
+ * single immediate reports. It owns no Event Outcomes, Effects, or Action
  * delivery, and never constructs causal Hook trees.
  */
 export class ExecutionReporter {
@@ -296,7 +296,7 @@ export class ExecutionReporter {
    */
   complete(
     observation: ReporterObservation,
-    accounting?: HookExecutionReport,
+    accounting?: EvaluationReport,
   ): void {
     if (observation.completed) return; // never double-append a report
     observation.endMs = this.now();
@@ -403,12 +403,12 @@ export class ExecutionReporter {
       this.persist(entry);
     } catch {
       // Observability is best-effort: drop this report, never retry, merge,
-      // or duplicate it, and never affect native outcomes or effects.
+      // or duplicate it, and never affect Event Outcomes or Effects.
     }
   }
 }
 
-function snapshotRows(accounting: HookExecutionReport | undefined): EvaluationReportRow[] {
+function snapshotRows(accounting: EvaluationReport | undefined): EvaluationReportRow[] {
   return (accounting?.rows ?? []).map(snapshotRow);
 }
 
@@ -459,7 +459,7 @@ function parseOrigin(value: unknown): ReportedOrigin | undefined {
     return undefined;
   }
   const hookRef = requiredText(value.hookRef, MAX_LABEL_LENGTH);
-  if (hookRef === undefined || !isHookResultOutcome(value.outcome)) {
+  if (hookRef === undefined || !isHookOutcome(value.outcome)) {
     return undefined;
   }
   return { hookRef, outcome: value.outcome };
@@ -509,7 +509,7 @@ function parseRow(value: unknown): EvaluationReportRow | undefined {
 
   if (
     !isActionType(value.actionType) ||
-    !isHookResultOutcome(value.outcome)
+    !isHookOutcome(value.outcome)
   ) {
     return undefined;
   }

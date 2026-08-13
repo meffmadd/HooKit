@@ -740,7 +740,7 @@ describe("index execution entries", () => {
     });
   });
 
-  it("persists bounded mixed summaries and flattens synthetic actions after their origin", async () => {
+  it("persists bounded mixed summaries and flattens reactive Actions after their origin", async () => {
     await withTemporaryHome("HooKit-index-mixed-actions-", async (root) => {
       const ctx = catalogCtx(root);
       const harness = extensionHarness();
@@ -764,7 +764,7 @@ describe("index execution entries", () => {
             default: true,
           },
           after: {
-            description: "synthetic action",
+            description: "reactive Action",
             event: "hook_result",
             action: {
               type: "message",
@@ -956,7 +956,7 @@ describe("index execution entries", () => {
   });
 });
 
-describe("index synthetic result dispatch", () => {
+describe("index Hook Result Event dispatch", () => {
   it("awaits detached handlers without changing the originating block", async () => {
     await withTemporaryHome("HooKit-index-results-", async (root) => {
       const path = projectFilePath(root);
@@ -1004,7 +1004,7 @@ describe("index synthetic result dispatch", () => {
           setStatus: () => {},
           notify: (message: string) => {
             if (message.includes("hook_result")) {
-              throw new Error("synthetic reporting failed");
+              throw new Error("reactive reporting failed");
             }
           },
         },
@@ -1041,7 +1041,7 @@ describe("index synthetic result dispatch", () => {
         { hookRef: "local/blocks", outcome: "block" },
       ]);
 
-      // Pi emits turn_end after synthetic results for a preflight-blocked wave.
+      // Pi emits turn_end after Hook Result Events for a preflight-blocked wave.
       await harness.handler("turn_end")({ turnIndex: 1 }, ctx);
       assert.equal(harness.entries.length, 1);
       const expanded = renderEntry(harness, 0, true, 160);
@@ -1082,6 +1082,41 @@ describe("index synthetic result dispatch", () => {
 });
 
 describe("index effect and outcome translation", () => {
+  it("uses only the first Native Event Outcome for callback control", async () => {
+    await withTemporaryHome("HooKit-index-reactive-outcome-", async (root) => {
+      const ctx = catalogCtx(root);
+      const notifications: string[] = [];
+      ctx.ui.notify = (message: string) => notifications.push(message);
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          origin: {
+            description: "allow the Native Event",
+            event: "tool_call",
+            shell: "true",
+            default: true,
+          },
+          reactive: {
+            description: "report the Hook Result Event",
+            event: "hook_result",
+            shell: "false",
+            default: true,
+          },
+        },
+      });
+      notifications.length = 0;
+
+      const callbackResult = await harness.handler("tool_call")(
+        toolCallEvent("bash", "reactive-report"),
+        ctx,
+      );
+
+      assert.equal(callbackResult, undefined, "reactive report cannot block Pi");
+      assert.equal(notifications.length, 1);
+      assert.match(notifications[0] ?? "", /hook_result hook failed/);
+    });
+  });
+
   it("continues ordered feedback when execution-entry delivery fails", async () => {
     await withTemporaryHome("HooKit-index-effects-", async (root) => {
       const path = projectFilePath(root);

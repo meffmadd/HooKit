@@ -65,18 +65,19 @@ available member. The derived Enabled Hook Set is immutable, ordered by first
 occurrence, and never contains the same Hook twice across direct and Preset
 paths.
 
-## Events and individual outcomes
+## Hook Outcomes and Event Outcomes
 
 - `tool_call`: `pass` / `block`
 - `tool_result`: `pass` / `patch`
 - `turn_end`, `agent_end`, `agent_settled`: `pass` / `report`
 - `session_before_switch`, `session_before_fork`: `pass` / `cancel`
-- synthetic `hook_result`: local `pass` / `report`
+- Hook Result Event `hook_result`: `pass` / `report`
 
-Tool events run every matching Hook sequentially and aggregate all failures
-into one block or patch. Lifecycle and session events aggregate too. An owned
-Action selects only its individual owner result, not the aggregate event. A pass
-Action can therefore run even when a sibling fails.
+Tool Events run every matching Hook sequentially and aggregate all Hook
+Outcomes into one block or patch Event Outcome. Lifecycle and session Events
+aggregate too. An owned Action selects only its owner's Hook Outcome and code,
+not the Event Outcome. A pass Action can therefore run even when a sibling
+fails.
 
 Evaluation order is event/filter → `when` → effective shell → immutable Hook
 Result → owned Action → `hook_result` Hooks. A filter miss or ordinary
@@ -116,9 +117,10 @@ Supported payloads:
   `nextTurn`), and optional `triggerTurn`
 - `emit-custom-event`, with non-empty `name` and optional JSON `data`
 
-Selectors are removed from the delivery request. Payload text/data is static:
-there is no environment, template, event, or stdout expansion. Action delivery
-is ordered and best-effort and cannot alter the already-frozen native outcome.
+Selectors are removed from the Action Request Effect. Payload text/data is
+static: there is no environment, template, event, or stdout expansion. Effect
+delivery is ordered and best-effort and cannot alter the already-frozen Native
+Event Outcome.
 Multiple message Actions remain distinct; Pi owns steering/follow-up batching.
 Broad Actions can cause later Pi events, so avoid accidental continuation loops.
 
@@ -154,11 +156,12 @@ source-qualified ref whenever possible:
 ```
 
 For each originating Hook Result, the origin's Action is considered first, then matching
-`hook_result` Hooks in configured Enabled Hook Set order. A matching Hook gets
-a local pass/report result that may select its own Action. That local result is
-never redispatched, so synthetic handling is bounded to one level. Hooks
-handling `hook_result` run detached from the originating abort signal and cannot
-mutate the origin.
+`hook_result` Hooks in configured Enabled Hook Set order. Every origin projects
+one Hook Result Event and an explicit pass/report Event Outcome even when no
+reactive Hook matches. A matching Hook gets a local pass/report Hook Result that
+may select its own Action. That local result is never redispatched, so handling
+is bounded to one level. Hooks handling `hook_result` run detached from the
+originating abort signal and cannot mutate the frozen Native Event Outcome.
 
 `PI_EVENT_PAYLOAD` for `hook_result` is bounded to:
 
@@ -211,13 +214,16 @@ comparison includes canonical shell and the owned Action but excludes local
 
 ## Reporting
 
-Every event that records a main command or requests an Action is observed.
-Consecutive Hook Evaluations for `tool_call` or `tool_result` in one Execution
-Wave are combined into a single bounded Execution Report that flushes at the
+A Hook Evaluation returns one deeply immutable Hook Evaluation Outcome: a
+non-empty ordered `eventOutcomes` sequence (Native Event first), ordered
+Effects, and an optional Evaluation Report. Every Event that records a main
+command or requests an Action is observed. Consecutive Hook Evaluations for
+`tool_call` or `tool_result` in one Execution Wave are combined into a single
+bounded Execution Report that flushes at the
 next event's entry; ordinary events append their report immediately. Optimized commands
 count and render
 normally; preconditions do not count separately. Rows stay flat in Hook
-Evaluation order; synthetic work carries an inline `from` origin annotation.
+Evaluation order; reactive work carries an inline `from` origin annotation.
 Durable rows retain bounded Hook refs, outcomes, Action types, pass/fail state,
 and durations—not invocation IDs, message bodies, instructions, event data,
 rich Pi objects, or storage paths.

@@ -70,10 +70,8 @@ function hookResult(
   originatingResult: OriginatingHookResult | undefined,
 ): HookResult {
   return Object.freeze({
-    event: "hook_result",
     hookRef: entryRef(hook.source, hook.name),
     invocationId,
-    evaluatedEvent: hook.event,
     outcome,
     code,
     // Catalog-owned Actions and originating Hook Results are already

@@ -2,12 +2,12 @@ import { actionRequest } from "../domain/entry.js";
 import { matchResultSelector } from "./environment.js";
 import type {
   HookResult,
-  EvaluationEffect,
+  Effect,
   EvaluationReportRow,
 } from "./types.js";
 
 export interface OwnedActionRequest {
-  readonly effects: EvaluationEffect[];
+  readonly effects: Effect[];
   /** The ordered Action report row, when the owner's result selects it. */
   readonly row?: EvaluationReportRow;
 }

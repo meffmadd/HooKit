@@ -91,17 +91,20 @@ a Hook twice. Matching Hooks run sequentially in that deterministic set order:
 2. Run optional `when`.
 3. Run the effective `shell` and create one immutable individual Hook
    Result.
-4. Match the owned Action against that individual result.
+4. Match the owned Action against that Hook Result's Hook Outcome and code.
 5. Expose the result to configured `hook_result` Hooks.
 
 A filter miss runs nothing. An ordinary non-zero `when` skips the shell, result,
-Action, and execution entry. A precondition timeout, abort, or spawn failure
+Action, and Evaluation Report row. A precondition timeout, abort, or spawn failure
 fails closed with code `null`, so an owned failure Action can select it.
 
-The aggregate native outcome is frozen before Actions or `hook_result`
-Hooks run. Delivery cannot weaken a block, patch, cancellation, or report.
-Actions are returned as immutable delivery-neutral requests and delivered by
-the thin Pi adapter in order, best-effort.
+Hook Evaluation returns one deeply immutable Hook Evaluation Outcome. Its
+non-empty `eventOutcomes` sequence starts with the Native Event Outcome, then
+contains one Hook Result Event Outcome per originating Hook Result in
+result-major order. The Native Event Outcome is frozen before Actions or
+`hook_result` Hooks run. Delivery cannot weaken a block, patch, cancellation,
+or report. Actions are returned as immutable delivery-neutral Effects and
+delivered by the thin Pi adapter in order, best-effort.
 
 ### Shell shortcuts
 
@@ -122,7 +125,12 @@ shell starts yields code `null` and the event-specific failure outcome.
 
 ## Events and outcomes
 
-| Event | Individual result | Aggregate native behavior |
+Every Event Outcome identifies its Event. Native Event Outcomes carry only the
+required reason or replacement patch for their event-specific failure kind.
+Hook Result Event Outcomes additionally carry the originating Hook Reference
+and Invocation ID and permit only `pass` or `report`.
+
+| Event | Hook Outcome | Event Outcome behavior |
 |---|---|---|
 | `tool_call` | `pass` or `block` | Runs all matches; aggregates failures into one block |
 | `tool_result` | `pass` or `patch` | Runs all matches; aggregates failures into one replacement patch |
@@ -131,11 +139,11 @@ shell starts yields code `null` and the event-specific failure outcome.
 | `agent_settled` | `pass` or `report` | Aggregates and presents failures |
 | `session_before_switch` | `pass` or `cancel` | Aggregates and cancels on failure |
 | `session_before_fork` | `pass` or `cancel` | Aggregates and cancels on failure |
-| `hook_result` | local `pass` or `report` | Handles one originating result; cannot alter it |
+| `hook_result` | `pass` or `report` | Handles one originating result; cannot alter it |
 
 All tool Hooks run even after one fails. An Action observes only its
-owner's individual result, not the aggregate: a passing Hook may request a
-pass Action even when a sibling blocks the event.
+owner's Hook Outcome, not the aggregate Event Outcome: a passing Hook may
+request a pass Action even when a sibling blocks the Event.
 
 ## Owned Actions
 
@@ -210,11 +218,13 @@ exact selector semantics above.
 ```
 
 For each originating Hook Result, its owned Action is considered first, followed by
-configured `hook_result` Hooks in Enabled Hook Set order. A matching Hook gets
-its own local pass/report result and may select its own Action. That local
-result is never redispatched, bounding synthetic handling to one level.
-Origin identity remains available separately for accounting and shell
-environment projection.
+configured `hook_result` Hooks in Enabled Hook Set order. Every originating
+result projects exactly one Hook Result Event, including when no reactive Hook
+matches; its explicit Event Outcome is then `pass`. A matching reactive Hook
+gets its own local pass/report Hook Result and may select its own Action. That
+local result is never redispatched, bounding handling to one level. Origin
+identity remains available separately for accounting and shell environment
+projection.
 
 ## Shell environment
 
@@ -263,8 +273,10 @@ but excludes local `default` preference. Updates preserve that preference.
 
 ## Execution summaries
 
-A durable context-neutral transcript entry is appended when at least one
-Hook row or one requested Action is recorded. Tool calls and their
+The optional Evaluation Report on a Hook Evaluation Outcome contains the flat,
+ordered rows for that Evaluation. A durable context-neutral Execution Report
+entry is appended when at least one Hook row or one requested Action is
+recorded. Tool calls and their
 results in one tool execution lifecycle join one combined Execution Wave with a
 single end-to-end duration; ordinary Hook Evaluations append immediately. Exact `true`/`false`
 shortcuts count as normal commands with normal duration presentation. Passing
@@ -274,10 +286,10 @@ stands alone).
 
 Expanded summaries show source-qualified Hook refs, pass/fail status,
 individual `when` + `shell` duration, and requested Action type, rendered flat
-in Hook Evaluation order with `from <ref> <outcome>` annotations on synthetic
+in Hook Evaluation order with `from <ref> <outcome>` annotations on reactive
 rows — no causal nesting. Action rows show type and owner outcome. Persisted
 report rows contain only bounded identity and outcome data; Invocation IDs,
-row-level event, Action payload text, shell command text,
+row-level Event, Action payload text, shell command text,
 rich callback objects, and storage paths are not persisted.
 
 ## Commands and trust

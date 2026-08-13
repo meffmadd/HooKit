@@ -289,7 +289,7 @@ describe("session state Enabled Hook Set", () => {
       { cwd: root, metadata: {} },
       enabledSet,
     );
-    assert.equal(evaluated.outcome, "pass");
+    assert.equal(evaluated.eventOutcomes[0].outcome, "pass");
     assert.equal(readFileSync(log, "utf8"), "b\na\n");
   });
 
@@ -325,7 +325,7 @@ describe("session state Enabled Hook Set", () => {
       state.enabledHookSet(),
     );
 
-    assert.equal(evaluated.outcome, "pass");
+    assert.equal(evaluated.eventOutcomes[0].outcome, "pass");
     assert.equal(readFileSync(log, "utf8"), "direct\nshared\n");
   });
 
@@ -406,9 +406,9 @@ describe("session state Enabled Hook Set", () => {
       { cwd: root, metadata: {} },
       state.enabledHookSet(),
     );
-    assert.equal(evaluated.outcome, "pass");
+    assert.equal(evaluated.eventOutcomes[0].outcome, "pass");
     assert.deepEqual(
-      (evaluated.executionReport?.rows ?? [])
+      (evaluated.evaluationReport?.rows ?? [])
         .filter((row) => row.type === "action")
         .map((row) => row.hookRef),
       ["local/notify"],

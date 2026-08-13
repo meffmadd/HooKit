@@ -11,24 +11,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Event, NativeEvent } from "../hookit/domain/entry.js";
-import { adapterFor } from "../hookit/hook-evaluation/adapters.js";
-import { invokeHooks } from "../hookit/hook-evaluation/invocations.js";
 import type {
   EnabledHook,
 } from "../hookit/hook-evaluation/index.js";
 import {
   HookEvaluation,
   createEnabledHookSet,
-  type HookExecutionReport,
+  type EvaluationReport,
   type EvaluationReportRow,
   type EventMap,
   type EvaluationContext,
-  type HookEvaluationResult,
+  type HookEvaluationOutcome,
 } from "../hookit/hook-evaluation/index.js";
 
 /** Ordered hook rows of one report (or none). */
 function hookRows(
-  report?: HookExecutionReport,
+  report?: EvaluationReport,
 ): Array<Extract<EvaluationReportRow, { type: "hook" }>> {
   return (report?.rows ?? []).filter(
     (row): row is Extract<EvaluationReportRow, { type: "hook" }> =>
@@ -38,7 +36,7 @@ function hookRows(
 
 /** Ordered action rows of one report (or none). */
 function actionRows(
-  report?: HookExecutionReport,
+  report?: EvaluationReport,
 ): Array<Extract<EvaluationReportRow, { type: "action" }>> {
   return (report?.rows ?? []).filter(
     (row): row is Extract<EvaluationReportRow, { type: "action" }> =>
@@ -128,7 +126,7 @@ async function evaluate<H extends NativeEvent>(
   hooks: readonly EnabledHook[],
   cwd = root,
   executionContext: EvaluationContext = context(cwd),
-): Promise<HookEvaluationResult> {
+): Promise<HookEvaluationOutcome> {
   return evaluator.evaluate(
     event,
     payload,
@@ -137,13 +135,76 @@ async function evaluate<H extends NativeEvent>(
   );
 }
 
-function presentationMessages(result: HookEvaluationResult): string[] {
+function presentationMessages(result: HookEvaluationOutcome): string[] {
   return result.effects.flatMap((effect) =>
     effect.type === "present" ? [effect.message] : []
   );
 }
 
-describe("Hook Evaluation native outcomes", () => {
+describe("Hook Evaluation Outcome", () => {
+  it("exposes immutable Event Outcomes in result-major order", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "turn_end",
+      { turnIndex: 3 },
+      [
+        hook("passes", "turn_end", "true"),
+        hook("fails", "turn_end", "false"),
+        hook("reacts-to-failure", "hook_result", "false", {
+          filter: { outcome: "report" },
+        }),
+      ],
+    );
+
+    assert.deepEqual(result.eventOutcomes.map((outcome) => ({
+      event: outcome.event,
+      hookRef: "hookRef" in outcome ? outcome.hookRef : undefined,
+      outcome: outcome.outcome,
+    })), [
+      { event: "turn_end", hookRef: undefined, outcome: "report" },
+      { event: "hook_result", hookRef: "local/passes", outcome: "pass" },
+      { event: "hook_result", hookRef: "local/fails", outcome: "report" },
+    ]);
+    assert.deepEqual(Object.keys(result).sort(), [
+      "effects",
+      "evaluationReport",
+      "eventOutcomes",
+    ]);
+    assert.deepEqual(Object.keys(result.eventOutcomes[0]).sort(), [
+      "event",
+      "outcome",
+    ]);
+    assert.ok(Object.isFrozen(result));
+    assert.ok(Object.isFrozen(result.eventOutcomes));
+    for (const outcome of result.eventOutcomes) assert.ok(Object.isFrozen(outcome));
+  });
+
+  it("projects an explicit pass Event Outcome when no reactive Hook matches", async () => {
+    const result = await evaluate(
+      new HookEvaluation(),
+      "tool_call",
+      toolCall,
+      [
+        hook("origin", "tool_call", "true"),
+        hook("misses", "hook_result", "false", {
+          filter: { hookRef: "^other/" },
+        }),
+      ],
+    );
+
+    assert.equal(result.eventOutcomes.length, 2);
+    const reactive = result.eventOutcomes[1];
+    assert.deepEqual(reactive, {
+      event: "hook_result",
+      hookRef: "local/origin",
+      invocationId: reactive?.invocationId,
+      outcome: "pass",
+    });
+    assert.match(reactive?.invocationId ?? "", UUID_PATTERN);
+  });
+});
+
+describe("Hook Evaluation Native Event Outcomes", () => {
   it("aggregates a block while continuing matching tool-call Hooks", async () => {
     const cwd = caseDirectory("tool-call-block");
     const result = await evaluate(
@@ -158,16 +219,16 @@ describe("Hook Evaluation native outcomes", () => {
       cwd,
     );
 
-    assert.equal(result.outcome, "block");
-    if (result.outcome === "block") {
+    assert.equal(result.eventOutcomes[0].outcome, "block");
+    if (result.eventOutcomes[0].outcome === "block") {
       assert.equal(
-        result.reason,
+        result.eventOutcomes[0].reason,
         'hookit: hook "blocks" rejected bash — `exit 7`',
       );
     }
     assert.equal(existsSync(join(cwd, "not-run")), true);
     assert.deepEqual(
-      hookRows(result.executionReport).map(({ hookRef, passed }) => ({
+      hookRows(result.evaluationReport).map(({ hookRef, passed }) => ({
         hookRef,
         passed,
       })),
@@ -189,11 +250,11 @@ describe("Hook Evaluation native outcomes", () => {
         hook("second", "tool_call", "exit 7"),
       ],
     );
-    assert.equal(call.outcome, "block");
-    if (call.outcome === "block") {
-      assert.match(call.reason, /2 hooks rejected bash/);
-      assert.match(call.reason, /hook "first"/);
-      assert.match(call.reason, /hook "second"/);
+    assert.equal(call.eventOutcomes[0].outcome, "block");
+    if (call.eventOutcomes[0].outcome === "block") {
+      assert.match(call.eventOutcomes[0].reason, /2 hooks rejected bash/);
+      assert.match(call.eventOutcomes[0].reason, /hook "first"/);
+      assert.match(call.eventOutcomes[0].reason, /hook "second"/);
     }
 
     const toolOutput = await evaluate(
@@ -205,9 +266,9 @@ describe("Hook Evaluation native outcomes", () => {
         hook("second", "tool_result", "exit 9"),
       ],
     );
-    assert.equal(toolOutput.outcome, "patch");
-    if (toolOutput.outcome === "patch") {
-      const text = toolOutput.patch.content?.[0];
+    assert.equal(toolOutput.eventOutcomes[0].outcome, "patch");
+    if (toolOutput.eventOutcomes[0].outcome === "patch") {
+      const text = toolOutput.eventOutcomes[0].patch.content?.[0];
       assert.ok(text?.type === "text");
       assert.match(text.text, /hook "first"/);
       assert.match(text.text, /hook "second"/);
@@ -231,7 +292,7 @@ describe("Hook Evaluation native outcomes", () => {
         }),
       ],
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
   });
 
   it("matches nested regex fields and strict scalar filters", async () => {
@@ -256,7 +317,7 @@ describe("Hook Evaluation native outcomes", () => {
         },
       })],
     );
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
   });
 
   it("uses the native tool name over a shadowing input field", async () => {
@@ -272,7 +333,7 @@ describe("Hook Evaluation native outcomes", () => {
         filter: { toolName: "^bash$" },
       })],
     );
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
   });
 
   it("suppresses a completed tool result with an immutable patch", async () => {
@@ -284,19 +345,19 @@ describe("Hook Evaluation native outcomes", () => {
       [hook("redact", "tool_result", "false")],
     );
 
-    assert.equal(result.outcome, "patch");
-    if (result.outcome === "patch") {
-      assert.equal(result.patch.isError, true);
-      assert.strictEqual(result.patch.details, details);
+    assert.equal(result.eventOutcomes[0].outcome, "patch");
+    if (result.eventOutcomes[0].outcome === "patch") {
+      assert.equal(result.eventOutcomes[0].patch.isError, true);
+      assert.strictEqual(result.eventOutcomes[0].patch.details, details);
       assert.match(
-        result.patch.content?.[0]?.type === "text"
-          ? result.patch.content[0].text
+        result.eventOutcomes[0].patch.content?.[0]?.type === "text"
+          ? result.eventOutcomes[0].patch.content[0].text
           : "",
         /original tool result was suppressed/,
       );
-      assert.ok(Object.isFrozen(result.patch));
-      assert.ok(Object.isFrozen(result.patch.content));
-      assert.ok(Object.isFrozen(result.patch.details));
+      assert.ok(Object.isFrozen(result.eventOutcomes[0].patch));
+      assert.ok(Object.isFrozen(result.eventOutcomes[0].patch.content));
+      assert.ok(Object.isFrozen(result.eventOutcomes[0].patch.details));
     }
   });
 
@@ -310,14 +371,14 @@ describe("Hook Evaluation native outcomes", () => {
         hook("two", "turn_end", "exit 2"),
       ],
     );
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     assert.equal(result.effects.length, 1);
     assert.equal(result.effects[0]?.type, "present");
     assert.match(presentationMessages(result)[0] ?? "", /2 turn_end hooks failed/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*one\*\*/);
     assert.match(presentationMessages(result)[0] ?? "", /\*\*two\*\*/);
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => row.hookRef),
+      hookRows(result.evaluationReport).map((row) => row.hookRef),
       ["local/one", "local/two"],
     );
   });
@@ -332,7 +393,7 @@ describe("Hook Evaluation native outcomes", () => {
         hook("two", "agent_settled", "false"),
       ],
     );
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     assert.match(presentationMessages(result)[0] ?? "", /2 agent_settled/);
   });
 
@@ -349,9 +410,9 @@ describe("Hook Evaluation native outcomes", () => {
         hook("always", "session_before_switch", "false"),
       ],
     );
-    assert.equal(switching.outcome, "cancel");
-    if (switching.outcome === "cancel") {
-      assert.match(switching.reason, /session switch cancelled by 2 hooks/);
+    assert.equal(switching.eventOutcomes[0].outcome, "cancel");
+    if (switching.eventOutcomes[0].outcome === "cancel") {
+      assert.match(switching.eventOutcomes[0].reason, /session switch cancelled by 2 hooks/);
     }
 
     const forking = await evaluate(
@@ -365,9 +426,9 @@ describe("Hook Evaluation native outcomes", () => {
         hook("always", "session_before_fork", "false"),
       ],
     );
-    assert.equal(forking.outcome, "cancel");
-    if (forking.outcome === "cancel") {
-      assert.match(forking.reason, /session fork cancelled by 2 hooks/);
+    assert.equal(forking.eventOutcomes[0].outcome, "cancel");
+    if (forking.eventOutcomes[0].outcome === "cancel") {
+      assert.match(forking.eventOutcomes[0].reason, /session fork cancelled by 2 hooks/);
     }
   });
 
@@ -380,15 +441,15 @@ describe("Hook Evaluation native outcomes", () => {
     );
     assert.deepEqual(Object.keys(result).sort(), [
       "effects",
-      "executionReport",
-      "outcome",
+      "evaluationReport",
+      "eventOutcomes",
     ]);
     assert.ok(Object.isFrozen(result));
     assert.ok(Object.isFrozen(result.effects));
-    assert.ok(Object.isFrozen(result.executionReport));
-    assert.ok(Object.isFrozen(result.executionReport?.rows));
-    assert.equal(hookRows(result.executionReport).length, 1);
-    const row = hookRows(result.executionReport)[0];
+    assert.ok(Object.isFrozen(result.evaluationReport));
+    assert.ok(Object.isFrozen(result.evaluationReport?.rows));
+    assert.equal(hookRows(result.evaluationReport).length, 1);
+    const row = hookRows(result.evaluationReport)[0];
     assert.equal(row?.hookRef, "owner/hooks/pass");
     assert.equal(row?.type, "hook");
     assert.equal(row?.passed, true);
@@ -404,19 +465,6 @@ describe("Hook Evaluation native outcomes", () => {
 });
 
 describe("Hook Invocation semantics", () => {
-  it("freezes each individual Hook Result at Invocation creation", async () => {
-    const batch = await invokeHooks(
-      [hook("immutable", "tool_call")],
-      adapterFor("tool_call"),
-      toolCall,
-      context(root),
-    );
-
-    assert.equal(batch.invocations.length, 1);
-    assert.equal(batch.invocations[0]!.result.evaluatedEvent, "tool_call");
-    assert.ok(Object.isFrozen(batch.invocations[0]!.result));
-  });
-
   it("runs filter then when then shell with one shared environment", async () => {
     const cwd = caseDirectory("when-shell-environment");
     const print =
@@ -434,11 +482,11 @@ describe("Hook Invocation semantics", () => {
       context(cwd, { metadata: { PI_SESSION_ID: "session-123" } }),
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     const whenIdentity = readFileSync(join(cwd, "when.log"), "utf8").trim();
     const shellIdentity = readFileSync(join(cwd, "shell.log"), "utf8").trim();
     assert.equal(shellIdentity, whenIdentity);
-    assert.equal(hookRows(result.executionReport).length, 1);
+    assert.equal(hookRows(result.evaluationReport).length, 1);
     const [ref, hookEvent, invocationId, event, session] = shellIdentity.split("|");
     assert.equal(ref, "owner/hooks/identity");
     assert.equal(hookEvent, "tool_call");
@@ -459,7 +507,7 @@ describe("Hook Invocation semantics", () => {
       ],
       cwd,
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     const ids = readFileSync(join(cwd, "ids.log"), "utf8").trim().split("\n");
     assert.equal(ids.length, 2);
     assert.match(ids[0] ?? "", UUID_PATTERN);
@@ -509,7 +557,7 @@ describe("Hook Invocation semantics", () => {
       cwd,
       context(cwd, { metadata }),
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
 
     const lifecycle = await evaluate(
       new HookEvaluation(),
@@ -522,7 +570,7 @@ describe("Hook Invocation semantics", () => {
       )],
       cwd,
     );
-    assert.equal(lifecycle.outcome, "pass");
+    assert.equal(lifecycle.eventOutcomes[0].outcome, "pass");
     assert.deepEqual(
       JSON.parse(readFileSync(join(cwd, "payload.json"), "utf8")),
       { event: "turn_end", turnIndex: 3 },
@@ -541,10 +589,10 @@ describe("Hook Invocation semantics", () => {
       ],
       cwd,
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.equal(existsSync(join(cwd, "should-not-run")), false);
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => row.hookRef),
+      hookRows(result.evaluationReport).map((row) => row.hookRef),
       ["local/pass"],
     );
   });
@@ -561,8 +609,8 @@ describe("Hook Invocation semantics", () => {
         hook("skip", "tool_call", "true", { when: "exit 9" }),
       ],
     );
-    assert.equal(result.outcome, "pass");
-    assert.equal(result.executionReport, undefined);
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
+    assert.equal(result.evaluationReport, undefined);
   });
 
   it("fails closed when a when process cannot execute", async () => {
@@ -574,12 +622,12 @@ describe("Hook Invocation semantics", () => {
         when: String.fromCharCode(0),
       })],
     );
-    assert.equal(result.outcome, "block");
-    if (result.outcome === "block") {
-      assert.match(result.reason, /during when/);
-      assert.ok(!result.reason.includes("`true`"));
+    assert.equal(result.eventOutcomes[0].outcome, "block");
+    if (result.eventOutcomes[0].outcome === "block") {
+      assert.match(result.eventOutcomes[0].reason, /during when/);
+      assert.ok(!result.eventOutcomes[0].reason.includes("`true`"));
     }
-    assert.equal(result.executionReport, undefined);
+    assert.equal(result.evaluationReport, undefined);
   });
 
   it("does not report a main shell that failed before spawning", async () => {
@@ -589,8 +637,8 @@ describe("Hook Invocation semantics", () => {
       toolCall,
       [hook("broken-shell", "tool_call", String.fromCharCode(0))],
     );
-    assert.equal(result.outcome, "block");
-    assert.equal(result.executionReport, undefined);
+    assert.equal(result.eventOutcomes[0].outcome, "block");
+    assert.equal(result.evaluationReport, undefined);
   });
 
   it("runs shells in the supplied working directory", async () => {
@@ -602,7 +650,7 @@ describe("Hook Invocation semantics", () => {
       [hook("cwd", "tool_call", "test \"$PWD\" = \"$PI_CWD\" && touch marker")],
       cwd,
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.ok(existsSync(join(cwd, "marker")));
   });
 
@@ -614,7 +662,7 @@ describe("Hook Invocation semantics", () => {
       toolCall,
       [hook("slow", "tool_call", "sleep 30")],
     );
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
     assert.ok(Date.now() - startedAt < 8_000);
   });
 
@@ -629,7 +677,7 @@ describe("Hook Invocation semantics", () => {
       root,
       context(root, { signal: controller.signal }),
     );
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
   });
 
   it("skips already-aborted report-only turn hooks", async () => {
@@ -644,7 +692,7 @@ describe("Hook Invocation semantics", () => {
       cwd,
       context(cwd, { signal: controller.signal }),
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.equal(existsSync(join(cwd, "marker")), false);
   });
 
@@ -674,7 +722,7 @@ describe("Hook Invocation semantics", () => {
         root,
         context(root, { metadata: { PI_SESSION_ID: "current" } }),
       );
-      assert.equal(result.outcome, "pass");
+      assert.equal(result.eventOutcomes[0].outcome, "pass");
     } finally {
       if (previousSession === undefined) delete process.env.PI_SESSION_ID;
       else process.env.PI_SESSION_ID = previousSession;
@@ -711,7 +759,7 @@ describe("Enabled Hook Set", () => {
     );
     // The captured `first` (shell false) still blocks; the replacement is not
     // part of this set.
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
   });
 
   it("captures one set and metadata snapshot for origin and handlers", async () => {
@@ -736,7 +784,7 @@ describe("Enabled Hook Set", () => {
     // evaluation (the metadata snapshot is taken at callback entry).
     metadata.PI_SESSION_ID = "changed";
     const result = await evaluation;
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.equal(readFileSync(join(cwd, "captured.log"), "utf8"), "captured");
   });
 });
@@ -758,9 +806,9 @@ describe("owned Action evaluation", () => {
       context(root, { signal }),
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.deepEqual(result.effects, []);
-    assert.equal(result.executionReport, undefined);
+    assert.equal(result.evaluationReport, undefined);
   });
 
   it("shares one fresh identity between each passing precondition and action request", async () => {
@@ -801,7 +849,7 @@ describe("owned Action evaluation", () => {
     assert.match(effects[1]?.invocationId ?? "", UUID_PATTERN);
     assert.notEqual(effects[0]?.invocationId, effects[1]?.invocationId);
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => row.hookRef),
+      hookRows(result.evaluationReport).map((row) => row.hookRef),
       ["local/first", "local/second"],
     );
   });
@@ -829,14 +877,14 @@ describe("owned Action evaluation", () => {
       ],
     );
 
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
     const effects = result.effects.filter((effect) => effect.type === "request-action");
     assert.deepEqual(effects.map((effect) => effect.hookRef), [
       "local/message",
       "local/interrupt",
     ]);
     assert.deepEqual(
-      actionRows(result.executionReport).map((request) => ({
+      actionRows(result.evaluationReport).map((request) => ({
         ref: request.hookRef,
         type: request.actionType,
       })),
@@ -845,7 +893,7 @@ describe("owned Action evaluation", () => {
         { ref: "local/interrupt", type: "interrupt" },
       ],
     );
-    assert.ok(Object.isFrozen(result.executionReport?.rows));
+    assert.ok(Object.isFrozen(result.evaluationReport?.rows));
   });
 
   it("lets a failure Action select a precondition infrastructure result", async () => {
@@ -865,13 +913,13 @@ describe("owned Action evaluation", () => {
       ],
     );
 
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
     assert.deepEqual(result.effects.map((effect) => effect.type), [
       "request-action",
       "request-action",
     ]);
     assert.deepEqual(
-      actionRows(result.executionReport).map((request) => ({
+      actionRows(result.evaluationReport).map((request) => ({
         ref: request.hookRef,
         outcome: request.outcome,
       })),
@@ -904,10 +952,10 @@ describe("owned Action evaluation", () => {
       cwd,
     );
 
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     assert.equal(existsSync(join(cwd, "ordinary-shell")), true);
     assert.deepEqual(
-      hookRows(result.executionReport).map(({ hookRef, passed }) => ({
+      hookRows(result.evaluationReport).map(({ hookRef, passed }) => ({
         hookRef,
         passed,
       })),
@@ -945,10 +993,10 @@ describe("owned Action evaluation", () => {
       context(root, { signal: AbortSignal.abort() }),
     );
 
-    assert.equal(result.outcome, "block");
-    assert.equal(hookRows(result.executionReport).length, 0);
+    assert.equal(result.eventOutcomes[0].outcome, "block");
+    assert.equal(hookRows(result.evaluationReport).length, 0);
     assert.deepEqual(
-      actionRows(result.executionReport).map(({ hookRef, outcome }) => ({
+      actionRows(result.evaluationReport).map(({ hookRef, outcome }) => ({
         hookRef,
         outcome,
       })),
@@ -980,7 +1028,7 @@ describe("owned Action evaluation", () => {
       ],
     );
 
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
     assert.deepEqual(
       result.effects
         .filter((effect) => effect.type === "request-action")
@@ -1032,7 +1080,7 @@ describe("owned Action evaluation", () => {
 
     assert.deepEqual(
       cases.map((result) => {
-        const requests = actionRows(result.executionReport);
+        const requests = actionRows(result.evaluationReport);
         assert.equal(requests.length, 1);
         return requests[0]?.origin?.outcome;
       }),
@@ -1040,7 +1088,7 @@ describe("owned Action evaluation", () => {
     );
   });
 
-  it("dispatches synthetic actions result-major with origin association", async () => {
+  it("dispatches reactive Actions result-major with origin association", async () => {
     const result = await evaluate(
       new HookEvaluation(),
       "turn_end",
@@ -1065,7 +1113,7 @@ describe("owned Action evaluation", () => {
       "local/second",
     ]);
     assert.deepEqual(
-      actionRows(result.executionReport).map((row) =>
+      actionRows(result.evaluationReport).map((row) =>
         row.origin?.hookRef
       ),
       ["local/passes", "local/passes", "local/fails", "local/fails"],
@@ -1090,8 +1138,8 @@ describe("owned Action evaluation", () => {
     );
 
     // For each originating Hook Result: its Hook row, owned Action row, then its
-    // synthetic `hook_result` rows — one ordered sequence.
-    const rows = result.executionReport?.rows ?? [];
+    // reactive `hook_result` rows — one ordered sequence.
+    const rows = result.evaluationReport?.rows ?? [];
     assert.deepEqual(
       rows.map((row) =>
         row.type === "hook"
@@ -1100,12 +1148,12 @@ describe("owned Action evaluation", () => {
       ),
       [
         "a:local/first",  // origin 1
-        "a:local/after",  // synthetic for origin 1
+        "a:local/after",  // reactive for origin 1
         "a:local/steer",  // origin 2
         "x:local/steer",  // its owned Action row directly after its Hook
-        "a:local/after",  // synthetic for origin 2
+        "a:local/after",  // reactive for origin 2
         "a:local/second", // origin 3
-        "a:local/after",  // synthetic for origin 3
+        "a:local/after",  // reactive for origin 3
       ],
     );
     // The owned Action row directly follows its owner's Hook row.
@@ -1124,7 +1172,7 @@ describe("owned Action evaluation", () => {
       toolCall,
       [hook("slow-when", "tool_call", "true", { when: "sleep 0.06" })],
     );
-    const row = hookRows(result.executionReport)[0];
+    const row = hookRows(result.evaluationReport)[0];
     assert.ok(row, "a passing when still yields a Hook row");
     assert.ok(
       (row?.durationMs ?? 0) >= 50,
@@ -1133,7 +1181,7 @@ describe("owned Action evaluation", () => {
   });
 });
 
-describe("synthetic hook_result phase", () => {
+describe("Hook Result Event phase", () => {
   it("applies shared Event semantics to Native and Hook Result Events", async () => {
     const cwd = caseDirectory("shared-event-semantics");
     const result = await evaluate(
@@ -1170,7 +1218,7 @@ describe("synthetic hook_result phase", () => {
       cwd,
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     for (const marker of [
       "native-filter-miss",
       "native-when-false",
@@ -1190,7 +1238,7 @@ describe("synthetic hook_result phase", () => {
       ],
     );
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => ({
+      hookRows(result.evaluationReport).map((row) => ({
         hookRef: row.hookRef,
         origin: row.origin?.hookRef,
       })),
@@ -1232,7 +1280,7 @@ describe("synthetic hook_result phase", () => {
       cwd,
     );
 
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     const lines = readFileSync(join(cwd, "order.log"), "utf8").trim().split("\n");
     assert.deepEqual(lines.map((line) => line.slice(0, line.indexOf(":"))), [
       "first",
@@ -1243,7 +1291,7 @@ describe("synthetic hook_result phase", () => {
     assert.match(lines[0] ?? "", /"outcome":"pass","code":0/);
     assert.match(lines[2] ?? "", /"outcome":"report","code":7/);
 
-    const rows = result.executionReport?.rows ?? [];
+    const rows = result.evaluationReport?.rows ?? [];
     const executions = rows.filter(
       (row): row is Extract<EvaluationReportRow, { type: "hook" }> =>
         row.type === "hook",
@@ -1256,7 +1304,7 @@ describe("synthetic hook_result phase", () => {
       "local/first",
       "local/second",
     ]);
-    // Synthetic handler rows carry the projected origin; they are interleaved
+    // Reactive handler rows carry the projected origin; they are interleaved
     // result-major (originating row, then its handlers).
     const synthetic = executions.filter((row) => row.origin !== undefined);
     assert.deepEqual(
@@ -1308,7 +1356,7 @@ describe("synthetic hook_result phase", () => {
       ],
       cwd,
     );
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     assert.equal(readFileSync(join(cwd, "match.log"), "utf8"), "match\n");
     assert.equal(existsSync(join(cwd, "bad")), false);
     assert.deepEqual(
@@ -1337,7 +1385,7 @@ describe("synthetic hook_result phase", () => {
       cwd,
       context(cwd, { signal: controller.signal }),
     );
-    assert.equal(result.outcome, "block");
+    assert.equal(result.eventOutcomes[0].outcome, "block");
     assert.ok(existsSync(join(cwd, "handled")));
     assert.ok(
       result.effects.some((effect) =>
@@ -1363,7 +1411,7 @@ describe("synthetic hook_result phase", () => {
       ],
       cwd,
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     const line = readFileSync(join(cwd, "identities.log"), "utf8").trim();
     const separator = line.indexOf("|");
     const handlerInvocationId = line.slice(0, separator);
@@ -1377,6 +1425,13 @@ describe("synthetic hook_result phase", () => {
       );
 
     assert.match(handlerInvocationId, UUID_PATTERN);
+    assert.deepEqual(Object.keys(payload).sort(), [
+      "code",
+      "event",
+      "hookRef",
+      "invocationId",
+      "outcome",
+    ]);
     assert.equal(payload.invocationId, originInvocationId);
     assert.equal(actionFor("local/origin")?.invocationId, originInvocationId);
     assert.equal(actionFor("local/handler")?.invocationId, handlerInvocationId);
@@ -1400,7 +1455,9 @@ describe("synthetic hook_result phase", () => {
       ],
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
+    assert.equal(result.eventOutcomes[1]?.outcome, "report");
+    assert.equal(result.eventOutcomes[1]?.hookRef, "local/origin");
     assert.deepEqual(
       result.effects
         .filter((effect) => effect.type === "request-action")
@@ -1408,7 +1465,7 @@ describe("synthetic hook_result phase", () => {
       ["local/later-sibling"],
     );
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => row.hookRef),
+      hookRows(result.evaluationReport).map((row) => row.hookRef),
       ["local/origin", "local/later-sibling"],
       "the crashing Hook invents no result or report row",
     );
@@ -1440,7 +1497,7 @@ describe("synthetic hook_result phase", () => {
       cwd,
     );
 
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
     assert.ok(existsSync(join(cwd, "sibling")));
     assert.deepEqual(result.effects.map((effect) => effect.type), [
       "request-action",
@@ -1466,11 +1523,18 @@ describe("synthetic hook_result phase", () => {
         hook("handler", "hook_result", "false"),
       ],
     );
-    assert.equal(result.outcome, "pass");
+    assert.equal(result.eventOutcomes[0].outcome, "pass");
+    assert.deepEqual(result.eventOutcomes.map((outcome) => ({
+      event: outcome.event,
+      outcome: outcome.outcome,
+    })), [
+      { event: "tool_call", outcome: "pass" },
+      { event: "hook_result", outcome: "report" },
+    ]);
     assert.equal(result.effects.length, 1);
     assert.match(presentationMessages(result)[0] ?? "", /hook_result hook failed/);
     assert.deepEqual(
-      hookRows(result.executionReport).map((row) => ({
+      hookRows(result.evaluationReport).map((row) => ({
         hookRef: row.hookRef,
         origin: row.origin?.hookRef,
       })),
@@ -1494,12 +1558,12 @@ describe("session policy state", () => {
 
     const failing = [hook("clean", "agent_end", "false")];
     const first = await evaluate(evaluator, "agent_end", {}, failing);
-    assert.equal(first.outcome, "report");
+    assert.equal(first.eventOutcomes[0].outcome, "report");
     assert.deepEqual(first.effects.map((effect) => effect.type), [
       "request-corrective-turn",
     ]);
     assert.deepEqual(
-      hookRows(first.executionReport).map((row) => row.hookRef),
+      hookRows(first.evaluationReport).map((row) => row.hookRef),
       ["local/clean"],
     );
 
@@ -1515,7 +1579,7 @@ describe("session policy state", () => {
       {},
       [hook("clean", "agent_end", "true")],
     );
-    assert.equal(passing.outcome, "pass");
+    assert.equal(passing.eventOutcomes[0].outcome, "pass");
 
     const afterPass = await evaluate(evaluator, "agent_end", {}, failing);
     assert.equal(afterPass.effects.at(-1)?.type, "request-corrective-turn");
@@ -1542,19 +1606,19 @@ describe("session policy state", () => {
       ],
     );
     assert.deepEqual(
-      hookRows(tool.executionReport).map((row) => row.hookRef),
+      hookRows(tool.evaluationReport).map((row) => row.hookRef),
       ["local/tool", "local/tool-action"],
     );
     assert.deepEqual(
-      hookRows(end.executionReport).map((row) => row.hookRef),
+      hookRows(end.evaluationReport).map((row) => row.hookRef),
       ["local/end", "local/end-action"],
     );
     assert.deepEqual(
-      actionRows(tool.executionReport).map((row) => row.hookRef),
+      actionRows(tool.evaluationReport).map((row) => row.hookRef),
       ["local/tool-action"],
     );
     assert.deepEqual(
-      actionRows(end.executionReport).map((row) => row.hookRef),
+      actionRows(end.evaluationReport).map((row) => row.hookRef),
       ["local/end-action"],
     );
   });
@@ -1588,22 +1652,22 @@ describe("session policy state", () => {
       ),
     ]);
 
-    assert.equal(first.outcome, "pass");
-    assert.equal(second.outcome, "pass");
+    assert.equal(first.eventOutcomes[0].outcome, "pass");
+    assert.equal(second.eventOutcomes[0].outcome, "pass");
     assert.deepEqual(
-      hookRows(first.executionReport).map((row) => row.hookRef),
+      hookRows(first.evaluationReport).map((row) => row.hookRef),
       ["local/a", "local/action-a"],
     );
     assert.deepEqual(
-      hookRows(second.executionReport).map((row) => row.hookRef),
+      hookRows(second.evaluationReport).map((row) => row.hookRef),
       ["local/b", "local/action-b"],
     );
     assert.deepEqual(
-      actionRows(first.executionReport).map((row) => row.hookRef),
+      actionRows(first.evaluationReport).map((row) => row.hookRef),
       ["local/action-a"],
     );
     assert.deepEqual(
-      actionRows(second.executionReport).map((row) => row.hookRef),
+      actionRows(second.evaluationReport).map((row) => row.hookRef),
       ["local/action-b"],
     );
   });
@@ -1630,9 +1694,9 @@ describe("unexpected failures fail closed", () => {
       ],
       cwd,
     );
-    assert.equal(result.outcome, "block");
-    if (result.outcome === "block") {
-      assert.match(result.reason, /guard failed to execute; call blocked/);
+    assert.equal(result.eventOutcomes[0].outcome, "block");
+    if (result.eventOutcomes[0].outcome === "block") {
+      assert.match(result.eventOutcomes[0].reason, /guard failed to execute; call blocked/);
     }
     const records = readFileSync(join(cwd, "completed.log"), "utf8").trim().split("\n");
     assert.equal(records.length, 2);
@@ -1648,10 +1712,10 @@ describe("unexpected failures fail closed", () => {
       toolResult,
       [hook("crashes", "tool_result", "true", { filter: invalidFilter })],
     );
-    assert.equal(result.outcome, "patch");
-    if (result.outcome === "patch") {
-      assert.equal(result.patch.isError, true);
-      assert.match(result.reason, /result suppressed/);
+    assert.equal(result.eventOutcomes[0].outcome, "patch");
+    if (result.eventOutcomes[0].outcome === "patch") {
+      assert.equal(result.eventOutcomes[0].patch.isError, true);
+      assert.match(result.eventOutcomes[0].reason, /result suppressed/);
     }
   });
 
@@ -1665,7 +1729,7 @@ describe("unexpected failures fail closed", () => {
         filter: { reason: "[" },
       })],
     );
-    assert.equal(switching.outcome, "cancel");
+    assert.equal(switching.eventOutcomes[0].outcome, "cancel");
 
     const forking = await evaluate(
       evaluator,
@@ -1675,7 +1739,7 @@ describe("unexpected failures fail closed", () => {
         filter: { position: "[" },
       })],
     );
-    assert.equal(forking.outcome, "cancel");
+    assert.equal(forking.eventOutcomes[0].outcome, "cancel");
   });
 
   it("turn and settled infrastructure errors become presentation feedback", async () => {
@@ -1691,7 +1755,7 @@ describe("unexpected failures fail closed", () => {
           filter: { event: "[" },
         })],
       );
-      assert.equal(result.outcome, "report");
+      assert.equal(result.eventOutcomes[0].outcome, "report");
       assert.equal(result.effects[0]?.type, "present");
       assert.match(presentationMessages(result)[0] ?? "", /failed to execute/);
     }
@@ -1706,7 +1770,7 @@ describe("unexpected failures fail closed", () => {
         filter: { event: "[" },
       })],
     );
-    assert.equal(result.outcome, "report");
+    assert.equal(result.eventOutcomes[0].outcome, "report");
     assert.deepEqual(result.effects.map((effect) => effect.type), ["present"]);
     assert.match(presentationMessages(result)[0] ?? "", /failed to execute/);
   });

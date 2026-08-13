@@ -20,7 +20,7 @@ import {
   type ExecutionEventContext,
 } from "../hookit/ui/execution-report.js";
 import type {
-  HookExecutionReport,
+  EvaluationReport,
   EvaluationReportRow,
 } from "../hookit/hook-evaluation/index.js";
 
@@ -79,7 +79,7 @@ function makeActionRow(
   };
 }
 
-function makeReport(rows: readonly EvaluationReportRow[] = []): HookExecutionReport {
+function makeReport(rows: readonly EvaluationReportRow[] = []): EvaluationReport {
   return { rows };
 }
 

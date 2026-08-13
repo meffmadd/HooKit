@@ -85,7 +85,7 @@
             "session_before_fork",
             "hook_result"
           ],
-          "description": "Supported native or synthetic event."
+          "description": "Supported Native Event or Hook Result Event."
         },
         "filter": {
           "type": "object",
@@ -297,7 +297,7 @@
     },
     "hookResultFilter": {
       "type": "object",
-      "description": "hook_result identity fields use regex matching; outcome and code use exact shared result-selector matching.",
+      "description": "Hook Result Event identity fields use regex matching; Hook outcome and code use exact shared selector matching.",
       "properties": {
         "event": {
           "$ref": "#/$defs/stringOrArray"
@@ -639,7 +639,7 @@
       ]
     },
     "action": {
-      "description": "One owned Action. outcome/code select the owning Hook's immutable individual result and are removed from the delivery request.",
+      "description": "One owned Action. outcome/code select the owning Hook's immutable Hook Outcome and are removed from the Action Request Effect.",
       "allOf": [
         {
           "$ref": "#/$defs/actionSelectorFeasibility"

@@ -11,8 +11,8 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   subscribes passively to Pi's `tool_execution_start`/`_end` lifecycle,
   brackets each supported native callback with the session ExecutionReporter
   (tool-wave collection + combined Execution Wave flush + late append),
-  translates explicit Hook Evaluation outcomes into
-  Pi callbacks, and delivers ordered semantic effects best-effort. It maps
+  translates the first Event Outcome in each Hook Evaluation Outcome into
+  Pi callbacks, and delivers ordered Effects best-effort. It maps
   delivery-neutral Action Requests onto ordinary
   Pi context/API operations; it owns no catalog or hook policy.
 - **`hookit/hook-catalog/`** — the session-scoped deep Hook Catalog
@@ -29,13 +29,17 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   returns a fresh catalog; failures leave the caller's prior snapshot intact.
 - **`hookit/hook-evaluation/`** — the session-scoped deep Hook Evaluation
   module. Its facade exposes `HookEvaluation`, `createEnabledHookSet`, the
-  typed native event map, bounded execution context, explicit outcomes, and
-  delivery-neutral effects. One private Event-evaluation mechanism uses the
-  exhaustive adapter registry for candidate/filter/environment projection,
+  typed Native Event map, bounded Evaluation Context, Hook Evaluation Outcome,
+  event-typed Event Outcomes, and delivery-neutral Effects. One private
+  Event-evaluation mechanism uses the
+  exhaustive adapter registry for candidate/Filter/environment projection,
   filter → `when` → shell Hook Invocations, immutable individual Hook Results,
-  fail-closed aggregation, owned-Action selection, Effects, and ordered report
-  rows for both Native Events and Hook Result Events. The outer Hook Evaluation
-  alone projects Hook Result Events and prevents recursion; corrective retry
+  fail-closed aggregation, owned-Action selection, Effects, and ordered
+  Evaluation Report rows for both Native Events and Hook Result Events. The
+  outer Hook Evaluation
+  alone projects Hook Result Events and prevents recursion. The public outcome
+  exposes the Native Event Outcome first, followed by one pass/report Hook
+  Result Event Outcome per originating Hook Result; corrective retry
   deduplication remains session-scoped. Ordinary
   shells run via real `child_process.exec`; exact `true`/`false` shortcuts stay
   hidden in the shared evaluator. No shell port exists solely for tests.
@@ -122,10 +126,10 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   Omitted shell canonicalizes to `"true"`; downstream Catalog/Enabled Hook shapes
   always have an effective shell.
 - Owned Actions require `outcome`, may select `code`, and observe only their
-  immutable owner result. Their selector metadata is stripped from the
-  delivery-neutral Action Request. Selector semantics are shared with the
+  immutable owner's Hook Outcome and code. Their selector metadata is stripped
+  from the delivery-neutral Action Request. Selector semantics are shared with the
   outcome/code fields of `hook_result` filters.
-- Hook Evaluation freezes the aggregate Native Event outcome before result-major
+- Hook Evaluation freezes the aggregate Native Event Outcome before result-major
   reactions. For each originating Hook Result, the owned Action is considered
   before its Hook Result Event is evaluated through the same private mechanism.
   The outer Evaluation does not project an Event from a reactive Hook Result,
@@ -136,13 +140,15 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   event closed without stopping siblings and invent no result or Action.
 - The thin adapter maps requests to `ctx.abort`, `ctx.shutdown`, `ctx.compact`,
   HooKit custom messages, or `pi.events.emit` and delivers siblings
-  best-effort without changing the frozen native outcome.
-- Lifecycle adapters expose bounded scalar candidates through both filters and
+  best-effort without changing the frozen Native Event Outcome. Reactive Event
+  Outcomes remain observable but have no native-control authority.
+- Lifecycle adapters expose bounded scalar candidates through both Filters and
   JSON `PI_EVENT_PAYLOAD`; rich/native event objects are intentionally deferred.
   `hook_result` exposes only `event`, canonical `hookRef`, originating
-  `invocationId`, individual `outcome`, and numeric/`null` `code`. Its handlers are
-  awaited without the originating abort signal and can never alter the frozen
-  originating outcome; handler Hook/invocation identity remains separate.
+  `invocationId`, individual Hook `outcome`, and numeric/`null` `code`. Its
+  handlers are awaited without the originating abort signal and can never alter
+  the frozen Native Event Outcome; handler Hook/invocation identity remains
+  separate.
 - `session_before_switch` and `session_before_fork` can cancel. `session_shutdown`
   is not a supported Event because Pi exposes no cancellation result.
 - Trusted project entries replace global entries only when Hook Source and
@@ -174,12 +180,13 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   Individual Hook rows measure passing `when` + main `shell`. A wave with
   an incomplete tool lifecycle is discarded rather than assigned an invented
   end. Tool call and result reports are never split by event.
-- **Reports are flat ordered rows.** Hook Evaluation emits one ordered
-  `rows` sequence (originating Hook row, its owned Action row, then synthetic
-  `hook_result` rows and their Actions, per originating Hook Result). Reporting rows
-  carry no Invocation ID, row-level event, origin Invocation ID, Action payload, shell text,
+- **Reports are flat ordered rows.** A Hook Evaluation Outcome optionally emits
+  one Evaluation Report with one ordered `rows` sequence (originating Hook row, its owned Action row, then reactive
+  `hook_result` rows and their Actions, per originating Hook Result). Reporting
+  rows carry no Invocation ID, row-level Event, origin Invocation ID, Action
+  payload, shell text,
   or depth. The renderer draws those rows flat with `from` origin annotations —
-  no causal maps, consumed sets, or synthetic display-only result rows.
+  no causal maps, consumed sets, or reactive display-only result rows.
 - **Fuzzy search ranks by coarse field tier, not relevance.** Entries rank by
   their highest matching field tier (name > description > source > body); ties
   keep catalog order. Matched positions drive highlighting only.

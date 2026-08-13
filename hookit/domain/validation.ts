@@ -1,8 +1,8 @@
 import {
-  isHookResultOutcome,
+  isHookOutcome,
   isLifecycleEvent,
   type Action,
-  type HookResultOutcome,
+  type HookOutcome,
   type Event,
   type JsonValue,
   type PersistedHook,
@@ -41,7 +41,7 @@ const HOOK_RESULT_FILTER_KEYS = new Set([
   "code",
 ]);
 
-const OUTCOMES_BY_EVENT: Readonly<Record<Event, readonly HookResultOutcome[]>> = {
+const OUTCOMES_BY_EVENT: Readonly<Record<Event, readonly HookOutcome[]>> = {
   tool_call: ["pass", "block"],
   tool_result: ["pass", "patch"],
   turn_end: ["pass", "report"],
@@ -146,7 +146,7 @@ function possibleActionSelector(
 ): boolean {
   const outcomes = (Array.isArray(outcomeValue)
     ? outcomeValue
-    : [outcomeValue]) as HookResultOutcome[];
+    : [outcomeValue]) as HookOutcome[];
   const allowed = OUTCOMES_BY_EVENT[event];
   if (outcomes.some((outcome) => !allowed.includes(outcome))) return false;
   if (codeValue === undefined) return true;
@@ -166,7 +166,7 @@ function validAction(value: unknown, event: Event): value is Action {
   if (!Object.prototype.hasOwnProperty.call(ACTION_KEYS, value.type)) return false;
   const type = value.type as Action["type"];
   if (Object.keys(value).some((key) => !ACTION_KEYS[type].has(key))) return false;
-  if (!nonEmptyScalarOrArray(value.outcome, isHookResultOutcome)) return false;
+  if (!nonEmptyScalarOrArray(value.outcome, isHookOutcome)) return false;
   if (
     value.code !== undefined &&
     !nonEmptyScalarOrArray(
@@ -217,7 +217,7 @@ function validHookResultFilter(filter: unknown): boolean {
     return false;
   }
   if (filter.outcome !== undefined &&
-      !scalarOrArray(filter.outcome, isHookResultOutcome)) {
+      !scalarOrArray(filter.outcome, isHookOutcome)) {
     return false;
   }
   if (filter.code !== undefined &&

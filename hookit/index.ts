@@ -7,9 +7,10 @@ import { clearRepoEntriesCache } from "./installer.js";
 import type { NativeEvent } from "./domain/entry.js";
 import {
   HookEvaluation,
-  type HookExecutionReport,
-  type EvaluationEffect,
-  type HookEvaluationResult,
+  type Effect,
+  type EvaluationReport,
+  type HookEvaluationOutcome,
+  type NativeEventOutcome,
   type EventMap,
   type EvaluationContext,
   type RuntimeMetadataSnapshot,
@@ -234,12 +235,12 @@ export default function (pi: ExtensionAPI) {
     try {
       if (ctx.hasUI) ctx.ui.notify(message, "error");
     } catch {
-      // Presentation cannot turn best-effort effect delivery into a failure.
+      // Presentation cannot turn best-effort Effect delivery into a failure.
     }
   }
 
   function deliverAction(
-    effect: Extract<EvaluationEffect, { type: "request-action" }>,
+    effect: Extract<Effect, { type: "request-action" }>,
     ctx: PiExtensionContext,
   ): void {
     const action = effect.action;
@@ -284,7 +285,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function deliverEffects(
-    effects: readonly EvaluationEffect[],
+    effects: readonly Effect[],
     ctx: PiExtensionContext,
   ): Promise<void> {
     for (const effect of effects) {
@@ -317,18 +318,18 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function displayControlOutcome(
-    result: HookEvaluationResult,
+    outcome: NativeEventOutcome,
     ctx: PiExtensionContext,
   ): Promise<void> {
     if (
-      result.outcome !== "block" &&
-      result.outcome !== "patch" &&
-      result.outcome !== "cancel"
+      outcome.outcome !== "block" &&
+      outcome.outcome !== "patch" &&
+      outcome.outcome !== "cancel"
     ) {
       return;
     }
     try {
-      if (ctx.hasUI) ctx.ui.notify(result.reason, "error");
+      if (ctx.hasUI) ctx.ui.notify(outcome.reason, "error");
     } catch {
       // Native control translation below must not depend on presentation.
     }
@@ -338,24 +339,24 @@ export default function (pi: ExtensionAPI) {
     event: H,
     payload: EventMap[H],
     ctx: PiExtensionContext,
-  ): Promise<HookEvaluationResult<H>> {
+  ): Promise<HookEvaluationOutcome<H>> {
     // The observation opens at callback entry and covers every HooKit owned
-    // blocking step: capture, Evaluation, effect delivery, and feedback.
+    // blocking step: capture, Evaluation, Effect delivery, and feedback.
     const observation = executionReporter.begin(
       event,
       executionEventContext(event, payload),
     );
-    let result: HookEvaluationResult<H>;
-    let accounting: HookExecutionReport | undefined;
+    let result: HookEvaluationOutcome<H>;
+    let accounting: EvaluationReport | undefined;
     try {
       // Both values are captured synchronously at callback entry. Enablement or
       // rich Pi-context changes during awaits apply only to the next Evaluation.
       const enabledSet = state.enabledHookSet();
       const context = hookContext(pi, ctx);
       result = await hookEvaluation.evaluate(event, payload, context, enabledSet);
-      accounting = result.executionReport;
+      accounting = result.evaluationReport;
       await deliverEffects(result.effects, ctx);
-      await displayControlOutcome(result, ctx);
+      await displayControlOutcome(result.eventOutcomes[0], ctx);
     } finally {
       // Completion must also happen on an unexpected escape so an open
       // observation can never poison later reporting.
@@ -366,18 +367,20 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     const result = await runEvent("tool_call", event, ctx);
-    if (result.outcome === "block") {
-      return { block: true, reason: result.reason };
+    const outcome = result.eventOutcomes[0];
+    if (outcome.outcome === "block") {
+      return { block: true, reason: outcome.reason };
     }
   });
 
   pi.on("tool_result", async (event, ctx) => {
     const result = await runEvent("tool_result", event, ctx);
-    if (result.outcome === "patch") {
+    const outcome = result.eventOutcomes[0];
+    if (outcome.outcome === "patch") {
       return {
-        content: result.patch.content?.map((block) => ({ ...block })),
-        details: result.patch.details,
-        isError: result.patch.isError,
+        content: outcome.patch.content?.map((block) => ({ ...block })),
+        details: outcome.patch.details,
+        isError: outcome.patch.isError,
       };
     }
   });
@@ -396,11 +399,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_before_switch", async (event, ctx) => {
     const result = await runEvent("session_before_switch", event, ctx);
-    if (result.outcome === "cancel") return { cancel: true };
+    if (result.eventOutcomes[0].outcome === "cancel") return { cancel: true };
   });
 
   pi.on("session_before_fork", async (event, ctx) => {
     const result = await runEvent("session_before_fork", event, ctx);
-    if (result.outcome === "cancel") return { cancel: true };
+    if (result.eventOutcomes[0].outcome === "cancel") return { cancel: true };
   });
 }
