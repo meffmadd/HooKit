@@ -52,17 +52,18 @@ function makeHook(
 
 function makePanel(
   entries: CatalogEntry[],
-  active: Set<string> = new Set(),
+  enabledEntries: Set<string> = new Set(),
 ): HooksPanel {
   const state = {
     entries,
-    active,
-    isActive(entry: CatalogEntry) {
-      return active.has(entry.name) || active.has(`${entry.source}\x00${entry.name}`);
+    enabledEntries,
+    isEnabledDirectly(entry: CatalogEntry) {
+      return enabledEntries.has(entry.name) ||
+        enabledEntries.has(`${entry.source}\x00${entry.name}`);
     },
-    enable(entry: CatalogEntry) { active.add(entry.name); },
-    disable(entry: CatalogEntry) { active.delete(entry.name); },
-    disableAll() { active.clear(); },
+    enable(entry: CatalogEntry) { enabledEntries.add(entry.name); },
+    disable(entry: CatalogEntry) { enabledEntries.delete(entry.name); },
+    disableAll() { enabledEntries.clear(); },
     persist() {},
     updateStatus() {},
   } as unknown as HooksState;
@@ -111,7 +112,7 @@ function plain(s: string): string {
 
 /**
  * Find the rendered row for `name` (not a detail line like `hooks:`/`shell:`).
- * A row carries a status keyword (active/enabled/disabled); a detail line
+ * A row carries an enabled/disabled status; a detail line
  * (e.g. the preset's `hooks: local/guard`) does not.  Needed since M3: the
  * Presets section renders first, so a preset's `hooks:` detail mentioning a
  * member name can appear before the member's own row.
@@ -119,7 +120,7 @@ function plain(s: string): string {
 function rowFor(lines: string[], name: string): string | undefined {
   return lines.find((l) => {
     const p = plain(l);
-    return p.includes(name) && /active|enabled|disabled/.test(p);
+    return p.includes(name) && /enabled|disabled/.test(p);
   });
 }
 
@@ -425,21 +426,21 @@ describe("HooksPanel", () => {
 
   // ── Hint line ───────────────────────────────────────────────────
 
-  it("shows the d disable all footer action when hooks are active", () => {
+  it("shows the d disable-all action when entries are enabled", () => {
     const panel = makePanel([makeHook("alpha")], new Set(["alpha"]));
     const lines = panel.render(80);
     assert.ok(
       lines.some((l) => l.includes("[d] disable all")),
-      "shows disable all when a hook is active",
+      "shows disable all when an entry is enabled",
     );
   });
 
-  it("hides the d disable all footer action when nothing is active", () => {
+  it("hides the d disable-all action when nothing is enabled", () => {
     const panel = makePanel([makeHook("alpha")]);
     const lines = panel.render(80);
     assert.ok(
       !lines.some((l) => l.includes("disable all")),
-      "hides disable all when nothing is active",
+      "hides disable all when nothing is enabled",
     );
   });
 
@@ -458,13 +459,13 @@ describe("HooksPanel", () => {
 
   // ── d / r keybindings ───────────────────────────────────────────
 
-  it("d clears the active set and persists", () => {
+  it("d clears directly enabled entries and persists", () => {
     const active = new Set(["alpha", "beta"]);
     let persisted = false;
     let statusUpdated = false;
     const state = {
       entries: [makeHook("alpha"), makeHook("beta")],
-      active,
+      enabledEntries: active,
       disableAll() { active.clear(); },
       persist() { persisted = true; },
       updateStatus() { statusUpdated = true; },
@@ -475,16 +476,16 @@ describe("HooksPanel", () => {
 
     panel.handleInput("d", makeCtx());
 
-    assert.equal(active.size, 0, "active set is cleared");
+    assert.equal(active.size, 0, "direct enablement is cleared");
     assert.ok(persisted, "persist is called");
     assert.ok(statusUpdated, "status bar is refreshed");
   });
 
-  it("d is a no-op when nothing is active (no persist)", () => {
+  it("d is a no-op when nothing is enabled directly", () => {
     let persisted = false;
     const state = {
       entries: [makeHook("alpha")],
-      active: new Set<string>(),
+      enabledEntries: new Set<string>(),
       disableAll() { /* should not run */ },
       persist() { persisted = true; },
       updateStatus() { },
@@ -495,7 +496,7 @@ describe("HooksPanel", () => {
 
     panel.handleInput("d", makeCtx());
 
-    assert.ok(!persisted, "must not persist an empty active set");
+    assert.ok(!persisted, "must not persist an already-empty enabled set");
   });
 
   it("r opens the remove confirm for a non-local hook", () => {
@@ -557,7 +558,7 @@ describe("HooksPanel", () => {
     assert.match(next, /› Enter disable · t unset default · r remove/);
   });
 
-  it("uses individual activation for Enter even when a preset covers the entry", () => {
+  it("Enter toggles direct enablement even when a Preset covers the entry", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
       new Set(["safety"]),
@@ -896,7 +897,7 @@ describe("HooksPanel orphaned detection", () => {
 
     const state = {
       entries: [makeHook("hook-a", "some/repo")],
-      active: new Set<string>(),
+      enabledEntries: new Set<string>(),
       broken: true,
     } as unknown as HooksState;
 
@@ -1148,12 +1149,12 @@ describe("HooksPanel fuzzy search", () => {
   it("keeps the bottom search hint visible inside the /hooks overlay", async () => {
     const state = {
       entries: Array.from({ length: 8 }, (_, i) => makeHook(`a-${i}`)),
-      active: new Set<string>(),
+      enabledEntries: new Set<string>(),
       broken: false,
       projectTrusted: false,
       refresh() {},
       updateStatus() {},
-      isActive() { return false; },
+      isEnabledDirectly() { return false; },
       enable() {},
       disable() {},
       disableAll() {},
@@ -1576,14 +1577,14 @@ describe("HooksPanel presets", () => {
     assert.ok(!lines.some((l) => l.includes("hooks:")), "no hooks: line for a shell Hook");
   });
 
-  it("toggles a preset's active state like a shell hook", () => {
+  it("toggles a Preset's enabled state like a Hook", () => {
     const active = new Set<string>();
     const panel = makePanel(
       [makePreset("bundle", ["local/guard"])],
       active,
     );
     const ctx = makeCtx();
-    // Enter toggles active on, regardless of hook kind.
+    // Enter enables either Catalog Entry kind directly.
     panel.handleInput("\r", ctx);
     assert.ok(active.has("bundle"), "preset is enabled after Enter");
     panel.handleInput("\r", ctx);
@@ -1591,13 +1592,23 @@ describe("HooksPanel presets", () => {
   });
 });
 
-// M1.5: preset coverage — a member of an active preset shows
-// `active · via {preset}` instead of `disabled` when not individually active.
-// The `via {preset}` run is accent; `active` is dim.  An individually active
-// member shows just `enabled` (accent).  These tests use the mock theme where
+// Preset coverage — a member of an enabled Preset shows
+// `enabled · via {preset}` instead of `disabled` when not directly enabled.
+// The `via {preset}` run is accent; `enabled` is dim. A directly enabled
+// member shows just `enabled` (accent). These tests use the mock theme where
 // accent = `[...]`, so `via safety` renders as `[via safety]`.
-describe("HooksPanel preset coverage status", () => {
-  it("shows 'active · via {preset}' for a member of an active preset (focused)", () => {
+describe("HooksPanel Preset enablement status", () => {
+  it("counts directly enabled Catalog Entries rather than effective Hooks", () => {
+    const guard = makeHook("guard");
+    const safety = makePreset("safety", ["local/guard"]);
+    const panel = makePanel([guard, safety], new Set(["safety"]));
+
+    const lines = panel.render(80);
+
+    assert.ok(lines.some((line) => plain(line).includes("1/2 enabled")));
+  });
+
+  it("shows 'enabled · via {preset}' for a member of an enabled Preset", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
       new Set(["safety"]),
@@ -1605,18 +1616,18 @@ describe("HooksPanel preset coverage status", () => {
     const lines = panel.render(80);
     const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered");
-    // `guard` is not individually active, but `safety` (active) references it.
+    // `guard` is not directly enabled, but enabled `safety` references it.
     assert.ok(
-      plain(guardLine!).includes("active") && guardLine!.includes("[via safety]"),
-      "focused member shows 'active · via safety'",
+      plain(guardLine!).includes("enabled") && guardLine!.includes("[via safety]"),
+      "focused member shows 'enabled · via safety'",
     );
     assert.ok(
       !plain(guardLine!).includes("disabled"),
-      "not 'disabled' when covered by an active preset",
+      "not 'disabled' when covered by an enabled Preset",
     );
   });
 
-  it("shows 'active · via {preset}' for a member in a non-focused section", () => {
+  it("shows 'enabled · via {preset}' in a non-focused section", () => {
     const panel = makePanel(
       [
         makeHook("guard", "local"),
@@ -1631,12 +1642,12 @@ describe("HooksPanel preset coverage status", () => {
     const guardLine = rowFor(lines, "guard");
     assert.ok(guardLine, "guard row is rendered in the non-focused section");
     assert.ok(
-      plain(guardLine!).includes("active") && guardLine!.includes("[via safety]"),
-      "non-focused member also shows 'active · via safety'",
+      plain(guardLine!).includes("enabled") && guardLine!.includes("[via safety]"),
+      "non-focused member also shows 'enabled · via safety'",
     );
   });
 
-  it("shows 'enabled' (not 'via') when a member is active individually too", () => {
+  it("shows plain 'enabled' when a member is enabled directly too", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
       new Set(["guard", "safety"]),
@@ -1646,18 +1657,18 @@ describe("HooksPanel preset coverage status", () => {
     assert.ok(guardLine, "guard row is rendered");
     assert.ok(
       plain(guardLine!).includes("enabled"),
-      "individually active member shows 'enabled'",
+      "directly enabled member shows 'enabled'",
     );
     assert.ok(
       !guardLine!.includes("via"),
-      "no 'via' suffix when already active individually",
+      "no 'via' suffix when already enabled directly",
     );
   });
 
-  it("shows 'disabled' when the covering preset is inactive", () => {
+  it("shows 'disabled' when the covering Preset is disabled", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
-      new Set(), // nothing active
+      new Set(), // nothing enabled
     );
     const lines = panel.render(80);
     const guardLine = rowFor(lines, "guard");
@@ -1690,6 +1701,19 @@ describe("HooksPanel preset coverage status", () => {
     );
   });
 
+  it("reflects branch enablement restored while the panel remains open", () => {
+    const enabledEntries = new Set(["safety"]);
+    const panel = makePanel(
+      [makeHook("guard"), makePreset("safety", ["local/guard"])],
+      enabledEntries,
+    );
+    assert.ok(rowFor(panel.render(80), "guard")?.includes("[via safety]"));
+
+    enabledEntries.clear();
+
+    assert.ok(plain(rowFor(panel.render(80), "guard")!).includes("disabled"));
+  });
+
   it("updates coverage status after toggling the preset off", () => {
     const active = new Set<string>(["safety"]);
     const panel = makePanel(
@@ -1698,7 +1722,7 @@ describe("HooksPanel preset coverage status", () => {
     );
     const ctx = makeCtx();
 
-    // Initially: guard shows 'active · via safety'.
+    // Initially: guard shows 'enabled · via safety'.
     let lines = panel.render(80);
     let guardLine = rowFor(lines, "guard");
     assert.ok(guardLine!.includes("[via safety]"), "initially covered by safety");
@@ -1708,7 +1732,7 @@ describe("HooksPanel preset coverage status", () => {
     panel.handleInput("\r", ctx);
     assert.ok(!active.has("safety"), "safety toggled off");
 
-    // After toggle: guard shows 'disabled' (no active preset covers it).
+    // After toggle: guard shows 'disabled' (no enabled Preset covers it).
     panel.nav.moveWithin("up"); // focus back to guard
     lines = panel.render(80);
     guardLine = rowFor(lines, "guard");
@@ -1750,20 +1774,20 @@ function tagTheme(): Theme {
 
 function stateFromDir(
   cwd: string,
-  active: Set<string> = new Set(),
+  enabledEntries: Set<string> = new Set(),
 ): HooksState {
   const state = new HooksState({ appendEntry() {} } as unknown as ExtensionAPI);
   state.load({
     global: join(cwd, ".global-hookit.json"),
     project: projectFilePath(cwd),
   });
-  state.active = active;
+  state.enabledEntries = enabledEntries;
   return state;
 }
 
 /** Build a panel backed by a real Hook Catalog and temporary files. */
-function panelFromDir(cwd: string, active: Set<string> = new Set()): HooksPanel {
-  const panel = new HooksPanel(stateFromDir(cwd, active));
+function panelFromDir(cwd: string, enabledEntries: Set<string> = new Set()): HooksPanel {
+  const panel = new HooksPanel(stateFromDir(cwd, enabledEntries));
   panel.setTheme(mockTheme());
   return panel;
 }

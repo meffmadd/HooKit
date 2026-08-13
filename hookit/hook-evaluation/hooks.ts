@@ -4,8 +4,8 @@ import type {
   ReadonlyEntryFilter,
 } from "../domain/entry.js";
 
-/** The one normalized executable shape in an Active Hook Set. */
-export interface ActiveHook {
+/** The one normalized executable shape in an Enabled Hook Set. */
+export interface EnabledHook {
   readonly source: string;
   readonly name: string;
   readonly description: string;

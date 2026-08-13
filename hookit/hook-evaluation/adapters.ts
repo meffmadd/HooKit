@@ -1,5 +1,5 @@
 import type { Event, ReadonlyEntryFilter } from "../domain/entry.js";
-import type { ActiveHook } from "./hooks.js";
+import type { EnabledHook } from "./hooks.js";
 import {
   buildLifecycleEnvironment,
   buildToolCallEnvironment,
@@ -20,7 +20,7 @@ export type FailureAction = "block" | "patch" | "cancel" | "report";
 type FeedbackPolicy = "present-error" | "corrective-turn";
 
 export interface HookFailure {
-  readonly hook: ActiveHook;
+  readonly hook: EnabledHook;
   readonly phase: "when" | "shell";
   readonly command: string;
   readonly result: ShellResult;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { entryRef } from "../domain/entry.js";
-import type { ActiveHook } from "./hooks.js";
+import type { EnabledHook } from "./hooks.js";
 import type {
   HookFailure,
   EventAdapter,
@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 export interface InvocationError {
-  readonly hook: ActiveHook;
+  readonly hook: EnabledHook;
   readonly error: unknown;
 }
 
@@ -47,7 +47,7 @@ interface InvocationOptions {
 }
 
 export function invocationEnvironment<E>(
-  hook: Pick<ActiveHook, "source" | "name" | "event">,
+  hook: Pick<EnabledHook, "source" | "name" | "event">,
   runId: string,
   adapter: EventAdapter<E>,
   event: E,
@@ -63,7 +63,7 @@ export function invocationEnvironment<E>(
 }
 
 function hookResult(
-  hook: ActiveHook,
+  hook: EnabledHook,
   runId: string,
   outcome: HookResult["outcome"],
   code: number | null,
@@ -85,7 +85,7 @@ function hookResult(
 
 /** Execute Hook Invocations sequentially in deterministic set order. */
 export async function invokeHooks<E>(
-  hooks: readonly ActiveHook[],
+  hooks: readonly EnabledHook[],
   adapter: EventAdapter<E>,
   event: E,
   context: EvaluationContext,

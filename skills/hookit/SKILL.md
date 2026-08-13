@@ -54,6 +54,17 @@ subprocess; only those exact strings are optimized. Other strings run through
 }
 ```
 
+## Enablement
+
+Hooks and Presets can both be enabled directly. Direct Source-plus-name choices
+are stored as `enabledEntries` in the current session branch. With no saved
+choice, current `default: true` entries are enabled; a saved set, including an
+empty set, overrides defaults on resume, reload, tree navigation, fork, and
+clone. An enabled Preset stays enabled when references dangle and enables every
+available member. The derived Enabled Hook Set is immutable, ordered by first
+occurrence, and never contains the same Hook twice across direct and Preset
+paths.
+
 ## Events and individual outcomes
 
 - `tool_call`: `pass` / `block`
@@ -143,7 +154,7 @@ source-qualified ref whenever possible:
 ```
 
 For each originating Hook Result, the origin's Action is considered first, then matching
-`hook_result` Hooks in configured Active Hook Set order. A matching Hook gets
+`hook_result` Hooks in configured Enabled Hook Set order. A matching Hook gets
 a local pass/report result that may select its own Action. That local result is
 never redispatched, so synthetic handling is bounded to one level. Hooks
 handling `hook_result` run detached from the originating abort signal and cannot

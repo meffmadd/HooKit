@@ -176,13 +176,14 @@ async function startSession(
   harness: ExtensionHarness,
   ctx: ExtensionContext,
   entries: unknown,
+  reason: "startup" | "reload" | "new" | "resume" | "fork" = "startup",
 ): Promise<void> {
   const path = projectFilePath(ctx.cwd as string);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(entries));
   registerExtension(harness.pi);
   await harness.handler("session_start")(
-    { type: "session_start", reason: "startup" },
+    { type: "session_start", reason },
     ctx,
   );
 }
@@ -206,6 +207,156 @@ async function withTemporaryHome(
 describe("config storage paths", () => {
   it("keeps the global hook config in Pi's agent directory", () => {
     assert.equal(globalFilePath(), join(getAgentDir(), "hookit.json"));
+  });
+});
+
+describe("index session enablement lifecycle", () => {
+  it("restores enabledEntries on resume and ignores legacy activeHooks", async () => {
+    await withTemporaryHome("HooKit-index-enable-restore-", async (root) => {
+      const notifications: string[] = [];
+      const branch: Array<Record<string, unknown>> = [{
+        type: "custom",
+        customType: "hookit-config",
+        data: {
+          enabledEntries: ["local\x00saved"],
+          activeHooks: ["local\x00legacy"],
+        },
+      }];
+      const ctx = {
+        ...catalogCtx(root),
+        sessionManager: { getBranch: () => branch },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: (message: string) => notifications.push(message),
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          saved: {
+            description: "saved branch choice",
+            event: "tool_call",
+            shell: "false",
+          },
+          legacy: {
+            description: "legacy choice",
+            event: "tool_call",
+            shell: "false",
+          },
+          freshDefault: {
+            description: "new default ignored in saved mode",
+            event: "tool_call",
+            shell: "false",
+            default: true,
+          },
+        },
+      }, "resume");
+
+      const callResult = await harness.handler("tool_call")(
+        toolCallEvent("bash", "saved-branch"),
+        ctx,
+      );
+
+      assert.deepEqual(callResult, {
+        block: true,
+        reason: 'hookit: hook "saved" rejected bash — `false`',
+      });
+      assert.ok(notifications.some((message) => message.includes("1 enabled")));
+    });
+  });
+
+  it("restores enabledEntries for reload, fork, and clone session starts", async () => {
+    await withTemporaryHome("HooKit-index-enable-rebind-", async (root) => {
+      // Pi represents clone and fork with the same `fork` session-start reason.
+      for (const [operation, reason] of [
+        ["reload", "reload"],
+        ["fork", "fork"],
+        ["clone", "fork"],
+      ] as const) {
+        const cwd = join(root, operation);
+        const ctx = {
+          ...catalogCtx(cwd),
+          sessionManager: {
+            getBranch: () => [{
+              type: "custom",
+              customType: "hookit-config",
+              data: { enabledEntries: ["local\x00saved"] },
+            }],
+          },
+        } as unknown as ExtensionContext;
+        const harness = extensionHarness();
+        await startSession(harness, ctx, {
+          local: {
+            saved: {
+              description: "branch choice",
+              event: "tool_call",
+              shell: "false",
+            },
+            ignoredDefault: {
+              description: "ignored default",
+              event: "tool_call",
+              shell: "false",
+              default: true,
+            },
+          },
+        }, reason);
+
+        assert.deepEqual(
+          await harness.handler("tool_call")(
+            toolCallEvent("bash", `${operation}-branch`),
+            ctx,
+          ),
+          { block: true, reason: 'hookit: hook "saved" rejected bash — `false`' },
+        );
+      }
+    });
+  });
+
+  it("restores changed branch enablement after session tree navigation", async () => {
+    await withTemporaryHome("HooKit-index-enable-tree-", async (root) => {
+      let enabledEntries = ["local\x00first"];
+      const ctx = {
+        ...catalogCtx(root),
+        sessionManager: {
+          getBranch: () => [{
+            type: "custom",
+            customType: "hookit-config",
+            data: { enabledEntries },
+          }],
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {
+        local: {
+          first: {
+            description: "first branch choice",
+            event: "tool_call",
+            shell: "false",
+          },
+          second: {
+            description: "second branch choice",
+            event: "tool_call",
+            shell: "false",
+          },
+        },
+      });
+      assert.deepEqual(
+        await harness.handler("tool_call")(toolCallEvent("bash", "first"), ctx),
+        { block: true, reason: 'hookit: hook "first" rejected bash — `false`' },
+      );
+
+      enabledEntries = ["local\x00second"];
+      await harness.handler("session_tree")(
+        { type: "session_tree", newLeafId: "second", oldLeafId: "first" },
+        ctx,
+      );
+
+      assert.deepEqual(
+        await harness.handler("tool_call")(toolCallEvent("bash", "second"), ctx),
+        { block: true, reason: 'hookit: hook "second" rejected bash — `false`' },
+      );
+    });
   });
 });
 

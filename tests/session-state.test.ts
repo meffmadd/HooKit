@@ -28,8 +28,8 @@ function setup(name: string): {
   const project = join(root, "project", ".pi", "hookit.json");
   const persisted: string[][] = [];
   const state = new HooksState({
-    appendEntry(_type: string, data: { activeHooks: string[] }) {
-      persisted.push(data.activeHooks);
+    appendEntry(_type: string, data: { enabledEntries: string[] }) {
+      persisted.push(data.enabledEntries);
     },
   } as unknown as ExtensionAPI);
   return { root, global, project, state, persisted };
@@ -40,15 +40,22 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value));
 }
 
-function context(saved?: string[]): ExtensionContext {
+function context(
+  enabledEntries?: string[],
+  legacyActiveHooks?: string[],
+): ExtensionContext {
+  const hasConfig = enabledEntries !== undefined || legacyActiveHooks !== undefined;
   return {
     sessionManager: {
-      getBranch: () => saved === undefined
+      getBranch: () => !hasConfig
         ? []
         : [{
             type: "custom",
             customType: "hookit-config",
-            data: { activeHooks: saved },
+            data: {
+              ...(enabledEntries === undefined ? {} : { enabledEntries }),
+              ...(legacyActiveHooks === undefined ? {} : { activeHooks: legacyActiveHooks }),
+            },
           }],
     },
   } as unknown as ExtensionContext;
@@ -63,20 +70,61 @@ function shell(command: string, isDefault = false) {
   };
 }
 
-describe("session state catalog replacement", () => {
-  it("initializes from defaults only when no saved activation exists", () => {
+describe("session state enabled Catalog Entries", () => {
+  it("initializes Hooks and Presets from defaults only when no saved enablement exists", () => {
     const { global, project, state } = setup("defaults");
     writeJson(project, {
       local: {
         enabled: shell("true", true),
         disabled: shell("true"),
+        bundle: {
+          description: "default Preset",
+          preset: ["local/disabled"],
+          default: true,
+        },
       },
     });
     state.load({ global, project });
     state.restore(context());
 
-    assert.equal(state.isActive(state.entries[0]!), true);
-    assert.equal(state.isActive(state.entries[1]!), false);
+    assert.deepEqual(Array.from(state.enabledEntries), [
+      "local\x00enabled",
+      "local\x00bundle",
+    ]);
+    assert.equal(state.enabledHookSet().size, 2);
+  });
+
+  it("does not restore legacy activeHooks as an alias", () => {
+    const { global, project, state } = setup("legacy-active-hooks");
+    writeJson(project, {
+      local: {
+        currentDefault: shell("true", true),
+        legacyChoice: shell("true"),
+      },
+    });
+    state.load({ global, project });
+    state.restore(context(undefined, ["local\x00legacyChoice"]));
+
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00currentDefault"]);
+  });
+
+  it("an explicitly saved empty set overrides defaults", () => {
+    const { global, project, state } = setup("saved-empty");
+    writeJson(project, {
+      local: {
+        guard: shell("true", true),
+        bundle: {
+          description: "bundle",
+          preset: ["local/guard"],
+          default: true,
+        },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context([]));
+
+    assert.deepEqual(Array.from(state.enabledEntries), []);
+    assert.equal(state.enabledHookSet().size, 0);
   });
 
   it("restores canonical saved keys and prunes missing ones", () => {
@@ -93,7 +141,7 @@ describe("session state catalog replacement", () => {
       "local\x00missing", // pruned: not in the catalog
     ]));
 
-    assert.deepEqual(Array.from(state.active),
+    assert.deepEqual(Array.from(state.enabledEntries),
       ["local\x00guard", "owner/repo\x00guard"]);
   });
 
@@ -107,7 +155,7 @@ describe("session state catalog replacement", () => {
     // bare name; it must still be discarded without name resolution.
     state.restore(context(["local\x00other", "guard"]));
 
-    assert.deepEqual(Array.from(state.active), ["local\x00other"]);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00other"]);
   });
 
   it("a saved entry containing only discarded names still represents saved mode", () => {
@@ -121,11 +169,11 @@ describe("session state catalog replacement", () => {
     state.restore(context(["bare-name"]));
 
     // The bare name is discarded AND defaults are not re-enabled: a saved
-    // activation entry (even one with nothing restorable) means saved mode.
-    assert.deepEqual(Array.from(state.active), []);
+    // enablement entry (even one with nothing restorable) means saved mode.
+    assert.deepEqual(Array.from(state.enabledEntries), []);
     state.enable("local\x00guard");
     state.persist();
-    assert.deepEqual(state.active.size, 1);
+    assert.deepEqual(state.enabledEntries.size, 1);
   });
 
   it("preserves saved identities across a fresh catalog and prunes removed ones", () => {
@@ -141,12 +189,12 @@ describe("session state catalog replacement", () => {
       identity: { source: "local", name: "remove" },
     });
     assert.equal(result.ok, true);
-    assert.deepEqual(Array.from(state.active), ["local\x00keep"]);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00keep"]);
     state.persist();
     assert.deepEqual(persisted, [["local\x00keep"]]);
   });
 
-  it("keeps an active identity when removing an override reveals global", () => {
+  it("keeps an enabled identity when removing an override reveals global", () => {
     const { global, project, state } = setup("reveal");
     writeJson(global, { local: { same: shell("global") } });
     writeJson(project, { local: { same: shell("project") } });
@@ -158,13 +206,13 @@ describe("session state catalog replacement", () => {
       identity: { source: "local", name: "same" },
     });
     assert.equal(result.ok, true);
-    assert.deepEqual(Array.from(state.active), ["local\x00same"]);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00same"]);
     const revealed = state.entries[0]!;
     assert.ok("shell" in revealed);
     assert.equal(revealed.shell, "global");
   });
 
-  it("recomputes default-derived activation on replacement", () => {
+  it("recomputes default-derived enablement on replacement", () => {
     const { global, project, state } = setup("new-defaults");
     writeJson(project, { local: { first: shell("true", true) } });
     state.load({ global, project });
@@ -173,10 +221,10 @@ describe("session state catalog replacement", () => {
 
     const result = state.refresh();
     assert.equal(result.ok, true);
-    assert.deepEqual(Array.from(state.active), ["local\x00second"]);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00second"]);
   });
 
-  it("keeps the known-good catalog and activation after a failed mutation", () => {
+  it("keeps the known-good Catalog and enablement after a failed mutation", () => {
     const { global, project, state } = setup("failed-mutation");
     writeJson(project, { local: { guard: shell("true") } });
     state.load({ global, project });
@@ -191,27 +239,27 @@ describe("session state catalog replacement", () => {
 
     assert.equal(result.ok, false);
     assert.deepEqual(state.entries.map((entry) => entry.name), ["guard"]);
-    assert.deepEqual(Array.from(state.active), ["local\x00guard"]);
-    assert.equal(state.activeHookSet().size, 1);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00guard"]);
+    assert.equal(state.enabledHookSet().size, 1);
   });
 
-  it("accepts an independently-created fresh catalog", () => {
+  it("a saved branch ignores defaults introduced by Catalog replacement", () => {
     const { global, project, state } = setup("accept");
     writeJson(project, { local: { one: shell("true") } });
     state.load({ global, project });
     state.restore(context(["local\x00one"]));
-    writeJson(project, { local: { two: shell("true") } });
+    writeJson(project, { local: { two: shell("true", true) } });
     const opened = HookCatalog.open({ global, project });
     assert.equal(opened.ok, true);
     if (!opened.ok) return;
 
     state.replaceCatalog(opened.catalog);
     assert.deepEqual(state.entries.map((entry) => entry.name), ["two"]);
-    assert.deepEqual(Array.from(state.active), []);
+    assert.deepEqual(Array.from(state.enabledEntries), []);
   });
 });
 
-describe("session state Active Hook Set", () => {
+describe("session state Enabled Hook Set", () => {
   it("expands presets in ref order and skips dangling refs", async () => {
     const { root, global, project, state } = setup("preset");
     const log = join(root, "order.log");
@@ -233,16 +281,104 @@ describe("session state Active Hook Set", () => {
     state.load({ global, project });
     state.restore(context(["local\x00bundle"]));
 
-    const activeSet = state.activeHookSet();
-    assert.equal(activeSet.size, 2);
+    const enabledSet = state.enabledHookSet();
+    assert.equal(enabledSet.size, 2);
     const evaluated = await new HookEvaluation().evaluate(
       "tool_call",
       { toolName: "bash", toolCallId: "state", input: {} },
       { cwd: root, metadata: {} },
-      activeSet,
+      enabledSet,
     );
     assert.equal(evaluated.outcome, "pass");
     assert.equal(readFileSync(log, "utf8"), "b\na\n");
+  });
+
+  it("deduplicates direct and multiple Preset paths by first Catalog occurrence", async () => {
+    const { root, global, project, state } = setup("deduplicate-paths");
+    const log = join(root, "deduplicated.log");
+    const append = (name: string) => `printf '${name}\\n' >> '${log}'`;
+    writeJson(project, {
+      local: {
+        direct: shell(append("direct")),
+        shared: shell(append("shared")),
+        first: {
+          description: "first",
+          preset: ["local/shared", "local/direct"],
+        },
+        second: {
+          description: "second",
+          preset: ["local/shared"],
+        },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context([
+      "local\x00direct",
+      "local\x00first",
+      "local\x00second",
+    ]));
+
+    const evaluated = await new HookEvaluation().evaluate(
+      "tool_call",
+      { toolName: "bash", toolCallId: "deduplicate", input: {} },
+      { cwd: root, metadata: {} },
+      state.enabledHookSet(),
+    );
+
+    assert.equal(evaluated.outcome, "pass");
+    assert.equal(readFileSync(log, "utf8"), "direct\nshared\n");
+  });
+
+  it("disabling one Preset removes only its enablement path", async () => {
+    const { root, global, project, state } = setup("disable-one-path");
+    const log = join(root, "paths.log");
+    writeJson(project, {
+      local: {
+        member: shell(`printf member >> '${log}'`),
+        first: { description: "first", preset: ["local/member"] },
+        second: { description: "second", preset: ["local/member"] },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context(["local\x00first", "local\x00second"]));
+    state.disable("local\x00first");
+
+    await new HookEvaluation().evaluate(
+      "tool_call",
+      { toolName: "bash", toolCallId: "remaining-path", input: {} },
+      { cwd: root, metadata: {} },
+      state.enabledHookSet(),
+    );
+    assert.equal(readFileSync(log, "utf8"), "member");
+
+    state.enable("local\x00member");
+    state.disable("local\x00second");
+    await new HookEvaluation().evaluate(
+      "tool_call",
+      { toolName: "bash", toolCallId: "direct-path", input: {} },
+      { cwd: root, metadata: {} },
+      state.enabledHookSet(),
+    );
+    assert.equal(readFileSync(log, "utf8"), "membermember");
+  });
+
+  it("keeps a dangling Preset directly enabled while enabling available members", () => {
+    const { global, project, state } = setup("dangling-enabled-preset");
+    writeJson(project, {
+      local: {
+        available: shell("true"),
+        bundle: {
+          description: "bundle",
+          preset: ["local/missing", "local/available"],
+        },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context(["local\x00bundle"]));
+
+    assert.equal(state.isEnabledDirectly(state.entries.find((entry) => entry.name === "bundle")!), true);
+    assert.deepEqual(Array.from(state.enabledEntries), ["local\x00bundle"]);
+    assert.equal(state.enabledHookSet().size, 1);
   });
 
   it("expands Hooks with owned Actions through presets", async () => {
@@ -268,7 +404,7 @@ describe("session state Active Hook Set", () => {
       "tool_call",
       { toolName: "bash", toolCallId: "preset-action", input: {} },
       { cwd: root, metadata: {} },
-      state.activeHookSet(),
+      state.enabledHookSet(),
     );
     assert.equal(evaluated.outcome, "pass");
     assert.deepEqual(
@@ -279,7 +415,7 @@ describe("session state Active Hook Set", () => {
     );
   });
 
-  it("captures an immutable set before later activation changes", async () => {
+  it("captures an immutable set before later enablement changes", async () => {
     const { root, global, project, state } = setup("immutable");
     const log = join(root, "captured.log");
     writeJson(project, {
@@ -289,7 +425,7 @@ describe("session state Active Hook Set", () => {
     });
     state.load({ global, project });
     state.restore(context(["local\x00guard"]));
-    const captured = state.activeHookSet();
+    const captured = state.enabledHookSet();
     state.disable("local\x00guard");
 
     await new HookEvaluation().evaluate(
@@ -299,6 +435,6 @@ describe("session state Active Hook Set", () => {
       captured,
     );
     assert.equal(readFileSync(log, "utf8"), "captured");
-    assert.equal(state.activeHookSet().size, 0);
+    assert.equal(state.enabledHookSet().size, 0);
   });
 });

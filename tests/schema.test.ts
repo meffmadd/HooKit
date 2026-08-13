@@ -249,10 +249,10 @@ describe("validate", () => {
     },
 
     {
-      label: "default-based activation example",
+      label: "default-based enablement example",
       config: {
         local: {
-          "always-active": {
+          "always-enabled": {
             description: "d",
             event: "tool_call",
             filter: { toolName: "write" },

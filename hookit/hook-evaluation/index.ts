@@ -1,9 +1,9 @@
 import { entryRef, type NativeEvent } from "../domain/entry.js";
-import type { ActiveHook } from "./hooks.js";
+import type { EnabledHook } from "./hooks.js";
 import {
   hooksIn,
-  type ActiveHookSet,
-} from "./active-set.js";
+  type EnabledHookSet,
+} from "./enabled-set.js";
 import {
   adapterFor,
   formatErrorDetail,
@@ -31,9 +31,9 @@ import type {
   ToolResultPatch,
 } from "./types.js";
 
-export { createActiveHookSet } from "./active-set.js";
-export type { ActiveHookSet } from "./active-set.js";
-export type { ActiveHook } from "./hooks.js";
+export { createEnabledHookSet } from "./enabled-set.js";
+export type { EnabledHookSet } from "./enabled-set.js";
+export type { EnabledHook } from "./hooks.js";
 export type {
   AgentEndEvent,
   AgentSettledEvent,
@@ -234,17 +234,17 @@ function publicResult(
 export class HookEvaluation {
   private correctiveFingerprints = new Map<NativeEvent, string>();
 
-  /** Evaluate one native event against one captured Active Hook Set. */
+  /** Evaluate one Native Event against one captured Enabled Hook Set. */
   async evaluate<H extends NativeEvent>(
     event: H,
     payload: EventMap[H],
     context: EvaluationContext,
-    activeSet: ActiveHookSet,
+    enabledSet: EnabledHookSet,
   ): Promise<HookEvaluationResult<H>> {
     let adapter: EventAdapter<EvaluationEventMap[H]> | undefined;
     try {
       adapter = adapterFor(event);
-      const hooks = hooksIn(activeSet);
+      const hooks = hooksIn(enabledSet);
       const capturedContext = snapshotContext(context);
       return await this.evaluateTransaction(
         event,
@@ -268,7 +268,7 @@ export class HookEvaluation {
     event: H,
     payload: EvaluationEventMap[H],
     context: EvaluationContext,
-    hooks: readonly ActiveHook[],
+    hooks: readonly EnabledHook[],
     adapter: EventAdapter<EvaluationEventMap[H]>,
   ): Promise<HookEvaluationResult<H>> {
     const invocation = await invokeHooks(hooks, adapter, payload, context);
@@ -341,7 +341,7 @@ export class HookEvaluation {
   }
 
   private async dispatchSyntheticResult(
-    hooks: readonly ActiveHook[],
+    hooks: readonly EnabledHook[],
     result: HookResult,
     context: EvaluationContext,
   ): Promise<{

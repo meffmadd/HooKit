@@ -16,7 +16,7 @@ interface CatalogEntryBase extends HookIdentity {
   readonly default: boolean;
 }
 
-/** A validated, normalized Hook available to session activation. */
+/** A validated, normalized Hook available to session enablement. */
 export interface CatalogHook extends CatalogEntryBase {
   readonly event: Event;
   readonly filter?: ReadonlyEntryFilter;

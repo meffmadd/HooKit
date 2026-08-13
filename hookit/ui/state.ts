@@ -11,8 +11,8 @@ import {
 } from "../hook-catalog/index.js";
 import { HookIndex, entryKey, parseEntryRef } from "../domain/entry.js";
 import {
-  createActiveHookSet,
-  type ActiveHookSet,
+  createEnabledHookSet,
+  type EnabledHookSet,
 } from "../hook-evaluation/index.js";
 
 /** Resolve one Preset level to available Hooks, in ref order. */
@@ -41,17 +41,17 @@ export function resolvePresetMembers(
   return members;
 }
 
-/** Session activation state between Hook Catalog and Hook Evaluation. */
+/** Session enablement state between Hook Catalog and Hook Evaluation. */
 export class HooksState {
   entries: CatalogEntry[] = [];
-  active: Set<string> = new Set();
+  enabledEntries: Set<string> = new Set();
   broken = false;
   loadErrors: readonly CatalogDiagnostic[] = [];
   projectTrusted = true;
 
   private catalog?: HookCatalog;
   private locations?: CatalogStorageLocations;
-  private activationMode: "saved" | "defaults" | undefined;
+  private enablementMode: "saved" | "defaults" | undefined;
 
   constructor(private pi: ExtensionAPI) {}
 
@@ -66,7 +66,7 @@ export class HooksState {
     if (!result.ok) {
       this.catalog = undefined;
       this.entries = [];
-      this.active = new Set();
+      this.enabledEntries = new Set();
       this.broken = true;
       this.loadErrors = result.diagnostics;
       return;
@@ -88,7 +88,7 @@ export class HooksState {
     if (!result.ok) {
       this.catalog = undefined;
       this.entries = [];
-      this.active = new Set();
+      this.enabledEntries = new Set();
       this.broken = true;
       this.loadErrors = result.diagnostics;
       return result;
@@ -100,21 +100,23 @@ export class HooksState {
   }
 
   /**
-   * Replace the immutable catalog snapshot and reconcile activation. Saved
-   * identities survive when still present; default-derived activation is
+   * Replace the immutable Catalog and reconcile direct enablement. Saved
+   * identities survive when still present; default-derived enablement is
    * recomputed from the fresh entries.
    */
   replaceCatalog(catalog: HookCatalog): void {
     this.catalog = catalog;
     this.entries = Array.from(catalog.entries);
     const valid = new Set(this.entries.map((entry) => this.keyOf(entry)));
-    if (this.activationMode === "defaults") {
-      this.active = new Set(
+    if (this.enablementMode === "defaults") {
+      this.enabledEntries = new Set(
         this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
       );
       return;
     }
-    this.active = new Set(Array.from(this.active).filter((key) => valid.has(key)));
+    this.enabledEntries = new Set(
+      Array.from(this.enabledEntries).filter((key) => valid.has(key)),
+    );
   }
 
   /** Apply catalog intent and accept only a successful fresh snapshot. */
@@ -154,21 +156,24 @@ export class HooksState {
       ctx.ui.setStatus("hookit", undefined);
       return;
     }
-    const color = this.active.size > 0 ? "accent" : "dim";
+    const color = this.enabledEntries.size > 0 ? "accent" : "dim";
     ctx.ui.setStatus(
       "hookit",
-      theme.fg(color, `hooks: ${this.active.size}/${this.entries.length}`),
+      theme.fg(
+        color,
+        `hooks: ${this.enabledEntries.size}/${this.entries.length}`,
+      ),
     );
   }
 
-  /** Canonical persisted key used only by session activation storage. */
+  /** Canonical persisted key used only by session enablement storage. */
   keyOf(entry: CatalogEntry): string {
     return entryKey(entry.source, entry.name);
   }
 
-  /** Whether this entry is enabled. Only canonical keys match. */
-  isActive(entry: CatalogEntry): boolean {
-    return this.active.has(this.keyOf(entry));
+  /** Whether this Catalog Entry is enabled directly. */
+  isEnabledDirectly(entry: CatalogEntry): boolean {
+    return this.enabledEntries.has(this.keyOf(entry));
   }
 
   /** Canonical key. UI callers pass Catalog entries; strings must be canonical. */
@@ -177,65 +182,72 @@ export class HooksState {
     return value;
   }
 
-  /** Persist activation to the current session branch. */
+  /** Persist directly enabled Catalog Entries to the current session branch. */
   persist(): void {
-    this.activationMode = "saved";
+    this.enablementMode = "saved";
     this.pi.appendEntry("hookit-config", {
-      activeHooks: Array.from(this.active),
+      enabledEntries: Array.from(this.enabledEntries),
     });
   }
 
-  /** Restore saved activation, or initialize it from current defaults. */
+  /** Restore saved direct enablement, or initialize it from current defaults. */
   restore(ctx: ExtensionContext): void {
     const branchEntries = ctx.sessionManager.getBranch();
     let saved: string[] | undefined;
     for (const entry of branchEntries) {
       if (entry.type === "custom" && entry.customType === "hookit-config") {
-        const data = entry.data as { activeHooks?: string[] } | undefined;
-        if (data?.activeHooks) saved = data.activeHooks;
+        const data = entry.data as { enabledEntries?: unknown } | undefined;
+        if (
+          Array.isArray(data?.enabledEntries) &&
+          data.enabledEntries.every(
+            (value): value is string => typeof value === "string",
+          )
+        ) {
+          saved = data.enabledEntries;
+        }
       }
     }
 
-    if (saved) {
+    if (saved !== undefined) {
       const valid = new Set(this.entries.map((entry) => this.keyOf(entry)));
       // Restore only canonical NUL-separated keys that still exist in the
-      // current catalog. Bare names are silently dropped; there is no
+      // current Catalog. Bare names are silently dropped; there is no
       // unambiguous-name resolution.
-      this.active = new Set(saved.filter((value) =>
+      this.enabledEntries = new Set(saved.filter((value) =>
         value.includes("\x00") && valid.has(value),
       ));
-      this.activationMode = "saved";
+      this.enablementMode = "saved";
     } else {
-      this.active = new Set(
+      this.enabledEntries = new Set(
         this.entries.filter((entry) => entry.default).map((entry) => this.keyOf(entry)),
       );
-      this.activationMode = "defaults";
+      this.enablementMode = "defaults";
     }
   }
 
   enable(entry: CatalogEntry | string): void {
-    this.active.add(this.resolveKey(entry));
+    this.enabledEntries.add(this.resolveKey(entry));
   }
 
   disable(entry: CatalogEntry | string): void {
-    this.active.delete(this.resolveKey(entry));
+    this.enabledEntries.delete(this.resolveKey(entry));
   }
 
   disableAll(): void {
-    this.active.clear();
+    this.enabledEntries.clear();
   }
 
   toggle(entry: CatalogEntry | string): void {
     const key = this.resolveKey(entry);
-    if (this.active.has(key)) this.active.delete(key);
-    else this.active.add(key);
+    if (this.enabledEntries.has(key)) this.enabledEntries.delete(key);
+    else this.enabledEntries.add(key);
   }
 
-  private activeHooks(): CatalogHook[] {
+  private enabledHooks(): CatalogHook[] {
     const hooks: CatalogHook[] = [];
     const seen = new Set<string>();
     for (const entry of this.entries) {
-      if (!this.isActive(entry)) continue;
+      if (!this.isEnabledDirectly(entry)) continue;
       if (isCatalogPreset(entry)) {
         for (const member of resolvePresetMembers(this.entries, entry)) {
           if (isCatalogPreset(member)) continue;
@@ -254,8 +266,8 @@ export class HooksState {
     return hooks;
   }
 
-  /** Snapshot current activation and one-level preset expansion. */
-  activeHookSet(): ActiveHookSet {
-    return createActiveHookSet(this.activeHooks());
+  /** Capture the immutable effective Hook membership for one Evaluation. */
+  enabledHookSet(): EnabledHookSet {
+    return createEnabledHookSet(this.enabledHooks());
   }
 }

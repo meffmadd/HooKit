@@ -170,7 +170,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(
         `hookit: failed to parse ${count} config file${
           count === 1 ? "" : "s"
-        }; no hooks are active.\n${details}`,
+        }; no Hooks are enabled.\n${details}`,
         "error",
       );
       state.updateStatus(ctx);
@@ -183,7 +183,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(
         `hookit: ${state.entries.length} hook${
           state.entries.length === 1 ? "" : "s"
-        } loaded (${state.active.size} enabled)`,
+        } loaded (${state.enabledEntries.size} enabled)`,
         "info",
       );
     }
@@ -348,11 +348,11 @@ export default function (pi: ExtensionAPI) {
     let result: HookEvaluationResult<H>;
     let accounting: HookExecutionReport | undefined;
     try {
-      // Both values are captured synchronously at callback entry. Activation or
-      // rich Pi-context changes during awaits apply only to the next evaluation.
-      const activeSet = state.activeHookSet();
+      // Both values are captured synchronously at callback entry. Enablement or
+      // rich Pi-context changes during awaits apply only to the next Evaluation.
+      const enabledSet = state.enabledHookSet();
       const context = hookContext(pi, ctx);
-      result = await hookEvaluation.evaluate(event, payload, context, activeSet);
+      result = await hookEvaluation.evaluate(event, payload, context, enabledSet);
       accounting = result.executionReport;
       await deliverEffects(result.effects, ctx);
       await displayControlOutcome(result, ctx);

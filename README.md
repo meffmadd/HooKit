@@ -3,7 +3,7 @@
 Hooks for Pi events. A **Hook** runs a shell decision against a Pi **Event**
 (`tool_call`, `turn_end`, ...) and may own one outcome-selected Pi **Action**.
 Configuration lives in `.pi/hookit.json`; `/hooks` manages installation,
-activation, defaults, Presets, and search.
+enablement, defaults, Presets, and search.
 
 ## Configuration
 
@@ -71,11 +71,21 @@ An executable entry is always a **Hook**:
 Boolean shell values are invalid. An entry with neither shell nor Action is
 invalid. Standalone Action records without `outcome` are invalid.
 
-## Evaluation pipeline
+## Enablement and evaluation
 
-For each event, HooKit captures one immutable Active Hook Set and one
-bounded callback metadata snapshot. Matching Hooks run sequentially in
-that deterministic set order:
+Hooks and Presets can both be enabled directly. HooKit persists those direct
+Source-plus-name choices as `enabledEntries` in the current session branch. A
+new session with no saved choice derives enablement from current
+`default: true` entries; a saved set, including an empty set, overrides defaults
+on resume, reload, tree navigation, fork, and clone. Presets remain enabled when
+some references dangle and enable every currently available member. `/hooks`
+counts directly enabled Catalog Entries and shows an indirectly enabled member
+as `enabled · via <preset>`.
+
+For each Event, HooKit derives and captures one immutable Enabled Hook Set plus
+one bounded callback metadata snapshot. Catalog Entry order and Preset reference
+order determine first occurrence; direct and multiple Preset paths never execute
+a Hook twice. Matching Hooks run sequentially in that deterministic set order:
 
 1. Match the Hook's `event` and `filter`.
 2. Run optional `when`.
@@ -200,7 +210,7 @@ exact selector semantics above.
 ```
 
 For each originating Hook Result, its owned Action is considered first, followed by
-configured `hook_result` Hooks in Active Hook Set order. A matching Hook gets
+configured `hook_result` Hooks in Enabled Hook Set order. A matching Hook gets
 its own local pass/report result and may select its own Action. That local
 result is never redispatched, bounding synthetic handling to one level.
 Origin identity remains available separately for accounting and shell
@@ -272,7 +282,7 @@ rich callback objects, and storage paths are not persisted.
 
 ## Commands and trust
 
-- `/hooks` opens activation, search, Preset, default, remove, and install UI.
+- `/hooks` opens enablement, search, Preset, default, remove, and install UI.
 - Installed repository entries are updateable and removable like local entries.
 - Orphaned repository entries are marked when repository lookup succeeds.
 - Untrusted project storage is neither read nor written.

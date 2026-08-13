@@ -7,7 +7,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 
 - **`hookit/index.ts`** — thin Pi adapter. Authorizes catalog storage after
   checking project trust, loads session state, snapshots Pi's rich callback
-  context onto bounded scalar metadata, captures one Active Hook Set,
+  context onto bounded scalar metadata, captures one Enabled Hook Set,
   subscribes passively to Pi's `tool_execution_start`/`_end` lifecycle,
   brackets each supported native callback with the session ExecutionReporter
   (tool-wave collection + combined Execution Wave flush + late append),
@@ -28,7 +28,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   preservation, and best-effort atomic replacement. Every successful mutation
   returns a fresh catalog; failures leave the caller's prior snapshot intact.
 - **`hookit/hook-evaluation/`** — the session-scoped deep Hook Evaluation
-  module. Its facade exposes `HookEvaluation`, `createActiveHookSet`, the
+  module. Its facade exposes `HookEvaluation`, `createEnabledHookSet`, the
   typed native event map, bounded execution context, explicit outcomes, and
   delivery-neutral effects. Private collaborators own the exhaustive adapter
   registry, candidate/filter/environment projection, filter → `when` → shell
@@ -77,12 +77,12 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   keys, greedy whole-action wrapping, and contextual `›` action runs.
   `selectDialog` supports a focus-aware dynamic hint (`hintFor`) and a
   confirm-on-select guard (`confirmOnSelect`).
-- **`hookit/ui/state.ts`** — session activation between Hook Catalog
-  and Hook Evaluation. It accepts fresh catalogs, reconciles source-qualified
-  saved/default activation, expands one preset level with source-qualified
-  deduplication across Hooks, and produces immutable Active Hook Sets.
-  Failed catalog mutations retain
-  the known-good catalog and activation.
+- **`hookit/ui/state.ts`** — session enablement between Hook Catalog and
+  Hook Evaluation. It accepts fresh Catalogs, restores source-qualified direct
+  `enabledEntries` or recomputes defaults, expands enabled Presets with
+  source-qualified first-occurrence deduplication, and produces immutable
+  Enabled Hook Sets. Failed Catalog mutations retain the known-good Catalog and
+  enablement.
 - **`hookit/ui/install.ts`** — the install wizard (repo picker → file
   picker → entry picker). The entry picker is a tri-state `Enter`: not
   installed → install, outdated → update, installed → confirm → uninstall.
@@ -118,7 +118,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - Optional `when` runs first. Ordinary non-zero skips the complete Hook;
   infrastructure failure produces the event-specific code-`null` result.
 - Hooks author at least one optional `shell` or singular owned `action`.
-  Omitted shell canonicalizes to `"true"`; downstream catalog/active shapes
+  Omitted shell canonicalizes to `"true"`; downstream Catalog/Enabled Hook shapes
   always have an effective shell.
 - Owned Actions require `outcome`, may select `code`, and observe only their
   immutable owner result. Their selector metadata is stripped from the
@@ -157,11 +157,13 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   declared in that storage's `repos` array, and missing `repos` permits only
   `local`. Ineligible sections are never silently filtered — they produce a
   catalog failure diagnostic, and a failed mutation leaves the caller's
-  known-good catalog and activation unchanged.
-- **Activation uses canonical keys only.** Saved activation restores only
-  NUL-separated `source\0name` keys present in the current catalog; bare names
-  are silently discarded with no unambiguous-name resolution, and `isActive`
-  checks only the canonical key.
+  known-good Catalog and enablement unchanged.
+- **Direct enablement uses canonical keys only.** Saved `enabledEntries`
+  restores only NUL-separated `source\0name` keys present in the current
+  Catalog; bare names are silently discarded with no unambiguous-name
+  resolution, and `isEnabledDirectly` checks only the canonical key. Missing
+  saved enablement derives from current defaults, while a saved empty set
+  overrides defaults.
 - **One Execution Wave per tool execution lifecycle; one end-to-end duration.** Every
   `tool_call`/`tool_result` Hook Evaluation for a batch joins a single combined
   wave bracketed by `tool_execution_start`/`_end` lifecycle. The report has one
@@ -220,7 +222,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   `filterSection` and `highlightSegments` call it — reuse, not duplication);
   the redundant calls are microseconds and avoid a shapes change, new
   panel-side positions state, and a second helper. The name highlights via the
-  panel's `renderLabel` (one method shared by the active and inactive row
+  panel's `renderLabel` (one method shared by the focused and unfocused row
   paths); `shell`/`when` highlight in `renderHookDetail`, pre-styled before
   the ANSI-aware `wrapTextWithAnsi` so highlights carry across wrapped lines.
   A field lights up iff its `matchQuery` is a subsequence (it contributed to
@@ -234,7 +236,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   footer.** Both sectioned panels append an unboxed accent `›` action run as
   the final focused-row detail. `/hooks` predicts individual enable/disable
   and default transitions, always offers removal, and offers editing only for
-  local presets; search retains only its still-active Enter action. The preset
+  local presets; search retains only its still-applicable Enter action. The preset
   editor predicts membership add/remove. The persistent footer contains only
   search, panel-wide commands, and close/back, framed by full-width muted
   `DynamicBorder` rules. Shared hint formatting normalizes configured Pi key

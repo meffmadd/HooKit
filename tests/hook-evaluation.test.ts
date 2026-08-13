@@ -14,11 +14,11 @@ import type { Event, NativeEvent } from "../hookit/domain/entry.js";
 import { adapterFor } from "../hookit/hook-evaluation/adapters.js";
 import { invokeHooks } from "../hookit/hook-evaluation/invocations.js";
 import type {
-  ActiveHook,
+  EnabledHook,
 } from "../hookit/hook-evaluation/index.js";
 import {
   HookEvaluation,
-  createActiveHookSet,
+  createEnabledHookSet,
   type HookExecutionReport,
   type EvaluationReportRow,
   type EventMap,
@@ -69,8 +69,8 @@ function hook(
   name: string,
   event: Event,
   shell = "true",
-  extra: Partial<ActiveHook> = {},
-): ActiveHook {
+  extra: Partial<EnabledHook> = {},
+): EnabledHook {
   return {
     name,
     source: "local",
@@ -83,17 +83,17 @@ function hook(
 function hookWithAction(
   name: string,
   event: Event,
-  action: Omit<NonNullable<ActiveHook["action"]>, "outcome"> & {
-    outcome?: NonNullable<ActiveHook["action"]>["outcome"];
+  action: Omit<NonNullable<EnabledHook["action"]>, "outcome"> & {
+    outcome?: NonNullable<EnabledHook["action"]>["outcome"];
   },
-  extra: Partial<ActiveHook> = {},
-): ActiveHook {
+  extra: Partial<EnabledHook> = {},
+): EnabledHook {
   return {
     name,
     source: "local",
     description: "test Hook with Action",
     event,    shell: "true",
-    action: { outcome: "pass", ...action } as NonNullable<ActiveHook["action"]>,
+    action: { outcome: "pass", ...action } as NonNullable<EnabledHook["action"]>,
     ...extra,
   };
 }
@@ -125,7 +125,7 @@ async function evaluate<H extends NativeEvent>(
   evaluator: HookEvaluation,
   event: H,
   payload: EventMap[H],
-  hooks: readonly ActiveHook[],
+  hooks: readonly EnabledHook[],
   cwd = root,
   executionContext: EvaluationContext = context(cwd),
 ): Promise<HookEvaluationResult> {
@@ -133,7 +133,7 @@ async function evaluate<H extends NativeEvent>(
     event,
     payload,
     executionContext,
-    createActiveHookSet(hooks),
+    createEnabledHookSet(hooks),
   );
 }
 
@@ -672,16 +672,16 @@ describe("Hook Invocation semantics", () => {
   });
 });
 
-describe("Active Hook Set", () => {
+describe("Enabled Hook Set", () => {
   it("copies its ordered membership while reusing immutable catalog Hooks", async () => {
     const first = hook("first", "tool_call", "false");
     const second = hook("second", "tool_call", "true");
     const input = [first, second];
-    const activeSet = createActiveHookSet(input);
-    assert.ok(Object.isFrozen(activeSet));
-    assert.equal(activeSet.size, 2);
+    const enabledSet = createEnabledHookSet(input);
+    assert.ok(Object.isFrozen(enabledSet));
+    assert.equal(enabledSet.size, 2);
 
-    // Later activation or catalog replacement cannot affect the captured set:
+    // Later enablement or Catalog replacement cannot affect the captured set:
     // membership is copied, not aliased.
     input.length = 0;
     input.push(hook("replacement", "tool_call", "true"));
@@ -690,7 +690,7 @@ describe("Active Hook Set", () => {
       "tool_call",
       toolCall,
       context(root),
-      activeSet,
+      enabledSet,
     );
     // The captured `first` (shell false) still blocks; the replacement is not
     // part of this set.
@@ -707,12 +707,12 @@ describe("Active Hook Set", () => {
       "hook_result",
       "printf '%s' \"$PI_SESSION_ID\" > captured.log",
     ));
-    const activeSet = createActiveHookSet([origin, handler]);
+    const enabledSet = createEnabledHookSet([origin, handler]);
     const evaluation = new HookEvaluation().evaluate(
       "tool_call",
       toolCall,
       context(cwd, { metadata }),
-      activeSet,
+      enabledSet,
     );
 
     // Mutating runtime metadata after capture must not affect the running

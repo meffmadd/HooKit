@@ -62,22 +62,22 @@ function groupBySource(entries: CatalogEntry[]): Group[] {
 }
 
 // ---------------------------------------------------------------------------
-// Preset coverage — the reverse of session activation's preset expansion.
+// Preset coverage — the reverse of session enablement's Preset expansion.
 //
-// For each Hook that is a member of an **active** Preset, this maps
-// `source\x00name` → the names of the active presets that reference it.
-// Mirrors session activation exactly: only active presets contribute, dangling
+// For each Hook that is a member of an enabled Preset, this maps
+// `source\x00name` → the names of the enabled Presets that reference it.
+// Mirrors session enablement exactly: only enabled Presets contribute, dangling
 // and nested-preset refs are skipped, refs split on the last `/`.  Used by
-// `renderStatus` to show `active · via {preset}` on a member that isn't
-// individually active but runs because an active preset expanded to it.
+// `renderStatus` to show `enabled · via {preset}` on a member that isn't
+// directly enabled but runs because an enabled Preset expanded to it.
 // ---------------------------------------------------------------------------
 function buildPresetCoverage(
   hooks: CatalogEntry[],
-  isActive: (hook: CatalogEntry) => boolean,
+  isEnabledDirectly: (entry: CatalogEntry) => boolean,
 ): Map<string, string[]> {
   const coverage = new Map<string, string[]>();
   for (const a of hooks) {
-    if (!isActive(a) || !isCatalogPreset(a)) continue;
+    if (!isEnabledDirectly(a) || !isCatalogPreset(a)) continue;
     for (const member of resolvePresetMembers(hooks, a)) {
       const key = entryKey(member.source, member.name);
       const list = coverage.get(key) ?? [];
@@ -123,17 +123,12 @@ export class HooksPanel extends SectionedPanel {
    */
   private orphaned = new Set<string>();
 
-  /**
-   * Reverse map: `source\x00name` → active preset names that reference it.
-   * Lazy-computed and invalidated on toggle/disable-all (`_coverage = null`).
-   * See {@link buildPresetCoverage}.
-   */
-  private _coverage: Map<string, string[]> | null = null;
+  /** Reverse map from each effectively enabled Hook to its enabled Presets. */
   private get coverage(): Map<string, string[]> {
-    if (this._coverage === null) {
-      this._coverage = buildPresetCoverage(this.state.entries, (a) => this.activeFor(a));
-    }
-    return this._coverage;
+    return buildPresetCoverage(
+      this.state.entries,
+      (entry) => this.enabledDirectly(entry),
+    );
   }
 
   /**
@@ -142,7 +137,7 @@ export class HooksPanel extends SectionedPanel {
    * nested-preset ref, always dangling for v1).  Lazy-computed once: the
    * panel is recreated after every reload (install/remove/create), and within
    * a panel instance `state.entries` (which hooks exist) never changes —
-   * only `active` and `default` flags do — so the map is stable for the
+   * only direct enablement and `default` flags do — so the map is stable for the
    * panel's lifetime.  Synchronous, unlike the async orphaned fetch.
    */
   private _byRef: Map<string, CatalogEntry> | null = null;
@@ -379,7 +374,7 @@ export class HooksPanel extends SectionedPanel {
 
   protected detailSuffixFor(a: CatalogEntry, width: number): string[] {
     const items: HintItem[] = [
-      ["Enter", this.activeFor(a) ? "disable" : "enable"],
+      ["Enter", this.enabledDirectly(a) ? "disable" : "enable"],
     ];
     if (!this.searchActive) {
       items.push(["t", a.default ? "unset default" : "set default"]);
@@ -396,15 +391,15 @@ export class HooksPanel extends SectionedPanel {
       this.theme.fg("accent", this.theme.bold("Hooks")),
       this.theme.fg(
         "muted",
-        `${this.state.active.size}/${this.state.entries.length} enabled`,
+        `${this.state.enabledEntries.size}/${this.state.entries.length} enabled`,
       ),
       "",
     ];
   }
 
   // ── Render helpers ─────────────────────────────────────────────────
-  private activeFor(entry: CatalogEntry): boolean {
-    return this.state.isActive(entry);
+  private enabledDirectly(entry: CatalogEntry): boolean {
+    return this.state.isEnabledDirectly(entry);
   }
 
   /** The plain row label: `name` plus the optional ` (default)` tag. */
@@ -415,18 +410,18 @@ export class HooksPanel extends SectionedPanel {
   /**
    * Styled status string for a hook row.  Three states:
    *
-   *  - individually active → `enabled` (accent)
-   *  - covered by an active preset but not individually active →
-   *    `active · via {preset}` where `active` is dim and `via {preset}`
+   *  - directly enabled → `enabled` (accent)
+   *  - covered by an enabled Preset but not directly enabled →
+   *    `enabled · via {preset}` where `enabled` is dim and `via {preset}`
    *    is accent
    *  - disabled → `disabled` (dim)
    *
-   * A hook active both individually and via a preset shows just `enabled`
+   * A Hook enabled both directly and via a Preset shows just `enabled`
    * (the `via` is redundant — it runs either way).  Multiple covering presets
    * collapse to `via {n} presets`.
    */
   private renderStatus(a: CatalogEntry): string {
-    if (this.activeFor(a)) {
+    if (this.enabledDirectly(a)) {
       return this.theme.fg("accent", "enabled");
     }
     const via = this.coverage.get(entryKey(a.source, a.name));
@@ -435,7 +430,7 @@ export class HooksPanel extends SectionedPanel {
         ? `via ${via[0]}`
         : `via ${via.length} presets`;
       return (
-        this.theme.fg("dim", "active") +
+        this.theme.fg("dim", "enabled") +
         this.theme.fg("dim", " · ") +
         this.theme.fg("accent", label)
       );
@@ -510,7 +505,7 @@ export class HooksPanel extends SectionedPanel {
       return lines;
     }
 
-    // Active section: delegate to the shared renderDetailList so the row
+    // Focused section: delegate to the shared renderDetailList so the row
     // layout, "> " highlight prefix, and inline shell/when (or hooks:)
     // detail block are identical to the install wizard's hook-entry
     // picker.  We pass our own [start, end) window (the panel manages
@@ -660,7 +655,7 @@ export class HooksPanel extends SectionedPanel {
     }
 
     const items: HintItem[] = [HINT_SEARCH];
-    if (this.state.active.size > 0) items.push(HINT_D_DISABLE_ALL);
+    if (this.state.enabledEntries.size > 0) items.push(HINT_D_DISABLE_ALL);
     items.push(HINT_I_INSTALL_HOOKS, HINT_N_NEW_PRESET, HINT_ESC_CLOSE);
     return renderHintLine(this.theme, width, items, this.keybindings);
   }
@@ -713,7 +708,6 @@ export class HooksPanel extends SectionedPanel {
           );
           return undefined;
         }
-        this._coverage = null;
         this.state.persist();
         return "reload";
       }
@@ -771,11 +765,10 @@ export class HooksPanel extends SectionedPanel {
     const focused = this.groups[this.nav.focusedSection];
     if (!focused) return undefined;
 
-    // ── d: disable all active hooks (no-op when none active) ──
+    // ── d: disable all directly enabled Catalog Entries ──
     if (matchesKey(data, "d")) {
-      if (this.state.active.size === 0) return undefined;
+      if (this.state.enabledEntries.size === 0) return undefined;
       this.state.disableAll();
-      this._coverage = null;
       this.state.persist();
       this.state.updateStatus(ctx);
       return undefined;
@@ -847,14 +840,13 @@ export class HooksPanel extends SectionedPanel {
   }
 
   // ── Shared input hook ───────────────────────────────────────────────
-  /** Toggle the active state of the currently focused hook. */
+  /** Toggle the enabled state of the currently focused hook. */
   protected toggleFocused(): void {
     const focused = this.groups[this.nav.focusedSection];
     const selected = focused?.hooks[this.nav.focusedIndex];
     if (!selected) return;
-    if (this.activeFor(selected)) this.state.disable(selected);
+    if (this.enabledDirectly(selected)) this.state.disable(selected);
     else this.state.enable(selected);
-    this._coverage = null;
     this.state.persist();
     this.state.updateStatus(this._ctx);
   }

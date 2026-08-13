@@ -107,7 +107,7 @@
         },
         "default": {
           "type": "boolean",
-          "description": "Whether this Hook is active by default.",
+          "description": "Whether this Catalog Entry is enabled by default.",
           "default": false
         }
       },
