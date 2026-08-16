@@ -11,6 +11,9 @@ export default tseslint.config(
       "dist/**",
       ".pi/**",
       "coverage/**",
+      // The site/ Fumadocs app ships its own config and is not part
+      // of the extension runtime — keep it out of the repo rules.
+      "site/**",
       // The `examples/` directory is documentation-only, not part of
       // the runtime — keep it lintable in case someone copies code
       // out of it, but skip vendor-like subpaths.

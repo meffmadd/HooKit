@@ -1,6 +1,10 @@
 node_modules/
 .pi/
 *.md
+site/dist/
+site/.astro/
+.vale/styles/**
+!.vale/styles/config/**
 !AGENTS.md
 !CONTEXT.md
 !README.md
