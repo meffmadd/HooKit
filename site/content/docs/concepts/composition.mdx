@@ -1,0 +1,58 @@
+---
+title: Composition
+description: Presets, owned Actions, hook_result, and where composition stops.
+---
+
+HooKit lets you assemble policy from three building blocks, and it is honest
+about where composition stops.
+
+## Presets — combine policy units
+
+A **Preset** is a named list of Hook References, resolved with
+source-qualified first-occurrence deduplication into one Enabled Hook Set.
+Enabling one Preset enables every available member in reference order, even
+across repositories, which is how you switch on "the whole guarded workflow"
+at once rather than toggling each Hook. Direct and Preset paths never execute
+the same Hook twice in one Evaluation.
+
+## Owned Actions — attach a Pi effect to a decision
+
+An **Action** is declared on a Hook and is selected *only* against that Hook's
+own outcome and code, after the Native Event Outcome is frozen. This keeps the
+Action's trigger and the Hook's decision in the same place, but it also means
+a Hook's Action can never change the Event's aggregate outcome — composition
+through Events is reserved for `hook_result`, and delivery can't weaken a
+decision.
+
+## `hook_result` — react to a decision
+
+The **Hook Result Event** lets one Hook observe another's immutable result —
+for example, a Hook that emits a custom Event every time some other Hook
+blocks. This is Event-based composition: the observing Hook subscribes to
+results the way any Hook subscribes to a Native Event.
+
+## Where composition deliberately stops
+
+"Composable" here does not mean unrestricted nesting:
+
+- A Preset **cannot reference another Preset**. A reference that resolves to a
+  Preset fails the complete Catalog until nesting is supported. Unresolved
+  references instead remain valid and dangle.
+- A reactive Hook Result is **never redispatched**. `hook_result` handling is
+  bounded to one level: a matching reactive Hook gets its own local
+  pass/report result and may select its own Action, but that local result
+  cannot trigger further dispatch, which closes the door to recursive hook
+  loops.
+- Owned Actions are **static**: their strings and data do not interpolate
+  shell output or Event fields. Composition is deliberate, not opportunistic.
+
+## The library relationship
+
+HooKit-rules is the companion repository that owns concrete policy showcases —
+Bash command guards, Git protections, tool restrictions, quality checks,
+notifications, and observability Hooks. HooKit itself ships defaults only in
+the sense that a Hook with `default: true` starts enabled with no saved
+session enablement; the library is where ready-made policy lives, and its Hooks
+install into your Catalog through the `/hooks` panel (`i` to install). The HooKit
+site links to the library rather than duplicating its catalog, so examples
+have one maintainable home.

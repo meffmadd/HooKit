@@ -1,0 +1,106 @@
+---
+title: Filters
+description: Filter candidate fields and matching semantics per Event.
+---
+
+A Hook's optional `filter` decides whether the Hook applies to an Event. It is
+an implicit AND across fields. A miss runs nothing — no Precondition, no shell,
+no Hook Result, no Action, and no Evaluation Report row.
+
+## Matching semantics
+
+Every field value matches in one of four ways:
+
+| Value type | Semantics |
+|---|---|
+| string | JavaScript regular-expression source. Anchor with `^` and `$` for exact matching; unanchored patterns match anywhere. |
+| number, boolean, `null` | Strict equality against the candidate value. |
+| array | **Any-of**: passes if any element matches. |
+| (absent) | A Filter with no fields is an empty AND and matches everything. |
+
+Filters never match missing candidates silently — each specified field must
+exist and match. Dot-separated keys resolve nested tool input fields through
+own properties, so a `filter` of `"input.path": "^src/"` reaches inside a
+nested `{ "input": { "path": "..." } }` candidate.
+
+> **Regex links.** Exact regex behavior is the JavaScript engine's; nothing is
+> stripped or re-parsed. For details beyond the summary here, consult a
+> JavaScript regular-expression reference rather than HooKit itself — HooKit
+> passes your source through verbatim.
+
+## Candidate fields per Event
+
+Tool events expose the tool's input spread plus `toolName` —
+`{ ...event.input, toolName }` — so you can filter on `toolName` and on the
+input fields the tool actually receives:
+
+| Event | Candidate fields |
+|---|---|
+| `tool_call`, `tool_result` | all tool input fields plus `toolName` |
+| `turn_end` | `event`, `turnIndex` |
+| `agent_end` | `event` |
+| `agent_settled` | `event` |
+| `session_before_switch` | `event`, `reason`, `targetSessionFile` (when set) |
+| `session_before_fork` | `event`, `entryId`, `position` |
+| `hook_result` | `event`, `hookRef`, `invocationId`, `outcome`, `code` |
+
+Lifecycle Events expose only these documented bounded scalars — the rich Pi
+callback objects are intentionally not projected into Filters.
+
+## The tool candidate
+
+For a `write` tool call with an input of `{ "path": ".env" }`, the candidate
+is `{ "path": ".env", "toolName": "write" }`. This is the Filter from the
+tutorial's first Hook:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "filter": {
+        "toolName": ["^read$", "^write$"],
+        "path": "(^|/)\\.env$"
+      },
+      "shell": "false"
+    }
+  }
+}
+```
+
+- `toolName: ["^read$", "^write$"]` is an array, so it matches a tool named
+  exactly `read` **or** exactly `write`.
+- `path: "(^|/)\\.env$"` matches a path that either is `.env` or ends in
+  `/.env`. The two fields are ANDed.
+
+## `hook_result` Filters
+
+The Hook Result Event's Filter is limited to `event`, source-qualified
+`hookRef`, `invocationId`, `outcome`, and `code`. Identity fields
+(`event`, `hookRef`, `invocationId`) use the regex/any-of string rules above;
+`outcome` and `code` use the exact shared selector semantics of owned Actions.
+The same matching implementation handles both `outcome` and `code` here and in
+Actions, so a `hook_result` Filter can select a block with a specific code:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "audit-blocks": {
+      "description": "Audit every block from local/no-env-access",
+      "event": "hook_result",
+      "filter": {
+        "hookRef": "^local/no-env-access$",
+        "outcome": "block",
+        "code": [1, null]
+      },
+      "shell": "./scripts/audit-hook-result.sh"
+    }
+  }
+}
+```
+
+See the [`hook_result`](/reference/hook-result) page for what this Event
+carries and how it stays bounded.

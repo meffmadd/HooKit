@@ -1,0 +1,66 @@
+---
+title: Execution Reports
+description: Evaluation Reports, Execution Waves, and duration boundaries.
+---
+
+HooKit makes policy decisions observable as **Execution Reports** in the
+transcript. There are two concepts to keep straight:
+
+- An **Evaluation Report** is the ordered accounting of one Hook Evaluation:
+  every started Hook shell and every selected Action, including its Hook
+  Result Events.
+- An **Execution Report** is the durable, bounded, flat record persisted as
+  one transcript entry for one non-tool Evaluation Report, or for **all
+  Evaluation Reports in one Execution Wave**.
+
+## When a report appears
+
+An Evaluation Report is absent when no main Hook shell starts and no Action is
+selected. Filter misses, false Preconditions, and presentation/control Effects
+alone create no report. A durable Execution Report is appended when at least
+one Hook row or one requested Action is recorded.
+
+Exact `true`/`false` shortcuts count as normal commands with normal duration
+presentation — the optimization does not change accounting.
+
+## One Execution Wave per tool lifecycle
+
+A Pi tool execution lifecycle runs from its first `tool_execution_start`
+through its final `tool_execution_end` and includes every `tool_call` and
+`tool_result` Hook Evaluation it contains, whether Pi executes its tools
+sequentially or in parallel.
+
+- Tool calls and their results in one lifecycle join a single combined
+  **Execution Wave** with a single end-to-end **`durationMs`** =
+  `max(end) − min(start)` across the tool lifecycle. There is no
+  `criticalPathMs`.
+- Ordinary (non-tool) Hook Evaluations append immediately.
+- Each Evaluation keeps its own Event Outcomes; an Execution Wave combines
+  only their Evaluation Reports.
+- A wave with an incomplete tool lifecycle is discarded rather than assigned
+  an invented end.
+
+## Flat, ordered rows
+
+Expanded summaries show flat, ordered rows in Hook Evaluation order:
+
+- source-qualified Hook references (`local/no-env-access`),
+- pass/fail status,
+- individual `when` + `shell` duration per Hook row,
+- requested Action type on Action rows, with the owner outcome,
+- reactive `hook_result` rows annotated `from <ref> <outcome>` — no causal
+  nesting, consumed sets, or display-only result rows.
+
+Passing preconditions are not counted separately; a `when` infrastructure
+failure **before** the main command does not invent a command row (only a
+selected Action stands alone). Individual Hook rows measure passing `when` +
+main `shell`.
+
+## What is and is not persisted
+
+**Execution Duration** includes Hook Evaluation and every ordered best-effort
+Effect delivery attempt, so a Wave's duration covers the complete
+callback-owned work. Persisted report rows contain only bounded identity and
+outcome data; they deliberately omit Invocation IDs, row-level Event, Action
+payload text, shell command text, rich callback objects, Event Outcomes, and
+storage paths.

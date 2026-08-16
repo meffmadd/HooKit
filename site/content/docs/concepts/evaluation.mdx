@@ -1,0 +1,66 @@
+---
+title: Hook Evaluation
+description: The sequence from Event to Hook Result Event.
+---
+
+To reason about HooKit, follow what happens to one **Native Event**. HooKit
+derives an immutable **Enabled Hook Set** for the Event from the Catalog entry
+order and Preset reference order, snapshots bounded context once, then runs
+each Enabled Hook through the same sequence:
+
+```text
+Event
+  └─ Filter        — does the Hook's filter match the candidate?
+       └─ when     — optional Precondition
+            └─ shell — the decision command
+                 └─ Hook Outcome (immutable Hook Result + code)
+                      ├─ owned Action selection
+                      └─ Hook Result Event → reactive Hooks (bounded)
+```
+
+1. **Event.** The Native Event arrives (`tool_call`, `tool_result`, `turn_end`,
+   `agent_settled`, a cancellable session change, ...).
+2. **Filter.** The candidate is projected from bounded Event data. A miss runs
+   nothing.
+3. **Precondition (`when`).** Optional shell command checked inside the Hook
+   Invocation. An ordinary false Precondition means "not applicable" — no Hook
+   Result, no Action, no report row. Inability to complete it (timeout, abort,
+   spawn failure) **fails closed** with code `null`.
+4. **Shell.** The effective decision command runs and produces one immutable
+   **Hook Result** carrying the Hook Reference, Invocation ID, **Hook
+   Outcome**, and code.
+5. **Owned Action.** The Hook's Action, if any, is matched against that Hook
+   Result's own outcome and code.
+6. **Hook Result Event.** The result is projected as a `hook_result` Event so
+   configured reactive Hooks can observe it.
+
+## Hook Outcome vs Event Outcome
+
+The **Hook Outcome** is one Hook's individual decision — `pass`, or the
+Event's failure kind (`block`, `patch`, `cancel`, `report`). The **Event
+Outcome** is the complete, event-specific decision aggregated from every Hook
+Outcome for that Event, carrying only the needed response data (a combined
+reason or replacement patch). Every Event has exactly one Event Outcome,
+including a minimal `pass`.
+
+These are deliberately distinct:
+
+- Hooks run **sequentially**; tool and lifecycle Events run every matching Hook
+  and **aggregate** all failures into one Event Outcome.
+- The Native Event Outcome is **frozen** before any owned Action or reactive
+  Hook runs, so reactions can observe but never alter it.
+- An Action selects only its owner's Hook Outcome and code — a passing Hook may
+  request a pass Action even when a sibling blocks the Event, and delivery of
+  an Effect can never weaken a block, patch, cancellation, or report.
+
+## Outcomes as Effects
+
+The Hook Evaluation Outcome is deeply immutable: a non-empty sequence of Event
+Outcomes (the Native Event first, then one Hook Result Event Outcome per
+originating result), ordered delivery-neutral **Effects**, and an optional
+Evaluation Report. The thin Pi adapter delivers Effects best-effort; Hook
+Evaluation and every delivery attempt complete before the observation closes,
+so Execution Duration covers the full callback-owned work. See
+[Execution Reports](/reference/execution-report) for how this becomes a row in
+the transcript, and [Events](/reference/events) for the event-by-event outcome
+table.

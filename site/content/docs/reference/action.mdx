@@ -1,0 +1,96 @@
+---
+title: Actions
+description: Owned Action variants, selectors, and delivery.
+---
+
+A Hook may **own** one declarative Pi **Action**. Every Action requires
+`outcome`; optional `code` narrows it further. The owned Action is selected
+against its owner's immutable **Hook Outcome and code** — never the aggregate
+Event Outcome — and is considered as soon as that Hook Result exists.
+
+## Common fields and selectors
+
+| Field | Type | Requirement | Default | Applies to | Constraints | Behavior | Example |
+|---|---|---|---|---|---|---|---|
+| `type` | string enum | required | — | every Action | `interrupt`, `shutdown`, `compact`, `message`, or `emit-custom-event` | Selects exactly one payload shape. | `"message"` |
+| `outcome` | outcome or non-empty outcome array | required | — | every Action | Values must be possible for the owning Hook's Event: `pass` plus its event-specific failure kind. | Matches the owner's Hook Outcome. | `["pass", "report"]` |
+| `code` | number, `null`, or non-empty array of either | optional | — | every Action | When present, it must have a possible pairing with `outcome`: pass uses `0`; failure uses non-zero or `null`. | Narrows selection to the owner's exit code. | `[1, null]` |
+
+Selector fields are **ANDed**; array members are **any-of**; matching is
+strict. Validation rejects impossible Event outcomes and selectors with no
+possible outcome/code pairing. `outcome` and `code` are removed when the
+selected Action becomes an Action Request Effect.
+
+## Variant payload fields
+
+| Field | Type | Requirement | Default | Applies to | Constraints | Behavior | Example |
+|---|---|---|---|---|---|---|---|
+| `interrupt` | boolean | optional | `false` | `shutdown` | — | Requests an interrupt before graceful shutdown. | `true` |
+| `instructions` | string | optional | — | `compact` | Static text. | Passes instructions to Pi compaction. | `"Preserve policy decisions."` |
+| `message` | string | required | — | `message` | Static text. | Supplies the message Pi should deliver. | `"A policy blocked this call."` |
+| `delivery` | string enum | required | — | `message` | `steer`, `followUp`, or `nextTurn` | Chooses Pi's message delivery mode. | `"followUp"` |
+| `triggerTurn` | boolean | optional | `false` | `message` | `true` is invalid with `delivery: "nextTurn"`. | Requests a new turn where the delivery mode permits it. | `true` |
+| `name` | string | required | — | `emit-custom-event` | Must contain at least one non-whitespace character. | Names the custom Pi Event. | `"audit:blocked"` |
+| `data` | any JSON value | optional | — | `emit-custom-event` | Static JSON data. | Supplies the custom Event payload. | `{ "source": "HooKit" }` |
+
+Every variant rejects fields outside its own shape. Action strings and `data`
+are static: they do not interpolate environment variables, templates, shell
+output, or Event fields.
+
+## Supported variants
+
+| Action | Required fields | Behavior | Small valid Action |
+|---|---|---|---|
+| `interrupt` | `type`, `outcome` | Requests Pi's supported abort operation. | `{ "type": "interrupt", "outcome": "block" }` |
+| `shutdown` | `type`, `outcome` | Optionally interrupts, then requests graceful shutdown. | `{ "type": "shutdown", "outcome": "report", "interrupt": true }` |
+| `compact` | `type`, `outcome` | Requests Pi compaction with optional instructions. | `{ "type": "compact", "outcome": "pass", "instructions": "Preserve policy decisions." }` |
+| `message` | `type`, `outcome`, `message`, `delivery` | Requests one static Pi message. | `{ "type": "message", "outcome": "block", "message": "Blocked.", "delivery": "followUp" }` |
+| `emit-custom-event` | `type`, `outcome`, `name` | Requests one named custom Event with optional data. | `{ "type": "emit-custom-event", "outcome": "pass", "name": "audit:complete" }` |
+
+## A block message Action
+
+This Hook blocks a `.env` write and asks Pi to deliver a follow-up message
+explaining the block:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "protect-env": {
+      "description": "Block writes to dotenv files",
+      "event": "tool_call",
+      "filter": { "toolName": "^write$", "path": "(^|/)\\.env$" },
+      "shell": "false",
+      "action": {
+        "type": "message",
+        "outcome": "block",
+        "code": 1,
+        "message": "A dotenv write was blocked by HooKit.",
+        "delivery": "followUp"
+      }
+    }
+  }
+}
+```
+
+The `outcome: "block"` and `code: 1` select the owned result; only the static
+message Effect is delivered.
+
+## Selection is separated from delivery
+
+HooKit freezes the Native Event Outcome before Actions are considered, and
+Actions are returned as immutable delivery-neutral **Effects** in
+deterministic, result-major order. The Pi adapter delivers them best-effort:
+**a delivery failure cannot weaken an Event Outcome**. A block, patch,
+cancellation, or report stands even if an Effect fails to deliver. The Effect
+itself is best-effort: if a shutdown request fails delivery, for example, Pi
+may remain running, but the already-frozen Event Outcome does not change.
+
+## Continuation caution
+
+Message, compact, interrupt, and shutdown Actions can intentionally cause
+later Pi Events, so a broad Hook that matches frequently can create
+continuation loops. Filter narrowly (see [Filters](/reference/filter)) and
+consider whether a `pass`-only Hook that runs unconditionally is what you
+want: a Hook that omits `shell` and selects `pass` becomes the optimized
+canonical `"true"` Hook and still emits an ordinary `hook_result`.

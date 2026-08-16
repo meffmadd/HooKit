@@ -1,0 +1,81 @@
+---
+title: Installation
+description: Install HooKit globally or for one trusted Pi project.
+---
+
+This guide shows you how to install HooKit as a Pi package. HooKit requires
+**Pi 0.80.4 or newer** and is currently distributed from its canonical Git
+repository rather than npm.
+
+> **Security:** Pi extensions execute with your user permissions and full
+> system access. Review HooKit's source before installing it, just as you would
+> any third-party executable code.
+
+## Install HooKit for your user
+
+Use a user installation when you want HooKit available in every Pi session.
+This is the recommended setup for the [Write a hook](/getting-started/first-hook)
+tutorial.
+
+1. Confirm that your Pi version is supported:
+
+   ```bash
+   pi --version
+   ```
+
+2. Install HooKit from its canonical Git URL:
+
+   ```bash
+   pi install https://github.com/meffmadd/pi-assert
+   ```
+
+3. Confirm that Pi recorded the package:
+
+   ```bash
+   pi list
+   ```
+
+By default, Pi records the package in `~/.pi/agent/settings.json` and clones
+Git package content under `~/.pi/agent/git/`. `pi list` should include the
+HooKit repository URL.
+
+## Install HooKit for one project
+
+Use a project installation when the project should declare HooKit for everyone
+who works in it.
+
+From the project root, run:
+
+```bash
+pi install -l https://github.com/meffmadd/pi-assert
+```
+
+Pi records the package in `.pi/settings.json`. When another user opens the
+project, Pi asks them to review and trust its project resources before loading
+HooKit or installing a missing package. Project trust authorizes loading; it
+does not sandbox the extension or Hook shells.
+
+## Verify the extension
+
+Open a Pi session where the installation applies. For a project installation,
+trust the project when Pi asks. Then run:
+
+```text
+/hooks
+```
+
+The Hook Catalog panel should open. If `/hooks` is unknown, check `pi list`,
+confirm that the package is installed in the intended user or project scope,
+and restart Pi.
+
+## Keep the installation current
+
+To update installed Pi extension packages, including an unpinned HooKit Git
+installation, run:
+
+```bash
+pi update --extensions
+```
+
+Continue with [Write a hook](/getting-started/first-hook) to configure and
+exercise a dependency-free policy.

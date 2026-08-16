@@ -1,0 +1,91 @@
+---
+title: Events
+description: Supported Events, Hook Outcomes, and Event Outcome behavior.
+---
+
+A Hook subscribes to exactly one **Event** named by its `event` field. Events
+are either **Native Events** originating from Pi, or the **Hook Result Event**
+(`hook_result`) projected from a Hook Result. Every Hook Evaluation produces
+one **Hook Outcome** per Hook and one aggregated, event-specific **Event
+Outcome**.
+
+## Supported Events
+
+| Event | Hook Outcome | Event Outcome behavior |
+|---|---|---|
+| `tool_call` | `pass` or `block` | Runs all matching Hooks; aggregates failures into one `block` |
+| `tool_result` | `pass` or `patch` | Runs all matching Hooks; aggregates failures into one replacement `patch` |
+| `turn_end` | `pass` or `report` | Aggregates and presents failures |
+| `agent_end` | `pass` or `report` | Aggregates; requests one deduplicated corrective turn |
+| `agent_settled` | `pass` or `report` | Aggregates and presents failures |
+| `session_before_switch` | `pass` or `cancel` | Aggregates and cancels on failure |
+| `session_before_fork` | `pass` or `cancel` | Aggregates and cancels on failure |
+| `hook_result` | `pass` or `report` | Handles one originating result; cannot alter it |
+
+Every Event Outcome identifies its Event. Native Event Outcomes carry only the
+required reason or replacement patch for their event-specific failure kind.
+Hook Result Event Outcomes additionally carry the originating Hook Reference
+and Invocation ID and permit only `pass` or `report`.
+
+## Evaluation order
+
+Matching Hooks run sequentially in the deterministic order of the immutable
+**Enabled Hook Set**, derived once per Event from the Catalog entry order and
+Preset reference order:
+
+1. Match the Hook's `event` and `filter`.
+2. Run the optional `when` precondition.
+3. Run the effective `shell` and create one immutable individual **Hook
+   Result**.
+4. Match the owned Action against that Hook Result's Hook Outcome and code.
+5. Expose the result to configured `hook_result` Hooks.
+
+A filter miss runs nothing. The **Native Event Outcome is frozen** before any
+Action or `hook_result` Hook runs, so reactive Hooks and Actions cannot change
+the aggregate decision. All tool Hooks run even after one fails; aggregating
+Hooks combine every failure into the single block or patch Event Outcome.
+
+## Hook Outcome vs Event Outcome
+
+The **Hook Outcome** is one Hook's decision: `pass`, or the Event's failure
+kind (`block`, `patch`, `cancel`, `report`). The **Event Outcome** is the
+complete aggregated decision for the Event. They are deliberately distinct: an
+owned Action selects only its owner's Hook Outcome and code, so a passing Hook
+may request a pass Action even when a sibling blocks the Event.
+
+## Preconditions
+
+The optional `when` field is a shell precondition that runs first. Distinguish
+the two failure ways:
+
+- **Ordinary non-zero** `when` means "not applicable": the Hook is skipped,
+  producing no Hook Result, no Action, and no Evaluation Report row.
+- **Infrastructure failure** — timeout, abort, or spawn failure — **fails
+  closed** with code `null`, producing the event-specific failure outcome so
+  an owned failure Action can select it.
+
+A passing `when` and the main `shell` share one Invocation ID and are counted
+as one Hook row.
+
+## Shell semantics
+
+- Omitted `shell` canonicalizes to the exact command `"true"`.
+- Exact `"true"` → pass, code `0`; exact `"false"` → event-specific failure,
+  code `1`. These are optimized without spawning a subprocess, yet behave and
+  render as ordinary commands with no trimming or parsing: `" true"`,
+  `"true "`, `"true && echo ok"`, and every other string still run through the
+  real `/bin/sh`, so pipes, redirects, `&&`, and `||` work normally.
+- A `when` and its main shell share one Invocation ID; owned Actions share
+  that same source-qualified ref and Invocation ID.
+- Shortcuts honor an already-aborted signal. Already-aborted `turn_end` and
+  `agent_end` evaluations skip Hooks before traversal. Abort after a real
+  shell starts yields code `null` and the event-specific failure outcome.
+- A 5-second default timeout bounds commands and preconditions.
+
+## Delivery cannot weaken an Outcome
+
+Selected Actions are returned as delivery-neutral **Effects** in deterministic
+result-major order and delivered by the Pi adapter best-effort. A delivery
+failure does not change the Event Outcome: a block, patch, cancellation, or
+report stands regardless of whether its Effect was delivered. See
+[Actions](/reference/action).

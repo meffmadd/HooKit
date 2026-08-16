@@ -1,0 +1,14 @@
+{
+  "title": "Reference",
+  "pages": [
+    "configuration",
+    "hooks-panel",
+    "events",
+    "filter",
+    "action",
+    "shell-environment",
+    "presets-sources",
+    "hook-result",
+    "execution-report"
+  ]
+}

@@ -34,7 +34,7 @@ export function Docs({
           enabled: false,
         }}
         nav={{
-          title: 'HooKit',
+          title: '🦉 HooKit',
         }}
       >
         <DocsPage {...page}>{children}</DocsPage>

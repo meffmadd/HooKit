@@ -1,3 +1,4 @@
 {
-  "title": "HooKit"
+  "title": "HooKit",
+  "pages": ["index", "getting-started", "reference", "concepts"]
 }

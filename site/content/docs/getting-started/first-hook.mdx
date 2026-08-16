@@ -1,0 +1,170 @@
+---
+title: Write a hook
+description: Step-by-step tutorial that blocks access to a dummy .env file.
+---
+
+In this tutorial you will author one local Hook, enable it, watch it block a
+matching tool call, inspect the Execution Report, and remove the disposable
+project.
+
+The Hook is a locally authored version of the dependency-free `no-env-access`
+policy from the [HooKit-rules](https://github.com/meffmadd/pi-assert-rules)
+library. Its exact `shell: "false"` decision is handled without a subprocess
+or any external command-line dependency.
+
+**Prerequisites**
+
+- Pi **0.80.4 or newer**.
+- HooKit installed for your user by following [Installation](/getting-started/installation).
+- A terminal in a directory where you can create one disposable folder.
+- Permission to trust that disposable project for this tutorial.
+
+**What you will build**
+
+A Hook named `no-env-access` that blocks the `read` and `write` tools when
+their `path` identifies a `.env` file:
+
+| Field | Value | What it does |
+|---|---|---|
+| name | `no-env-access` | Identifies the Hook in your Catalog |
+| description | `Blocks reads and writes to .env files.` | Summarizes the Hook in `/hooks` |
+| event | `tool_call` | Subscribes before a Pi tool runs |
+| filter | `toolName` is `read`/`write` and `path` ends in `.env` | Selects the matching calls |
+| shell | `false` | Produces the `block` decision |
+
+> **Security:** Hook shells execute locally as trusted code with your Pi
+> process permissions. They are not sandboxed. The 5-second default timeout
+> bounds commands; it is not a sandbox. Use only the dummy value below—never a
+> real secret.
+
+## Step 1 — Create the project and dummy file outside Pi
+
+Stay in your terminal. Do **not** start Pi yet. Create a new disposable project
+and its harmless `.env` before any guard is enabled:
+
+```bash
+mkdir hookit-first-hook
+cd hookit-first-hook
+mkdir .pi
+printf 'DUMMY_KEY=dummy-value\n' > .env
+```
+
+> **Expected result:** your current directory is `hookit-first-hook`; `.env`
+> contains only `DUMMY_KEY=dummy-value`; and `.pi/` is empty.
+
+## Step 2 — Create the project configuration
+
+Still outside Pi, create `.pi/hookit.json` with this content:
+
+{/* docs-example:valid */}
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "filter": {
+        "toolName": ["^read$", "^write$"],
+        "path": "(^|/)\\.env$"
+      },
+      "shell": "false"
+    }
+  }
+}
+```
+
+> **Expected result:** `.pi/hookit.json` is valid JSON and the dummy `.env`
+> already exists before HooKit can enforce the policy.
+
+The fields form one decision: for a `tool_call`, both Filter fields must match;
+then exact `false` produces `block` with code `1`. Both exact `true` and exact
+`false` are optimized shortcuts. Every other shell string—for example
+`git diff --quiet`—runs through the real local shell. See [Filters](/reference/filter)
+for exact regular-expression semantics.
+
+## Step 3 — Start Pi with project trust
+
+HooKit reads project `.pi/hookit.json` only after Pi trusts the project. Start
+the tutorial session with Pi's one-run trust flag:
+
+```bash
+pi --approve
+```
+
+> **Expected result:** Pi opens in `hookit-first-hook` with the project trusted
+> for this run, so the globally installed HooKit extension can load the project
+> Hook Catalog.
+
+Project trust controls whether HooKit may read project policy; it is not a
+sandbox. The [security page](/concepts/security) describes the boundary.
+
+## Step 4 — Enable the Hook
+
+Inside Pi:
+
+1. Open the Hook panel with `/hooks`.
+2. Use the arrow keys to focus `no-env-access` under `local`.
+3. Press **Enter** once.
+
+> **Expected result:** `no-env-access` is shown as directly enabled.
+
+Configuration alone does not enable a Hook. This tutorial uses direct
+enablement so the decision is explicit. The [`/hooks` reference](/reference/hooks-panel)
+documents the rest of the panel without interrupting this path.
+
+## Step 5 — Trigger the guarded read
+
+Close the panel, then send Pi this prompt exactly:
+
+```text
+Read .env with the read tool. Do not use bash or another tool.
+```
+
+> **Expected result:** HooKit blocks the `read` tool call before it runs. The
+> transcript shows the block, and the dummy file contents are not returned.
+
+This Hook intentionally matches only the `read` and `write` tool names. The
+prompt names `read` explicitly so the exercise follows the Filter you authored.
+If the contents appear, confirm the project was started with `pi --approve`,
+the Hook is enabled, and the prompt was copied exactly.
+
+## Step 6 — Inspect the Execution Report
+
+Expand the HooKit Execution Report using the hint shown on its transcript
+entry.
+
+> **Expected result:** the flat report contains one `✗` Hook row for
+> `local/no-env-access` with its duration. The surrounding tool outcome is the
+> block decision. There is no Action row because this Hook owns no Action.
+
+Tool calls and their results in one tool lifecycle join one **Execution Wave**
+with a single end-to-end duration. [Execution Reports](/reference/execution-report)
+documents the row and duration boundaries.
+
+## Step 7 — Clean up
+
+Quit Pi with `/quit`. Back in the terminal, remove only the files and empty
+directories created by this tutorial:
+
+```bash
+rm .env .pi/hookit.json
+rmdir .pi
+cd ..
+rmdir hookit-first-hook
+```
+
+> **Expected result:** the disposable `hookit-first-hook` directory no longer
+> exists. The globally installed HooKit package remains available for real
+> projects.
+
+## Next steps
+
+You have configured, enabled, exercised, observed, and cleaned up a Hook.
+Continue with one of these pages:
+
+- [Explore the Hook library](/getting-started/library) for ready-made file safety, Bash,
+  Git, tool restriction, quality, notification, and observability policies.
+- [Configuration](/reference/configuration) for the complete persisted format.
+- [Hook Evaluation](/concepts/evaluation) for the distinction between Hook and
+  Event Outcomes.

@@ -8,21 +8,11 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import Ajv from "ajv";
 import {
   isValidEntryName,
   validateHookEntry,
 } from "../hookit/domain/validation.js";
-
-// ── Load the schema ────────────────────────────────────────────────
-
-const schemaPath = join(import.meta.dirname!, "..", "schema.json");
-const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
-
-const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
-const validate = ajv.compile(schema);
+import { validate } from "./schema-helper.js";
 
 // ═══════════════════════════════════════════════════════════════════
 // Schema validity

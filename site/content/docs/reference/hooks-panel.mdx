@@ -1,0 +1,68 @@
+---
+title: /hooks panel
+description: Navigation, enablement, installation, defaults, Presets, and removal.
+---
+
+`/hooks` opens the session Hook Catalog panel. It shows Catalog Entries grouped
+by Source, their direct or Preset-derived enablement, persisted default
+preference, and contextual actions for the focused row.
+
+Installation and new-Preset creation target project storage, so they require a
+trusted project and a valid Catalog. Other entry mutations write the authorized
+storage that owns the focused entry. HooKit neither reads nor writes untrusted
+project storage.
+
+## Navigation and search
+
+| Input | Behavior |
+|---|---|
+| Up / Down | Moves focus through entries, crossing Section boundaries. Configured `tui.select.up` and `tui.select.down` bindings also apply. |
+| Tab / Shift+Tab | Jumps to the next or previous Source Section. |
+| `/` | Enters fuzzy search over name, description, Source, shell, `when`, Action detail, and Preset references. |
+| Backspace | Removes the last search character while search is active. |
+| Esc | Leaves search when search is active; otherwise closes `/hooks`. Configured `tui.select.cancel` also applies. |
+| Enter | Toggles direct enablement for the focused entry, including from search results. Configured `tui.select.confirm` also applies. |
+
+Search ranks matches by field tier—name, description, Source, then body fields—
+and preserves Catalog order within a tier. Search changes only the visible
+subset; it does not create a second Catalog or renderer path.
+
+## Panel actions
+
+These keys apply in normal mode. While search is active, printable keys become
+part of the query instead.
+
+| Key | Action | Scope and constraints |
+|---|---|---|
+| `i` | Install Hooks | Opens repository → file → entry selection. Enter installs a missing entry, updates an outdated entry, or asks before uninstalling an installed entry. |
+| `n` | New Preset | Creates a new empty local Preset, then opens its member editor. |
+| `p` | Presets | Jumps focus to the always-first Presets Section. |
+| `d` | Disable all | Clears every directly enabled Catalog Entry. |
+| `t` | Toggle default | Changes the focused entry's persisted `default` preference. |
+| `r` | Remove | Requests confirmation before removing the focused Catalog Entry from project storage. |
+| `e` | Edit Preset | Edits only a focused local Preset. Repository Presets are read-only. |
+
+## Enablement and defaults
+
+Enter changes **direct enablement** for the current session branch. A Hook may
+also be enabled indirectly through one or more directly enabled Presets; the
+panel renders that state as `enabled · via <preset>`. Multiple paths never
+execute one Hook twice in an Enabled Hook Set.
+
+`t` changes the persisted `default` field, not current direct enablement. Current
+defaults are used only when a session has no saved enablement set; a saved set,
+including an empty one, overrides them. See [Presets and sources](/reference/presets-sources)
+for restoration and expansion semantics.
+
+## Entry indicators
+
+| Indicator | Meaning |
+|---|---|
+| `❄` | A repository Preset is read-only; only local Presets can be edited. |
+| `§` | A Preset contains one or more unresolved Hook References. The available members still enable. |
+| `⚠` | The installed entry is absent from its Source repository according to the latest successful lookup. `r` removes it. |
+
+Network failure suppresses orphan detection rather than marking entries
+incorrectly. The install picker separately identifies outdated entries by
+comparing the repository file being browsed with installed content; local
+`default` preferences are excluded from that comparison.

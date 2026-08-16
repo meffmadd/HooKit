@@ -1,0 +1,59 @@
+---
+title: Security
+description: The security and trust boundary HooKit draws.
+---
+
+HooKit is a **policy layer, not a sandbox**. Understanding that boundary is
+the most important thing you can take from these docs.
+
+## What HooKit does
+
+- Evaluates configured Hooks against bounded Pi Event data and returns the
+  event-specific Event Outcome that may block, patch, cancel, or report.
+- Selects owned Actions against individual Hook Results and requests their Pi
+  Effects separately, without changing the Event Outcome.
+- Reads project storage only after Pi **trusts** the project. Untrusted
+  project storage is neither read nor written.
+- Records started Hook commands and selected Actions in bounded Execution
+  Reports.
+
+## What HooKit does not do
+
+**Hook shells execute locally as trusted code with your Pi process
+permissions.** A Hook's `shell` and `when` strings run through the real local
+shell with the same privileges as your Pi session — they can read, write, and
+execute anything your account can. The 5-second default timeout bounds
+commands and preconditions; it is **not a sandbox**.
+
+Reached Hook shells receive bounded Event data through `PI_*` environment
+variables. Tool inputs and tool-result text can contain source code, credentials,
+or other sensitive content, and the shell inherits the Pi process's ambient
+capabilities. Treat Hook logging and every repository Hook as code that can
+observe or disclose that data.
+
+This has two direct consequences:
+
+1. **Treat repository Hooks as executable code.** Any Hook you install from a
+   repository — or any policy another author shares — runs with your
+   permissions. Review its Source (the plain-text Hook you are about to
+   install) before enabling it, and prefer sources you trust. The install
+   picker shows each candidate's `event:`/`shell:`/`when:` inline for exactly
+   this reason.
+2. **A policy check is not a sandbox for the tool it inspects.** When HooKit
+   blocks a `write` to `.env`, it has inspected an input and refused — it has
+   not quarantined the read or isolated the model. Do not store real secrets
+   in files a policy merely attempts to guard, and do not rely on a guard Hook
+   as a substitute for keeping secrets out of sensitive directories and model
+   context.
+
+## The trust model
+
+- Project configuration is read only after Pi trusts the project. A trusted
+  project's entries replace global entries per Catalog merge rules; an
+  untrusted project leaves your global Catalog and enablement unchanged.
+- Catalog eligibility is canonical: a Section is valid only as `local` or a
+  declared `owner/repo`, and unusable Sections fail loudly instead of being
+  silently filtered.
+- Nothing in this boundary is weakened by Action delivery: a decision
+  (block, patch, cancellation, report) stands whether or not its Effect was
+  delivered, so a failed delivery cannot let a blocked action through.

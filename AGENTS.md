@@ -115,6 +115,15 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   toggle are inherited — no parallel path.
 - **`skills/hookit/SKILL.md`** — bundled skill describing the format, events,
   filters, Hooks, owned Actions, env vars, and common patterns.
+- **`site/`** — the static fumadocs documentation site (Getting Started, Reference,
+  Concepts) plus its two testing seams: the build-level smoke test
+  (`tests/docs-build.test.ts`) runs the real `astro build`, asserts every
+  Getting Started/Reference/Concepts destination is published, and checks the visible
+  🦉 HooKit brand; `tests/docs-examples.test.ts` validates every designated
+  fenced `json` block (marked `{/* docs-example:valid */}` or
+  `{/* docs-example:invalid */}` in MDX, and `<!-- docs-example:valid -->` or
+  `<!-- docs-example:invalid -->` in plain Markdown; invisible in print)
+  against the same `schema.json` users configure against.
 
 ## Key Design Decisions
 

@@ -1,0 +1,71 @@
+---
+title: Shell environment
+description: The environment variables every reached Hook shell receives.
+---
+
+Every reached `when` and main `shell` inherits the ambient environment plus
+bounded Pi metadata and Invocation fields. HooKit **clears its managed keys
+from the ambient environment before each real shell**, so stale parent values
+cannot leak into a decision.
+
+## Invocation and Event fields
+
+| Variable | Available | Meaning |
+|---|---|---|
+| `PI_HOOK_REF` | every reached shell | Source-qualified Hook Reference (`local/no-env-access`). |
+| `PI_HOOK_EVENT` | every reached shell | The Hook's configured Event. |
+| `PI_HOOK_INVOCATION_ID` | every reached shell | Identity shared by this Invocation, its Hook Result, Action Request, and projected Hook Result Event. |
+| `PI_EVENT` | every reached shell | The Event being evaluated. |
+| `PI_CWD` | every reached shell | The project working directory. |
+| `PI_TOOL_NAME` | tool Events | The tool name being called or returning. |
+| `PI_TOOL_CALL_ID` | tool Events | The tool call identity. |
+| `PI_TOOL_INPUT` | tool Events | The tool input as JSON text. |
+| `PI_TOOL_RESULT` | `tool_result` | The tool's text content joined with newlines. |
+| `PI_TOOL_IS_ERROR` | `tool_result` | `"true"` or `"false"`. |
+| `PI_EVENT_PAYLOAD` | lifecycle Events | Bounded JSON of the lifecycle candidate. |
+
+## Captured session metadata
+
+When available, HooKit snapshots bounded session, model, provider, reasoning,
+trust, and context values before evaluation:
+
+| Variable | Meaning |
+|---|---|
+| `PI_SESSION_ID` | Current session id. |
+| `PI_SESSION_FILE` | Current session file path. |
+| `PI_SESSION_NAME` | Current session name. |
+| `PI_SESSION_LEAF_ID` | Current session leaf id. |
+| `PI_PROVIDER` | Active model provider. |
+| `PI_MODEL` | Active model id. |
+| `PI_REASONING_LEVEL` | Reasoning level, when the runtime exposes it. |
+| `PI_MODE` | Pi mode. |
+| `PI_PROJECT_TRUSTED` | `"true"`/`"false"` when the runtime can report project trust. |
+| `PI_CONTEXT_TOKENS` | Current context token count, when reported. |
+| `PI_CONTEXT_WINDOW` | Configured context window, when reported. |
+| `PI_CONTEXT_PERCENT` | Context usage percentage, when reported. |
+
+Metadata is captured once per Evaluation from Pi's rich callback context and
+projected onto these bounded scalar names — rich callback objects are not
+exposed to shells.
+
+Example — a `tool_call` Hook that rejects a suspicious piped command:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "inspect-bash": {
+      "description": "Inspect every bash command once",
+      "event": "tool_call",
+      "filter": { "toolName": "^bash$" },
+      "when": "test \"$PI_HOOK_REF\" = local/inspect-bash",
+      "shell": "if echo \"$PI_TOOL_INPUT\" | grep -q 'rm -rf'; then exit 1; fi"
+    }
+  }
+}
+```
+
+A `when` and its main `shell` share one Invocation ID, so both see the same
+`PI_HOOK_INVOCATION_ID`. Owned Actions share the owner's source-qualified ref
+and Invocation ID but carry only static payload — they never receive shell
+output or interpolated variables.

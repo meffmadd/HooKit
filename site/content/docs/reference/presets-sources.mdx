@@ -1,0 +1,89 @@
+---
+title: Presets and sources
+description: Sources, merging, enablement, defaults, and Preset expansion.
+---
+
+## Sources
+
+Every Catalog Entry has a **Hook Source**: either `local` or one `owner/repo`
+section. Source and name together identify one entry, and every entry's
+effective identity is its source-qualified **Hook Reference**
+(`local/name` or `owner/repo/name`).
+
+- `local` holds Hooks and Presets you author yourself.
+- `owner/repo` sections hold entries installed from that repository, and every
+  project `owner/repo` section must be declared in that storage's `repos`
+  array. Global canonical sections merge independently of project `repos`.
+
+## Canonical source eligibility
+
+A Section is valid only as `local` or one `owner/repo`. A storage whose
+`repos` array is missing may contain only `local`. Ineligible sections are
+never silently filtered — they produce a Catalog failure diagnostic, and a
+failed mutation leaves your known-good Catalog and enablement unchanged.
+
+## Project trust and merging
+
+Project storage is used only after Pi trusts the project. Untrusted project
+storage is neither read nor written. A **trusted project's** entries replace
+global entries **only when both Hook Source and name match**, and whole
+records replace rather than field-merging.
+
+## Enablement
+
+Hooks and Presets can both be enabled directly. HooKit persists those direct
+Source-plus-name choices as `enabledEntries` using canonical
+NUL-separated `source\0name` keys:
+
+- A saved set restores only keys present in the current Catalog; bare names are
+  silently discarded with no unambiguous-name resolution.
+- With **no saved enablement**, current `default: true` entries are enabled.
+- A saved set — **including an empty set** — overrides defaults on resume,
+  reload, tree navigation, fork, and clone.
+- An enabled Preset stays enabled when some references dangle and enables every
+  currently available member.
+
+`/hooks` counts directly enabled Catalog Entries and shows an indirectly
+enabled member as `enabled · via <preset>`.
+
+## Preset expansion
+
+A **Preset** is a named list of unique Hook References that expands to an
+**Enabled Hook Set** with source-qualified first-occurrence deduplication.
+Catalog Entry order and Preset reference order determine first occurrence;
+direct and multiple Preset paths never execute the same Hook twice in one
+Evaluation. Matching Hooks then run in that deterministic set order.
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "guarded-workflow": {
+      "description": "Enable the local and repository policies together",
+      "preset": ["local/no-env-access", "meffmadd/pi-assert-rules/clean-turn"],
+      "default": true
+    }
+  }
+}
+```
+
+This Preset enables `no-env-access` from local and `clean-turn` from the
+installed repository in reference order.
+
+## References that dangle or nest
+
+- An **unresolved** Hook Reference remains valid and **dangling**. The Preset
+  still enables and the other members still run.
+- A reference that **resolves to another Preset** fails the complete Catalog
+  until nested Presets are supported; mutation candidates are validated before
+  persistence so installing, updating, or editing into known nesting fails
+  atomically.
+- Removing a referenced Hook may leave a dangling reference, which is valid.
+
+## Installed updates
+
+Repository install and update canonicalize an omitted `shell` to `"true"`.
+Outdated detection compares only repo-driven fields — `description`, `event`,
+canonical `shell`, owned Action, `filter`, and precondition — and **excludes
+the local `default` toggle**: `default` is a local preference, never a
+repo-driven change, so updating preserves your current preference.

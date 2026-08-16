@@ -1,0 +1,70 @@
+---
+title: Explore the Hook library
+description: Discover installable, ready-made HooKit Hooks by category.
+---
+
+The companion **HooKit-rules** repository
+([`meffmadd/pi-assert-rules`](https://github.com/meffmadd/pi-assert-rules))
+is the home of concrete, installable policy Hooks. HooKit-rules owns the
+showcase of each policy; this page only helps you find the category you need.
+The library is not duplicated in this site, so examples do not drift between
+the two repositories.
+
+## Browse by category
+
+The library's `hooks/` directory organizes policies around recognizable
+concerns:
+
+- **[File safety](https://github.com/meffmadd/pi-assert-rules/blob/main/hooks/general.json)** —
+  guard `.env` access, restrict reads and writes to markdown, and block tool
+  results that leak secrets.
+- **[Bash command guards](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/bash-deny)** —
+  the `bash-deny` collection of atomic guards for dangerous `ssh`, `git`,
+  `docker`, `gh`, `brew`, `kubectl`, `helm`, and similar commands. Complex
+  parsing and dependencies are handled for you.
+- **[Git protections](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/git)** —
+  keep the worktree clean, constrain changed lines, and prevent destructive
+  Git operations.
+- **[Tool restrictions](https://github.com/meffmadd/pi-assert-rules/blob/main/hooks/pi-tools.json)** —
+  narrow the tools your agent may use in a project.
+- **Quality checks** — browse the
+  [TypeScript](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/typescript),
+  [Python](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/python),
+  and [documentation](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/docs)
+  gates that run at the right Event.
+- **[Notifications](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/notifications)** —
+  surface policy decisions to your operating system.
+- **[Observability](https://github.com/meffmadd/pi-assert-rules/tree/main/hooks/observability)** —
+  export tool lifecycle data to tracing backends.
+
+## Install a library Hook
+
+Library Hooks install into your configuration over the `/hooks` panel using
+the current HooKit interaction — there is no older `/hooks install` command
+syntax:
+
+1. In Pi, open the Hook panel with `/hooks`.
+2. Press **`i`** (`install hooks`).
+3. Pick the repository, then the file, then the exact Hook you want. The
+   picker shows inline `event:`/`shell:`/`when:` detail for each entry and
+   tracks whether it is installed, outdated, or up to date (press **Enter**
+   to install, update, or confirm uninstall).
+4. Back in `/hooks`, press **Enter** on the installed entry to enable it.
+
+See the [`/hooks` panel reference](/reference/hooks-panel) for every navigation
+and action key.
+
+## After installing
+
+- Installed entries appear under their `owner/repo` section in `.pi/hookit.json`
+  and can be updated and removed like local entries; deprecated repository
+  entries are marked with ⚠ when the repository is reachable.
+- Prefer **Presets** to enable several policies at once, including entries
+  from different repositories. See [Presets and sources](/reference/presets-sources).
+
+## A safety note
+
+Repository Hooks are executable code. Their `shell` strings run locally with
+your Pi process permissions. Review each Hook's Source — its plain-text
+configuration — before you install it, and read the
+[security page](/concepts/security) for the exact trust boundary.
