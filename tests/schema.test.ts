@@ -357,7 +357,7 @@ describe("validate", () => {
     {
       label: "accepts repo section with valid hooks",
       config: {
-        "meffmadd/HooKit-rules": {
+        "meffmadd/HooKit": {
           "block-write": { description: "d", event: "tool_call", shell: "false" },
         },
       },
@@ -385,9 +385,9 @@ describe("validate", () => {
     {
       label: "accepts repos array with valid entries",
       config: {
-        repos: ["meffmadd/HooKit-rules"],
+        repos: ["meffmadd/HooKit"],
         local: { guard: { description: "d", event: "tool_call", shell: "true" } },
-        "meffmadd/HooKit-rules": {
+        "meffmadd/HooKit": {
           block: { description: "d", event: "tool_call", shell: "false" },
         },
       },
@@ -815,7 +815,7 @@ describe("validate", () => {
         local: {
           "my-preset": {
             description: "Block destructive writes",
-            preset: ["local/block-rm-rf", "meffmadd/HooKit-rules/protect-env"],
+            preset: ["local/block-rm-rf", "meffmadd/HooKit/protect-env"],
           },
         },
       },

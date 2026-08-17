@@ -73,6 +73,17 @@ The namespace portion of Catalog Entry identity: either `local` or an
 `owner/repo` source. Source and name together identify an entry.
 _Avoid_: repository bucket
 
+**Core Catalog Entry**:
+An ordinary remote Catalog Entry from `meffmadd/HooKit` that carries HooKit's
+stable first-party support contract. Core is a support tier, not a Hook Source
+kind, default enablement, or npm distribution mode.
+_Avoid_: Built-in Hook, bundled Hook
+
+**Extras Catalog Entry**:
+An ordinary remote Catalog Entry from `meffmadd/HooKit-extras` intended for
+specialized, dependency-heavy, platform-specific, or incubating policies.
+_Avoid_: Extended Hook, HooKit rule
+
 **Hook Reference**:
 The source-qualified text that identifies a Hook, such as `local/guard` or
 `owner/repo/guard`. Catalog Entry names are non-empty and contain neither `/`

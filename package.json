@@ -33,7 +33,7 @@
     "docs:dev": "astro dev --root site",
     "docs:build": "astro build --root site",
     "docs:preview": "astro preview --root site",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts tests/core-hooks/*.test.ts",
     "check": "npm test"
   },
   "peerDependencies": {

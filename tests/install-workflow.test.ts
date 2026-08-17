@@ -8,6 +8,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { clearRepoEntriesCache } from "../hookit/installer.js";
 import { installRepositoryEntry } from "../hookit/ui/install.js";
 import { HooksState } from "../hookit/ui/state.js";
+import { CORE_SOURCE, coreEntry } from "./core-hooks/index.js";
 
 const roots: string[] = [];
 
@@ -22,6 +23,60 @@ function response(body: unknown): Response {
 }
 
 describe("preset installation workflow", () => {
+  it("installs read-only and its three Core members from the first-party Source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "HooKit-core-install-workflow-"));
+    roots.push(root);
+    const global = join(root, "global.json");
+    const project = join(root, "project", ".pi", "hookit.json");
+    const state = new HooksState({ appendEntry() {} } as unknown as ExtensionAPI);
+    state.load({ global, project });
+
+    const piTools = {
+      "block-bash": coreEntry("block-bash"),
+      "block-write": coreEntry("block-write"),
+      "block-edit": coreEntry("block-edit"),
+      "read-only": coreEntry("read-only"),
+    };
+    mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes(`/repos/${CORE_SOURCE}/git/trees/`)) {
+        return response({
+          tree: [{ path: "hooks/pi-tools.json", type: "blob", sha: "core" }],
+        });
+      }
+      if (url.includes(`/repos/${CORE_SOURCE}/contents/hooks/pi-tools.json`)) {
+        return response({
+          type: "file",
+          content: Buffer.from(JSON.stringify(piTools)).toString("base64"),
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const ctx = {
+      ui: {
+        notify() {},
+        setStatus() {},
+        theme: { fg: (_role: string, text: string) => text },
+      },
+    } as unknown as ExtensionContext;
+
+    await installRepositoryEntry(
+      ctx,
+      state,
+      CORE_SOURCE,
+      "read-only",
+      coreEntry("read-only"),
+    );
+
+    const persisted = JSON.parse(readFileSync(project, "utf8")) as Record<string, unknown>;
+    assert.deepEqual(persisted.repos, [CORE_SOURCE]);
+    assert.deepEqual(
+      Object.keys(persisted[CORE_SOURCE] as Record<string, unknown>).sort(),
+      ["block-bash", "block-edit", "block-write", "read-only"],
+    );
+  });
+
   it("persists the preset and every fetched member as one batch while unavailable members remain dangling", async () => {
     const root = mkdtempSync(join(tmpdir(), "HooKit-install-workflow-"));
     roots.push(root);

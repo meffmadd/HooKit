@@ -1,0 +1,100 @@
+{
+  "only-md": {
+    "description": "Allows writes and edits only to Markdown files.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": [
+        "^write$",
+        "^edit$"
+      ],
+      "path": "^(?![\\s\\S]*\\.md$)[\\s\\S]*$"
+    },
+    "shell": "false"
+  },
+  "no-env-access": {
+    "description": "Blocks reads and writes to .env files.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": [
+        "^read$",
+        "^write$"
+      ],
+      "path": "(^|/)\\.env$"
+    },
+    "shell": "false"
+  },
+  "paths-in-cwd": {
+    "description": "Blocks read, write, and edit paths that resolve outside the project.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": [
+        "^read$",
+        "^write$",
+        "^edit$"
+      ]
+    },
+    "shell": "node -e 'const fs=require(\"node:fs\"),path=require(\"node:path\");const input=JSON.parse(process.env.PI_TOOL_INPUT);const value=input.path;if(value===undefined||value===\"\")process.exit(0);if(typeof value!==\"string\")process.exit(1);const root=fs.realpathSync(process.env.PI_CWD);function resolve(base,target,depth=0){if(depth>40)throw new Error(\"too many symbolic links\");const absolute=path.isAbsolute(target);let current=absolute?path.parse(target).root:base;const rest=absolute?target.slice(path.parse(target).root.length):target;for(const segment of rest.split(path.sep)){if(!segment||segment===\".\")continue;if(segment===\"..\"){current=path.dirname(current);continue}const candidate=path.join(current,segment);let stat;try{stat=fs.lstatSync(candidate)}catch(error){if(error&&(error.code===\"ENOENT\"||error.code===\"ENOTDIR\")){current=candidate;continue}throw error}current=stat.isSymbolicLink()?resolve(current,fs.readlinkSync(candidate),depth+1):candidate}return current}const target=resolve(root,value);const relative=path.relative(root,target);process.exit(relative===\"\"||(!path.isAbsolute(relative)&&relative!==\"..\"&&!relative.startsWith(\"..\"+path.sep))?0:1)'"
+  },
+  "write-new-files-only": {
+    "description": "Allows write only when the destination path does not exist.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^write$"
+    },
+    "shell": "node -e 'const fs=require(\"node:fs\");const input=JSON.parse(process.env.PI_TOOL_INPUT);const path=input.path;if(typeof path!==\"string\"||path.length===0)process.exit(1);try{fs.lstatSync(path);process.exit(1)}catch(error){if(error&&error.code===\"ENOENT\")process.exit(0);throw error}'"
+  },
+  "read-max-500-chars": {
+    "description": "Blocks read results exceeding 500 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=500?0:1)'"
+  },
+  "read-max-10000-chars": {
+    "description": "Blocks read results exceeding 10,000 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=10000?0:1)'"
+  },
+  "read-max-20000-chars": {
+    "description": "Blocks read results exceeding 20,000 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=20000?0:1)'"
+  },
+  "read-max-50000-chars": {
+    "description": "Blocks read results exceeding 50,000 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=50000?0:1)'"
+  },
+  "read-max-100000-chars": {
+    "description": "Blocks read results exceeding 100,000 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=100000?0:1)'"
+  },
+  "read-max-200000-chars": {
+    "description": "Blocks read results exceeding 200,000 characters.",
+    "event": "tool_result",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=200000?0:1)'"
+  },
+  "no-env-secrets-in-output": {
+    "description": "Blocks tool results containing qualifying secrets from the project .env file.",
+    "event": "tool_result",
+    "when": "test -f .env",
+    "shell": "node -e 'const fs=require(\"node:fs\"),{parseEnv}=require(\"node:util\"),out=process.env.PI_TOOL_RESULT,env=parseEnv(fs.readFileSync(\".env\",\"utf8\"));process.exit(Object.entries(env).some(([key,value])=>/(key|secret)/i.test(key)&&value.length>=8&&out.includes(value))?1:0)'"
+  }
+}

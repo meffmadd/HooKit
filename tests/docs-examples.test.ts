@@ -129,11 +129,11 @@ describe("documentation configuration examples validate against the JSON Schema"
     }
 
     expectMarkedValid("getting-started/first-hook.mdx"); // first-Hook tutorial config
-    expectMarkedValid("reference/configuration.mdx"); // top-level + sections
-    expectMarkedValid("reference/action.mdx"); // owned Action
-    expectMarkedValid("reference/filter.mdx"); // tool + hook_result Filters
-    expectMarkedValid("reference/hook-result.mdx");
-    expectMarkedValid("reference/presets-sources.mdx"); // Preset
+    expectMarkedValid("reference/configuration/index.mdx"); // top-level + sections
+    expectMarkedValid("reference/configuration/action.mdx"); // owned Action
+    expectMarkedValid("reference/configuration/filter.mdx"); // tool + hook_result Filters
+    expectMarkedValid("reference/configuration/hook-result.mdx");
+    expectMarkedValid("reference/configuration/presets-sources.mdx"); // Preset
     expectMarkedValid("reference/shell-environment.mdx");
 
     // The seam must also prove rejection: at least one example explicitly

@@ -14,7 +14,7 @@ The complete documentation is organized around three needs:
 
 - **[Getting Started](site/content/docs/getting-started/index.mdx)** —
   installation, the guided Hook-writing tutorial, and the Hook library.
-- **[Reference](site/content/docs/reference/configuration.mdx)** — the complete
+- **[Reference](site/content/docs/reference/configuration/index.mdx)** — the complete
   configuration contract and runtime behavior.
 - **[Concepts](site/content/docs/concepts/overview.mdx)** — evaluation,
   composition, and security.
@@ -27,7 +27,7 @@ JSON configuration example is validated against it.
 <!-- docs-example:valid -->
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
+  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
   "local": {
     "protect-env": {
       "description": "Block writes to dotenv files",
@@ -66,8 +66,10 @@ installing policies from untrusted sources.
 
 ## Repositories
 
-- **HooKit** — this repository: the extension, schema, and documentation site.
-- **HooKit-rules** ([`meffmadd/pi-assert-rules`](https://github.com/meffmadd/pi-assert-rules))
-  — the installable Hook library: file safety, Bash command guards, Git
-  protections, tool restrictions, quality checks, notifications, and
-  observability Hooks.
+- **HooKit** — the extension, schema, documentation site, and stable
+  [Core Hook catalog][core-hook-catalog]. Core Hooks install remotely from
+  `meffmadd/HooKit`; they are not bundled in the npm package.
+- **[HooKit Extras](https://github.com/meffmadd/HooKit-extras)** — specialized,
+  platform-specific, dependency-heavy, and incubating Hooks.
+
+[core-hook-catalog]: https://github.com/meffmadd/HooKit/blob/main/hooks/README.md

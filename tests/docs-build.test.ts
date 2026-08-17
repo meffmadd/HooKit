@@ -2,10 +2,10 @@
  * Build-level documentation smoke assertion.
  *
  * Runs the real static documentation build (the publication gate) and
- * asserts the expected Getting Started, Reference, and Concepts destinations are
- * published and the visible 🦉 HooKit brand identity is present. This is
- * intentionally one high-level check rather than one brittle assertion
- * per heading or sentence.
+ * asserts the expected Getting Started, Reference, and Concepts destinations
+ * are published, moved Reference URLs redirect, and the visible HooKit
+ * brand identity (the owl avatar) is present. This stays at the route/build
+ * level rather than asserting individual headings or sentences.
  *
  * Usage: npm test
  */
@@ -20,6 +20,29 @@ const repoRoot = join(import.meta.dirname!, "..");
 const distDir = join(repoRoot, "site", "dist");
 const astroCli = join(repoRoot, "node_modules", "astro", "bin", "astro.mjs");
 
+const LEGACY_REFERENCE_REDIRECTS = [
+  {
+    route: "/reference/action/",
+    artifact: "reference/action/index.html",
+    target: "/reference/configuration/action",
+  },
+  {
+    route: "/reference/filter/",
+    artifact: "reference/filter/index.html",
+    target: "/reference/configuration/filter",
+  },
+  {
+    route: "/reference/hook-result/",
+    artifact: "reference/hook-result/index.html",
+    target: "/reference/configuration/hook-result",
+  },
+  {
+    route: "/reference/presets-sources/",
+    artifact: "reference/presets-sources/index.html",
+    target: "/reference/configuration/presets-sources",
+  },
+] as const;
+
 /** Route path → expected built artifact (static site emits index.html). */
 const EXPECTED_ROUTES: Record<string, string> = {
   "/": "index.html",
@@ -30,13 +53,21 @@ const EXPECTED_ROUTES: Record<string, string> = {
   "/getting-started/library/": "getting-started/library/index.html",
   // Reference
   "/reference/configuration/": "reference/configuration/index.html",
+  "/reference/configuration/schema/": "reference/configuration/schema/index.html",
+  "/reference/configuration/repos/": "reference/configuration/repos/index.html",
+  "/reference/configuration/description/": "reference/configuration/description/index.html",
+  "/reference/configuration/event/": "reference/configuration/event/index.html",
+  "/reference/configuration/filter/": "reference/configuration/filter/index.html",
+  "/reference/configuration/when/": "reference/configuration/when/index.html",
+  "/reference/configuration/shell/": "reference/configuration/shell/index.html",
+  "/reference/configuration/action/": "reference/configuration/action/index.html",
+  "/reference/configuration/default/": "reference/configuration/default/index.html",
+  "/reference/configuration/preset/": "reference/configuration/preset/index.html",
+  "/reference/configuration/presets-sources/": "reference/configuration/presets-sources/index.html",
+  "/reference/configuration/hook-result/": "reference/configuration/hook-result/index.html",
   "/reference/hooks-panel/": "reference/hooks-panel/index.html",
   "/reference/events/": "reference/events/index.html",
-  "/reference/filter/": "reference/filter/index.html",
-  "/reference/action/": "reference/action/index.html",
   "/reference/shell-environment/": "reference/shell-environment/index.html",
-  "/reference/presets-sources/": "reference/presets-sources/index.html",
-  "/reference/hook-result/": "reference/hook-result/index.html",
   "/reference/execution-report/": "reference/execution-report/index.html",
   // Concepts
   "/concepts/overview/": "concepts/overview/index.html",
@@ -64,9 +95,29 @@ describe("documentation site build", () => {
     }
   });
 
-  it("shows the 🦉 HooKit brand identity on the landing page", () => {
+  it("preserves moved Reference URLs as redirects", () => {
+    for (const { route, artifact, target } of LEGACY_REFERENCE_REDIRECTS) {
+      const file = join(distDir, artifact);
+      assert.ok(existsSync(file), `legacy route ${route} should publish ${artifact}`);
+      assert.ok(
+        readFileSync(file, "utf-8").includes(`rel="canonical" href="${target}"`),
+        `legacy route ${route} should redirect to ${target}`,
+      );
+    }
+  });
+
+  it("shows the HooKit owl-avatar brand identity on the landing page", () => {
     const landing = readFileSync(join(distDir, "index.html"), "utf-8");
-    assert.match(landing, /🦉\s*HooKit/, "landing page should show the owl brand with the HooKit name");
+    assert.match(
+      landing,
+      /owl_avatar\.[A-Za-z0-9_-]+\.png/,
+      "landing page should show the owl avatar image",
+    );
+    assert.match(
+      landing,
+      /HooKit/,
+      "landing page should carry the HooKit name next to the owl avatar",
+    );
   });
 
   it("links Getting Started, Reference, and Concepts from the landing page", () => {

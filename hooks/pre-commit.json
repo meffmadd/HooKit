@@ -1,0 +1,14 @@
+{
+  "pre-commit-run-all-files": {
+    "description": "Runs pre-commit on all repository files when the agent finishes.",
+    "event": "agent_end",
+    "when": "test -f .pre-commit-config.yaml",
+    "shell": "pre-commit run --all-files"
+  },
+  "pre-commit-run": {
+    "description": "Runs pre-commit on staged files when the agent finishes.",
+    "event": "agent_end",
+    "when": "test -f .pre-commit-config.yaml",
+    "shell": "pre-commit run"
+  }
+}

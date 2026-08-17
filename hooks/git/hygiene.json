@@ -1,0 +1,7 @@
+{
+  "git-diff-check": {
+    "description": "Checks tracked changes for whitespace errors and conflict markers.",
+    "event": "agent_end",
+    "shell": "git diff --check HEAD --"
+  }
+}

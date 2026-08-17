@@ -1,0 +1,52 @@
+{
+  "require-no-change": {
+    "description": "Requires the Git working tree to remain unchanged.",
+    "event": "agent_end",
+    "shell": "git rev-parse --verify HEAD >/dev/null && status=$(git status --porcelain --untracked-files=all) && test -z \"$status\""
+  },
+  "require-more-deletions": {
+    "description": "Requires the tracked Git diff to contain more deletions than additions.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { additions += $1; deletions += $2 } END { exit invalid || additions >= deletions }'"
+  },
+  "diff-max-10-lines": {
+    "description": "Blocks tracked Git changes exceeding 10 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 10 }'"
+  },
+  "diff-max-50-lines": {
+    "description": "Blocks tracked Git changes exceeding 50 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 50 }'"
+  },
+  "diff-max-100-lines": {
+    "description": "Blocks tracked Git changes exceeding 100 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 100 }'"
+  },
+  "diff-max-250-lines": {
+    "description": "Blocks tracked Git changes exceeding 250 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 250 }'"
+  },
+  "diff-max-500-lines": {
+    "description": "Blocks tracked Git changes exceeding 500 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 500 }'"
+  },
+  "diff-max-1000-lines": {
+    "description": "Blocks tracked Git changes exceeding 1,000 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 1000 }'"
+  },
+  "diff-max-2000-lines": {
+    "description": "Blocks tracked Git changes exceeding 2,000 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 2000 }'"
+  },
+  "diff-max-5000-lines": {
+    "description": "Blocks tracked Git changes exceeding 5,000 added and deleted lines.",
+    "event": "agent_end",
+    "shell": "changes=$(git diff --numstat HEAD --) || exit 1; printf '%s\\n' \"$changes\" | awk 'NF==0 { next } $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { invalid=1; next } { lines += $1 + $2 } END { exit invalid || lines > 5000 }'"
+  }
+}

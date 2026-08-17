@@ -16,7 +16,7 @@ export type HookEntry = PersistedEntry;
 /** Top-level shape of a hooks/*.json file. */
 export type HookEntries = Record<string, HookEntry>;
 
-/** A `.json` hook file under `hooks/` in a HooKit-rules repo. */
+/** A `.json` Hook file under `hooks/` in a repository Hook Source. */
 export interface HookFile {
   /**
    * Relative path under `hooks/` without the `.json` extension.
@@ -345,7 +345,7 @@ export const REPO_ADD_ACTION = "__add__";
  * `PI_HOOK_DEFAULT_REPO` env var.
  */
 export const DEFAULT_REPO =
-  process.env.PI_HOOK_DEFAULT_REPO ?? "meffmadd/HooKit-rules";
+  process.env.PI_HOOK_DEFAULT_REPO ?? "meffmadd/HooKit";
 
 /**
  * Build the items list for the repo picker.

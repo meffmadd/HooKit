@@ -1,0 +1,66 @@
+{
+  "block-read": {
+    "description": "Blocks all read tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^read$"
+    },
+    "shell": "false"
+  },
+  "block-bash": {
+    "description": "Blocks all bash tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^bash$"
+    },
+    "shell": "false"
+  },
+  "block-edit": {
+    "description": "Blocks all edit tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^edit$"
+    },
+    "shell": "false"
+  },
+  "block-write": {
+    "description": "Blocks all write tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^write$"
+    },
+    "shell": "false"
+  },
+  "block-grep": {
+    "description": "Blocks all grep tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^grep$"
+    },
+    "shell": "false"
+  },
+  "block-find": {
+    "description": "Blocks all find tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^find$"
+    },
+    "shell": "false"
+  },
+  "block-ls": {
+    "description": "Blocks all ls tool calls.",
+    "event": "tool_call",
+    "filter": {
+      "toolName": "^ls$"
+    },
+    "shell": "false"
+  },
+  "read-only": {
+    "description": "Blocks bash, write, and edit while leaving read-style tools available.",
+    "preset": [
+      "meffmadd/HooKit/block-bash",
+      "meffmadd/HooKit/block-write",
+      "meffmadd/HooKit/block-edit"
+    ]
+  }
+}

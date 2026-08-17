@@ -59,7 +59,7 @@ function mockTreeBlob(path: string, sha = "abc123"): unknown {
     type: "blob",
     sha,
     size: 100,
-    url: `https://api.github.com/repos/meffmadd/HooKit-rules/git/blobs/${sha}`,
+    url: `https://api.github.com/repos/meffmadd/HooKit/git/blobs/${sha}`,
   };
 }
 
@@ -70,7 +70,7 @@ function mockTreeDir(path: string, sha = "dir-sha"): unknown {
     mode: "040000",
     type: "tree",
     sha,
-    url: `https://api.github.com/repos/meffmadd/HooKit-rules/git/trees/${sha}`,
+    url: `https://api.github.com/repos/meffmadd/HooKit/git/trees/${sha}`,
   };
 }
 
@@ -176,7 +176,7 @@ describe("fetchHookFiles", () => {
     it(label, async () => {
       mockTreesFetch(tree);
       assert.deepStrictEqual(
-        await fetchHookFiles("meffmadd/HooKit-rules"),
+        await fetchHookFiles("meffmadd/HooKit"),
         expected,
       );
     });
@@ -211,7 +211,7 @@ describe("fetchHookFiles", () => {
     it(label, async () => {
       mockTreesFetch(tree ?? [], { status, truncated });
       await assert.rejects(
-        () => fetchHookFiles("meffmadd/HooKit-rules"),
+        () => fetchHookFiles("meffmadd/HooKit"),
         errorPattern,
       );
     });
@@ -224,7 +224,7 @@ describe("fetchHookFiles", () => {
       throw new Error("connect ECONNREFUSED");
     });
     await assert.rejects(
-      () => fetchHookFiles("meffmadd/HooKit-rules"),
+      () => fetchHookFiles("meffmadd/HooKit"),
       /ECONNREFUSED/,
     );
   });
@@ -237,7 +237,7 @@ describe("fetchHookFiles", () => {
       calls.push(url);
       return mockJsonResponse({ tree: [], truncated: false });
     });
-    await fetchHookFiles("meffmadd/HooKit-rules", "develop");
+    await fetchHookFiles("meffmadd/HooKit", "develop");
     assert.strictEqual(calls.length, 1, "exactly one fetch call");
     assert.match(calls[0]!, /\/git\/trees\/develop\?recursive=1$/, calls[0]!);
   });
@@ -248,7 +248,7 @@ describe("fetchHookFiles", () => {
       calls.push(url);
       return mockJsonResponse({ tree: [], truncated: false });
     });
-    await fetchHookFiles("meffmadd/HooKit-rules", "refs/heads/main");
+    await fetchHookFiles("meffmadd/HooKit", "refs/heads/main");
     assert.match(calls[0]!, /\/git\/trees\/main\?recursive=1$/, calls[0]!);
     assert.doesNotMatch(calls[0]!, /refs\/heads\/refs\/heads/);
   });
@@ -374,7 +374,7 @@ describe("fetchHookFile", () => {
         ),
       );
       assert.deepStrictEqual(
-        await fetchHookFile("meffmadd/HooKit-rules", "hooks/defaults.json"),
+        await fetchHookFile("meffmadd/HooKit", "hooks/defaults.json"),
         expected,
       );
     });
@@ -392,7 +392,7 @@ describe("fetchHookFile", () => {
       );
     });
     const result = await fetchHookFile(
-      "meffmadd/HooKit-rules",
+      "meffmadd/HooKit",
       "hooks/security/writes.json",
     );
     assert.ok(calls[0], "fetch was called");
@@ -411,7 +411,7 @@ describe("fetchHookFile", () => {
         mockFileResponse("my hooks.json", "hooks/my hooks/x.json", content),
       );
     });
-    await fetchHookFile("meffmadd/HooKit-rules", "hooks/my hooks/x.json");
+    await fetchHookFile("meffmadd/HooKit", "hooks/my hooks/x.json");
     // Space within a segment is encoded, slashes between segments are not.
     assert.match(calls[0]!, /\/contents\/hooks\/my%20hooks\/x\.json/, calls[0]!);
   });
@@ -455,7 +455,7 @@ describe("fetchHookFile", () => {
     it(label, async () => {
       mock.method(globalThis, "fetch", () => response as Response);
       await assert.rejects(
-        () => fetchHookFile("meffmadd/HooKit-rules", "hooks/defaults.json"),
+        () => fetchHookFile("meffmadd/HooKit", "hooks/defaults.json"),
         errorPattern,
       );
     });
@@ -671,8 +671,10 @@ describe("buildRepoPickerItems", () => {
 });
 
 describe("DEFAULT_REPO", () => {
-  it("is a non-empty owner/repo string", () => {
-    assert.equal(typeof DEFAULT_REPO, "string");
-    assert.match(DEFAULT_REPO, /^[^/]+\/[^/]+$/);
+  it("defaults to the first-party Core Hook Source", () => {
+    assert.equal(
+      DEFAULT_REPO,
+      process.env.PI_HOOK_DEFAULT_REPO ?? "meffmadd/HooKit",
+    );
   });
 });

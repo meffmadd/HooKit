@@ -1,0 +1,22 @@
+{
+  "npm-test": {
+    "description": "Runs npm test when the agent finishes.",
+    "event": "agent_end",
+    "shell": "npm test"
+  },
+  "npm-lint": {
+    "description": "Runs npm run lint when the agent finishes.",
+    "event": "agent_end",
+    "shell": "npm run lint"
+  },
+  "npm-build": {
+    "description": "Runs npm run build when the agent finishes.",
+    "event": "agent_end",
+    "shell": "npm run build"
+  },
+  "npm-typecheck": {
+    "description": "Runs npm run typecheck when the agent finishes.",
+    "event": "agent_end",
+    "shell": "npm run typecheck"
+  }
+}

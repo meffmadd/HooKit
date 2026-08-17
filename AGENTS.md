@@ -56,6 +56,11 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   (`fetchHookFiles`/`fetchHookFile`, session-cached `fetchRepoEntries`) plus
   pure outdated classification and picker helpers. It performs no local
   persistence; fetched entries are submitted to Hook Catalog mutations.
+- **`hooks/`** — the remote-only first-party Core catalog under canonical
+  Source `meffmadd/HooKit`: 35 opt-in Hooks and the `read-only` Preset. Core
+  entries are schema-, catalog-, installation-, and behavior-tested with
+  HooKit, but npm packaging excludes the complete directory. Specialized and
+  incubating entries belong to `meffmadd/HooKit-extras`.
 - **`hookit/ui/execution-report.ts`** — the one defensive custom-entry
   module for durable context-neutral Execution Reports. It owns the
   session-scoped `ExecutionReporter` (tracks tools in `tool_execution_start`
@@ -118,8 +123,8 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **`site/`** — the static fumadocs documentation site (Getting Started, Reference,
   Concepts) plus its two testing seams: the build-level smoke test
   (`tests/docs-build.test.ts`) runs the real `astro build`, asserts every
-  Getting Started/Reference/Concepts destination is published, and checks the visible
-  🦉 HooKit brand; `tests/docs-examples.test.ts` validates every designated
+  Getting Started/Reference/Concepts destination is published, preserves redirects
+  for moved Reference pages, and checks the visible 🦉 HooKit brand; `tests/docs-examples.test.ts` validates every designated
   fenced `json` block (marked `{/* docs-example:valid */}` or
   `{/* docs-example:invalid */}` in MDX, and `<!-- docs-example:valid -->` or
   `<!-- docs-example:invalid -->` in plain Markdown; invisible in print)
@@ -127,6 +132,10 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 
 ## Key Design Decisions
 
+- **Core is a support tier, not a runtime Source kind.** Core Catalog Entries
+  use the ordinary remote GitHub adapter and canonical `owner/repo` identity;
+  they receive no Hook Catalog or Hook Evaluation special case. They remain
+  opt-in and outside the npm artifact.
 - Ordinary shell commands run through `child_process.exec` → pipes, redirects,
   `&&`, and `||` work via `/bin/sh`. Exact `true`/`false` commands (including
   `when`) return normal code 0/1 results without a subprocess; no trimming or

@@ -295,7 +295,7 @@ describe("filterSection — preset field", () => {
   it("matches a preset via its `preset` refs (coerced to a joined string)", () => {
     const p = makePreset("my-preset", [
       "local/block-rm-rf",
-      "meffmadd/HooKit-rules/protect-env",
+      "meffmadd/HooKit/protect-env",
     ]);
     assert.deepEqual(filterSection("protect-env", [p]), [p]);
   });
