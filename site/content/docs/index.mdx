@@ -4,7 +4,7 @@ description: Hooks with outcome-selected Pi Actions for Pi events.
 ---
 
 HooKit is a hook engine for [Pi](https://github.com/earendil-works/pi), the
-agent runtime you are reading this in. You define a **Hook** — a small policy
+agent runtime you are reading this in. You define a **Hook**—a small policy
 that subscribes to a Pi **Event** (a tool call, a finished turn, a settled
 agent, a session change). When the Event happens, HooKit runs your Hook's
 shell decision and may deliver one outcome-selected Pi **Action**, such as a
@@ -24,13 +24,13 @@ Two ideas make HooKit useful:
 
 ## Getting Started
 
-- **[Installation](/getting-started/installation)** — install HooKit globally
+- **[Installation](/getting-started/installation)**—install HooKit globally
   or for one trusted Pi project and verify that `/hooks` is available.
-- **[Write a hook](/getting-started/first-hook)** — build a dependency-free
+- **[Write a hook](/getting-started/first-hook)**—build a dependency-free
   safety policy against a dummy `.env`, with an expected result
   at every step.
-- **[Explore the Hook library](/getting-started/library)** — find installable,
-  ready-made Hooks from the companion HooKit-rules repository.
+- **[Explore the Hook library](/getting-started/library)**—find stable Core
+  Hooks and specialized HooKit Extras.
 
 The [Introduction](/getting-started) connects these steps and routes you to the
 rest of the documentation.
@@ -40,18 +40,18 @@ rest of the documentation.
 Look up the exact contract while you work. The reference mirrors the JSON
 Schema that validates your configuration:
 
-- [Configuration](/reference/configuration) — every field, its type,
+- [Configuration](/reference/configuration)—every field, its type,
   requirement, and constraints.
-- [`/hooks` panel](/reference/hooks-panel) — navigation, enablement,
+- [`/hooks` panel](/reference/hooks-panel)—navigation, enablement,
   installation, defaults, Presets, and removal.
-- [Events](/reference/events) — Event-specific Hook Outcomes and Event Outcome
+- [Events](/reference/events)—Event-specific Hook Outcomes and Event Outcome
   behavior.
-- [Filters](/reference/filter) — candidate fields and matching semantics per
+- [filter](/reference/configuration/filter)—candidate fields and matching semantics per
   Event.
-- [Actions](/reference/action) — owned Action variants and selectors.
+- [action](/reference/configuration/action)—owned Action variants and selectors.
 - [Shell environment](/reference/shell-environment),
-  [Presets and sources](/reference/presets-sources),
-  [`hook_result`](/reference/hook-result), and
+  [Presets and sources](/reference/configuration/presets-sources),
+  [`hook_result`](/reference/configuration/hook-result), and
   [Execution Reports](/reference/execution-report) for behavior the Schema
   cannot express.
 
@@ -59,12 +59,12 @@ Schema that validates your configuration:
 
 Understand why HooKit is designed this way:
 
-- [Overview](/concepts/overview) — Hooks as first-class policy units.
-- [Hook Evaluation](/concepts/evaluation) — the sequence from Event to Hook
+- [Overview](/concepts/overview)—Hooks as first-class policy units.
+- [Hook Evaluation](/concepts/evaluation)—the sequence from Event to Hook
   Result Event.
-- [Composition](/concepts/composition) — how Presets, owned Actions, and
+- [Composition](/concepts/composition)—how Presets, owned Actions, and
   `hook_result` fit together.
-- [Security](/concepts/security) — exactly what HooKit isolates, and what
+- [Security](/concepts/security)—exactly what HooKit isolates, and what
   remains trusted code.
 
 ## Security in one sentence

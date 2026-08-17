@@ -1,0 +1,26 @@
+---
+title: description
+description: The human-readable summary shown in /hooks.
+---
+
+Required on every Catalog Entry—Hooks **and** Presets. It is the summary
+the `/hooks` panel shows:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "shell": "false"
+    }
+  }
+}
+```
+
+- **Type** `string` · required · every Hook and Preset
+- Shown as the identifying summary in `/hooks` when a reader decides whether
+  to enable or edit the entry.
+- Not the Event or the command: `event`, `shell`, `when`, and `filter` carry
+  behavior, while `description` only explains it.

@@ -8,3 +8,10 @@
   --color-fd-primary-foreground: #faf9f6;
   --color-fd-ring: #367867;
 }
+
+/* Reference → Configuration sidebar entries are config keys, so render them
+   in monospace. The folder itself links to `/reference/configuration` (no
+   trailing slash) and stays in the body font. */
+#nd-sidebar a[href^="/reference/configuration/"] {
+  font-family: var(--font-mono);
+}

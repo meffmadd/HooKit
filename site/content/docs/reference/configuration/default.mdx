@@ -1,0 +1,30 @@
+---
+title: default
+description: Enables a Hook or Preset when no enablement has been saved.
+---
+
+Optional on Hooks **and** Presets. Marks the entry as enabled **by default**—but
+only when the session has no saved `enabledEntries` set:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "shell": "false",
+      "default": true
+    }
+  }
+}
+```
+
+- **Type** `boolean` · optional · default `false` · Hooks and Presets
+- With **no saved enablement**, current `default: true` entries are enabled.
+  A saved set, including an empty one, overrides defaults on resume, reload,
+  tree navigation, fork, and clone.
+- The `default` toggle is a **local preference, never a repo-driven change**:
+  repository outdated detection excludes it, so updating preserves the
+  current preference. [Presets and sources](/reference/configuration/presets-sources)
+  describes default-derived enablement and restoration.

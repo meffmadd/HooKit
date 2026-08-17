@@ -1,0 +1,30 @@
+---
+title: when
+description: An optional shell Precondition that gates the whole Hook.
+---
+
+Optional. A shell Precondition that runs **before** the main `shell` decision.
+An ordinary non-zero exit skips the entire Hook—no `shell`, no owned Action,
+no Hook Result, no Action Effect, and no Evaluation Report row:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "guard-package-managed": {
+      "description": "Only guard repos that have a package manifest",
+      "event": "tool_call",
+      "when": "test -f package.json",
+      "shell": "false"
+    }
+  }
+}
+```
+
+- **Type** `string` · optional · every Hook
+- Runs through the real local shell like `shell` does; exact `"true"` and
+  `"false"` also run as optimized shortcuts.
+- Ordinary non-zero skips the Hook as if it had not matched. Only an
+  infrastructure failure produces the Event-specific code-`null` result.
+- Evaluation order is `filter` → `when` → `shell`, so Filter matching occurs
+  before either shell command runs.

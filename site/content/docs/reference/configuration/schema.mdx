@@ -1,0 +1,28 @@
+---
+title: $schema
+description: The JSON Schema reference that powers editor validation and autocompletion.
+---
+
+Optional. Points schema-aware editors at the authoritative JSON Schema for
+`.pi/hookit.json`. The canonical URL is shown in the example:
+
+{/* docs-example:valid */}
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "shell": "false"
+    }
+  }
+}
+```
+
+- **Type** `string` · optional · storage root
+- The Schema accepts any string; only the canonical URL above links to this
+  project's validation authority. Editors that understand JSON Schema use it
+  for autocompletion and validation.
+- Without a `$schema`, the rest of the file is still handled identically—HooKit
+  validates internally regardless.

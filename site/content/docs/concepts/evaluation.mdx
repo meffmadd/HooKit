@@ -23,8 +23,8 @@ Event
 2. **Filter.** The candidate is projected from bounded Event data. A miss runs
    nothing.
 3. **Precondition (`when`).** Optional shell command checked inside the Hook
-   Invocation. An ordinary false Precondition means "not applicable" — no Hook
-   Result, no Action, no report row. Inability to complete it (timeout, abort,
+   Invocation. An ordinary false Precondition means "not applicable": no Hook
+   Result, no Action, and no report row. Inability to complete it (timeout, abort,
    spawn failure) **fails closed** with code `null`.
 4. **Shell.** The effective decision command runs and produces one immutable
    **Hook Result** carrying the Hook Reference, Invocation ID, **Hook
@@ -49,7 +49,7 @@ These are deliberately distinct:
   and **aggregate** all failures into one Event Outcome.
 - The Native Event Outcome is **frozen** before any owned Action or reactive
   Hook runs, so reactions can observe but never alter it.
-- An Action selects only its owner's Hook Outcome and code — a passing Hook may
+- An Action selects only its owner's Hook Outcome and code—a passing Hook may
   request a pass Action even when a sibling blocks the Event, and delivery of
   an Effect can never weaken a block, patch, cancellation, or report.
 

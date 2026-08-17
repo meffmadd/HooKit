@@ -19,7 +19,7 @@ effective identity is its source-qualified **Hook Reference**
 
 A Section is valid only as `local` or one `owner/repo`. A storage whose
 `repos` array is missing may contain only `local`. Ineligible sections are
-never silently filtered — they produce a Catalog failure diagnostic, and a
+never silently filtered—they produce a Catalog failure diagnostic, and a
 failed mutation leaves your known-good Catalog and enablement unchanged.
 
 ## Project trust and merging
@@ -38,7 +38,7 @@ NUL-separated `source\0name` keys:
 - A saved set restores only keys present in the current Catalog; bare names are
   silently discarded with no unambiguous-name resolution.
 - With **no saved enablement**, current `default: true` entries are enabled.
-- A saved set — **including an empty set** — overrides defaults on resume,
+- A saved set, **including an empty set**, overrides defaults on resume,
   reload, tree navigation, fork, and clone.
 - An enabled Preset stays enabled when some references dangle and enables every
   currently available member.
@@ -60,15 +60,15 @@ Evaluation. Matching Hooks then run in that deterministic set order.
   "local": {
     "guarded-workflow": {
       "description": "Enable the local and repository policies together",
-      "preset": ["local/no-env-access", "meffmadd/pi-assert-rules/clean-turn"],
+      "preset": ["local/no-env-access", "meffmadd/HooKit/git-diff-check"],
       "default": true
     }
   }
 }
 ```
 
-This Preset enables `no-env-access` from local and `clean-turn` from the
-installed repository in reference order.
+This Preset enables `no-env-access` from local and `git-diff-check` from the
+Core repository in reference order.
 
 ## References that dangle or nest
 
@@ -84,6 +84,6 @@ installed repository in reference order.
 
 Repository install and update canonicalize an omitted `shell` to `"true"`.
 Outdated detection compares only repo-driven fields — `description`, `event`,
-canonical `shell`, owned Action, `filter`, and precondition — and **excludes
+canonical `shell`, owned Action, `filter`, and precondition—and **excludes
 the local `default` toggle**: `default` is a local preference, never a
 repo-driven change, so updating preserves your current preference.

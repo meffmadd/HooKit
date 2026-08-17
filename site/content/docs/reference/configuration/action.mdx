@@ -1,12 +1,12 @@
 ---
-title: Actions
+title: action
 description: Owned Action variants, selectors, and delivery.
 ---
 
 A Hook may **own** one declarative Pi **Action**. Every Action requires
 `outcome`; optional `code` narrows it further. The owned Action is selected
-against its owner's immutable **Hook Outcome and code** — never the aggregate
-Event Outcome — and is considered as soon as that Hook Result exists.
+against its owner's immutable **Hook Outcome and code**, never the aggregate
+Event Outcome, and is considered as soon as that Hook Result exists.
 
 ## Common fields and selectors
 
@@ -88,9 +88,8 @@ may remain running, but the already-frozen Event Outcome does not change.
 
 ## Continuation caution
 
-Message, compact, interrupt, and shutdown Actions can intentionally cause
-later Pi Events, so a broad Hook that matches frequently can create
-continuation loops. Filter narrowly (see [Filters](/reference/filter)) and
-consider whether a `pass`-only Hook that runs unconditionally is what you
-want: a Hook that omits `shell` and selects `pass` becomes the optimized
-canonical `"true"` Hook and still emits an ordinary `hook_result`.
+Message, compact, interrupt, and shutdown Actions can cause later Pi Events.
+A broad, frequently matching Hook can therefore create continuation loops. A
+`pass`-only Hook that omits `shell` is the optimized canonical `"true"` Hook;
+it still emits an ordinary `hook_result`. The
+[filter](/reference/configuration/filter) field limits which Events match.

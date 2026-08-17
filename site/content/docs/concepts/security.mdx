@@ -21,7 +21,7 @@ the most important thing you can take from these docs.
 
 **Hook shells execute locally as trusted code with your Pi process
 permissions.** A Hook's `shell` and `when` strings run through the real local
-shell with the same privileges as your Pi session — they can read, write, and
+shell with the same privileges as your Pi session—they can read, write, and
 execute anything your account can. The 5-second default timeout bounds
 commands and preconditions; it is **not a sandbox**.
 
@@ -34,13 +34,13 @@ observe or disclose that data.
 This has two direct consequences:
 
 1. **Treat repository Hooks as executable code.** Any Hook you install from a
-   repository — or any policy another author shares — runs with your
+   repository—or any policy another author shares—runs with your
    permissions. Review its Source (the plain-text Hook you are about to
    install) before enabling it, and prefer sources you trust. The install
    picker shows each candidate's `event:`/`shell:`/`when:` inline for exactly
    this reason.
 2. **A policy check is not a sandbox for the tool it inspects.** When HooKit
-   blocks a `write` to `.env`, it has inspected an input and refused — it has
+   blocks a `write` to `.env`, it has inspected an input and refused—it has
    not quarantined the read or isolated the model. Do not store real secrets
    in files a policy merely attempts to guard, and do not rely on a guard Hook
    as a substitute for keeping secrets out of sensitive directories and model

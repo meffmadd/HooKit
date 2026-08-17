@@ -13,8 +13,8 @@ only the bounded identity and decision the originating Hook produced:
 
 For each originating Hook Result, its owned Action is considered **first**,
 followed by configured `hook_result` Hooks in Enabled Hook Set order. Every
-originating result projects exactly one Hook Result Event — including when no
-reactive Hook matches — and its explicit Event Outcome is then `pass`.
+originating result projects exactly one Hook Result Event—including when no
+reactive Hook matches—and its explicit Event Outcome is then `pass`.
 
 ## Bounded handling, one level deep
 
@@ -22,7 +22,7 @@ reactive Hook matches — and its explicit Event Outcome is then `pass`.
   may select its own Action.
 - That local result is **never redispatched**, bounding handling to one level.
 - `hook_result` handlers are awaited without the originating abort signal and
-  can never alter the frozen Native Event Outcome — the originating Hook
+  can never alter the frozen Native Event Outcome—the originating Hook
   Result is already immutable.
 - Origin identity remains available separately for accounting and shell
   environment projection, so you can audit a block without changing it.
@@ -32,7 +32,8 @@ reactive Hook matches — and its explicit Event Outcome is then `pass`.
 The `hook_result` Filter is limited to `event`, source-qualified `hookRef`,
 `invocationId`, `outcome`, and `code`. Identity fields use the regex/any-of
 string rules; `outcome` and `code` use the exact shared selector semantics of
-owned Actions. See [Filters](/reference/filter).
+owned Actions. The [filter](/reference/configuration/filter) page lists all
+candidate fields and matching rules.
 
 ## Example: audit every block
 

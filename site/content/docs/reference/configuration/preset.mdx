@@ -1,0 +1,29 @@
+---
+title: preset
+description: The list of Hook References a Preset expands into an enabled set.
+---
+
+Required on every **Preset**. Names the Hook References the Preset expands
+into, in reference order:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "guarded-stack": {
+      "description": "Enable the local and repository policies together",
+      "preset": ["local/no-env-access", "meffmadd/HooKit/git-diff-check"]
+    }
+  }
+}
+```
+
+- **Type** Hook Reference array · required · every Preset · unique references
+- Each reference is source-qualified: `local/name` or `owner/repo/name`.
+- An unresolved reference remains valid and **dangling**; a reference that
+  resolves to another Preset fails the complete Catalog until nesting is
+  supported.
+- A Preset enables every currently available member and **cannot carry any
+  executable field** (`shell`, `event`, `action`, `filter`, or `when`).
+  [Presets and sources](/reference/configuration/presets-sources) describes
+  expansion, enablement, and defaults.

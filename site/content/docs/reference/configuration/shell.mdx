@@ -1,0 +1,35 @@
+---
+title: shell
+description: The decision command; the Hook passes when it exits 0.
+---
+
+At least one of `shell` or an owned `action` is required on every Hook. The
+`shell` command is the Hook's decision: an exit code of 0 produces `pass`,
+any non-zero code produces the Event's failure kind:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "filter": { "toolName": "^write$", "path": "(^|/)\\.env$" },
+      "shell": "false"
+    }
+  }
+}
+```
+
+- **Type** `string` · at least one of `shell`/`action` · canonical `"true"`
+  when omitted · every Hook
+- Runs through `child_process.exec` → `/bin/sh`, so pipes, redirects, `&&`,
+  and `||` work.
+- Exact `"true"` and `"false"` run as optimized shortcuts with identical
+  command accounting—no subprocess is spawned and no trimming or syntax
+  recognition occurs.
+- Boolean values and unknown fields are invalid. If a `when` precondition
+  exists, it runs **first**; see [when](/reference/configuration/when).
+- An owned [action](/reference/configuration/action) can request a Pi Effect
+  from this Hook's result. A [filter](/reference/configuration/filter) ANDs
+  candidate criteria before the decision runs.

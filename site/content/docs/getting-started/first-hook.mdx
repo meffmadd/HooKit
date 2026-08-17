@@ -8,8 +8,8 @@ matching tool call, inspect the Execution Report, and remove the disposable
 project.
 
 The Hook is a locally authored version of the dependency-free `no-env-access`
-policy from the [HooKit-rules](https://github.com/meffmadd/pi-assert-rules)
-library. Its exact `shell: "false"` decision is handled without a subprocess
+policy from HooKit's [Core catalog](https://github.com/meffmadd/HooKit/blob/main/hooks/general.json).
+Its exact `shell: "false"` decision is handled without a subprocess
 or any external command-line dependency.
 
 **Prerequisites**
@@ -37,7 +37,7 @@ their `path` identifies a `.env` file:
 > bounds commands; it is not a sandbox. Use only the dummy value below—never a
 > real secret.
 
-## Step 1 — Create the project and dummy file outside Pi
+## Step 1—Create the project and dummy file outside Pi
 
 Stay in your terminal. Do **not** start Pi yet. Create a new disposable project
 and its harmless `.env` before any guard is enabled:
@@ -52,14 +52,14 @@ printf 'DUMMY_KEY=dummy-value\n' > .env
 > **Expected result:** your current directory is `hookit-first-hook`; `.env`
 > contains only `DUMMY_KEY=dummy-value`; and `.pi/` is empty.
 
-## Step 2 — Create the project configuration
+## Step 2—Create the project configuration
 
 Still outside Pi, create `.pi/hookit.json` with this content:
 
 {/* docs-example:valid */}
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/meffmadd/pi-assert/main/schema.json",
+  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
   "local": {
     "no-env-access": {
       "description": "Blocks reads and writes to .env files.",
@@ -80,10 +80,10 @@ Still outside Pi, create `.pi/hookit.json` with this content:
 The fields form one decision: for a `tool_call`, both Filter fields must match;
 then exact `false` produces `block` with code `1`. Both exact `true` and exact
 `false` are optimized shortcuts. Every other shell string—for example
-`git diff --quiet`—runs through the real local shell. See [Filters](/reference/filter)
+`git diff --quiet`—runs through the real local shell. See [filter](/reference/configuration/filter)
 for exact regular-expression semantics.
 
-## Step 3 — Start Pi with project trust
+## Step 3—Start Pi with project trust
 
 HooKit reads project `.pi/hookit.json` only after Pi trusts the project. Start
 the tutorial session with Pi's one-run trust flag:
@@ -99,7 +99,7 @@ pi --approve
 Project trust controls whether HooKit may read project policy; it is not a
 sandbox. The [security page](/concepts/security) describes the boundary.
 
-## Step 4 — Enable the Hook
+## Step 4—Enable the Hook
 
 Inside Pi:
 
@@ -113,7 +113,7 @@ Configuration alone does not enable a Hook. This tutorial uses direct
 enablement so the decision is explicit. The [`/hooks` reference](/reference/hooks-panel)
 documents the rest of the panel without interrupting this path.
 
-## Step 5 — Trigger the guarded read
+## Step 5—Trigger the guarded read
 
 Close the panel, then send Pi this prompt exactly:
 
@@ -129,7 +129,7 @@ prompt names `read` explicitly so the exercise follows the Filter you authored.
 If the contents appear, confirm the project was started with `pi --approve`,
 the Hook is enabled, and the prompt was copied exactly.
 
-## Step 6 — Inspect the Execution Report
+## Step 6—Inspect the Execution Report
 
 Expand the HooKit Execution Report using the hint shown on its transcript
 entry.
@@ -142,7 +142,7 @@ Tool calls and their results in one tool lifecycle join one **Execution Wave**
 with a single end-to-end duration. [Execution Reports](/reference/execution-report)
 documents the row and duration boundaries.
 
-## Step 7 — Clean up
+## Step 7—Clean up
 
 Quit Pi with `/quit`. Back in the terminal, remove only the files and empty
 directories created by this tutorial:

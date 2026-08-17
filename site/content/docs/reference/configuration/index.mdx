@@ -1,0 +1,117 @@
+---
+title: Configuration
+description: The complete configuration contract for .pi/hookit.json.
+---
+
+Configuration is plain JSON in `.pi/hookit.json` for the current project, or
+`~/.pi/agent/hookit.json` for global policies. Project storage is only read
+after Pi trusts the project. The **JSON Schema at
+[`meffmadd/HooKit/schema.json`](https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json)
+is the validation authority**: every designated JSON configuration example is
+validated against it, and editors that understand JSON Schema use it for
+autocompletion.
+
+The persisted format has a top-level object with an optional `$schema`, an
+optional `repos` array, and one Section per Hook Source (`local` plus one
+`owner/repo` per installed repository). Every Section maps names to Catalog
+Entries, which are either a **Hook** or a **Preset**—never both.
+
+{/* docs-example:valid */}
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
+  "repos": ["meffmadd/HooKit"],
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "filter": { "toolName": "^write$", "path": "(^|/)\\.env$" },
+      "shell": "false"
+    }
+  },
+  "meffmadd/HooKit": {
+    "git-diff-check": {
+      "description": "Checks tracked changes for whitespace errors and conflict markers.",
+      "event": "agent_end",
+      "shell": "git diff --check HEAD --"
+    }
+  }
+}
+```
+
+## Fields
+
+Each config option has its own short page with an example at the top:
+
+### Storage root
+
+| Field | Page |
+|---|---|
+| `$schema` | [JSON Schema reference](/reference/configuration/schema) |
+| `repos` | [Available repositories](/reference/configuration/repos) |
+| `local` / `owner/repo` | Sections map names to Catalog Entries (`local` plus declared `owner/repo`). |
+
+### Hooks
+
+A **Hook** subscribes to one Event and owns a shell decision and, optionally,
+one Action. A Hook requires `description` and `event`, and **at least one of
+`shell` or `action`**.
+
+| Field | Page |
+|---|---|
+| `description` | [Human-readable summary in `/hooks`](/reference/configuration/description) |
+| `event` | [The Event subscribed to](/reference/configuration/event) |
+| `filter` | [Candidate criteria, ANDed](/reference/configuration/filter) |
+| `when` | [Shell Precondition gating the Hook](/reference/configuration/when) |
+| `shell` | [The decision command](/reference/configuration/shell) |
+| `action` | [One owned Pi Action](/reference/configuration/action) |
+| `default` | [Enabled when no enablement is saved](/reference/configuration/default) |
+
+### Presets
+
+A **Preset** is a named list of unique Hook References. It enables a set of
+Hooks as one unit and **cannot carry any executable field**.
+
+| Field | Page |
+|---|---|
+| `description` | [Human-readable summary in `/hooks`](/reference/configuration/description) |
+| `preset` | [The Hook Reference list](/reference/configuration/preset) |
+| `default` | [Enabled when no enablement is saved](/reference/configuration/default) |
+
+## Entry identity
+
+Each entry name is **non-empty and contains neither `/` nor NUL**. The
+source-qualified identity is the **Hook Reference**: `local/name` for local
+entries or `owner/repo/name` for repository entries. References are how
+Presets name members and how reports and Filters identify a Hook, so the
+restriction keeps identity unambiguous:
+
+| Catalog Entry name | Valid? | Notes |
+|---|---|---|
+| `no-env-access` | yes | ordinary local entry |
+| `` (empty) | no | names are non-empty |
+| `nested/guard` | no | `/` is reserved for Reference separators |
+| `nul\u0000guard` | no | NUL is reserved for persisted enablement keys |
+
+## Explicitly invalid combinations
+
+The Schema rejects combinations that cannot form a valid entry. This example
+illustrates a boolean `shell`, which is invalid:
+
+{/* docs-example:invalid */}
+```json
+{
+  "local": {
+    "mistake": {
+      "description": "A Hook with an invalid boolean shell",
+      "event": "tool_call",
+      "shell": false
+    }
+  }
+}
+```
+
+So are an entry with neither `shell` nor `action` (inert), and an entry that
+mixes a Hook's fields with a Preset's `preset` array. If a file fails
+validation, `/hooks` reports the Catalog as broken and refuses mutations until
+the file is fixed, so your previously working session state is unaffected.

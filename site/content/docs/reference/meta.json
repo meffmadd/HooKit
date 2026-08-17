@@ -2,13 +2,9 @@
   "title": "Reference",
   "pages": [
     "configuration",
-    "hooks-panel",
     "events",
-    "filter",
-    "action",
+    "hooks-panel",
     "shell-environment",
-    "presets-sources",
-    "hook-result",
     "execution-report"
   ]
 }

@@ -1,0 +1,17 @@
+{
+  "title": "Configuration",
+  "pages": [
+    "schema",
+    "repos",
+    "description",
+    "event",
+    "filter",
+    "when",
+    "shell",
+    "action",
+    "default",
+    "preset",
+    "presets-sources",
+    "hook-result"
+  ]
+}

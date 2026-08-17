@@ -1,0 +1,28 @@
+---
+title: event
+description: The Event to which a Hook subscribes.
+---
+
+Required on every Hook. Chooses the Event the Hook listens to before its
+`filter`, `when`, `shell`, and owned `action` run:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "shell": "false"
+    }
+  }
+}
+```
+
+- **Type** string enum · required · every Hook
+- One of the 8 supported Events: `tool_call`, `tool_result`, `turn_end`,
+  `agent_end`, `agent_settled`, `session_before_switch`,
+  `session_before_fork`, and the reactive `hook_result`.
+- [Events](/reference/events) documents what each Event carries and when it
+  fires. `hook_result` observes other Hooks' results; the
+  [filter](/reference/configuration/filter) page lists its candidate fields.

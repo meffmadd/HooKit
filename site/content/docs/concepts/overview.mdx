@@ -6,8 +6,8 @@ description: Hooks as first-class policy units and why HooKit exists.
 HooKit exists to make agent behavior governable by the people running it. The
 central abstraction is the **Hook**: a small, inspectable policy unit that
 subscribes to a Pi **Event**, runs a shell decision, and may own one
-outcome-selected Pi **Action**. Hooks live in a **Hook Catalog** — your
-`.pi/hookit.json` — come from a **Hook Source** (`local` or `owner/repo`), and
+outcome-selected Pi **Action**. Hooks live in your `.pi/hookit.json` **Hook
+Catalog**, come from a **Hook Source** (`local` or `owner/repo`), and
 produce immutable **Hook Results**, so a policy is always a plain, reviewable
 record rather than woven into the agent.
 
@@ -19,7 +19,7 @@ enforces, see exactly what it matched, and change it without touching Pi
 itself. There is no hidden policy layer.
 
 **They live at tight feedback loops.** Hooks subscribe at multiple points in a
-Pi lifecycle — before a tool runs, after a tool returns, at the end of a turn,
+Pi lifecycle—before a tool runs, after a tool returns, at the end of a turn,
 when the agent settles, and before session changes that can still be
 cancelled. That means a policy can act *before* damage (block a tool call),
 *after* an operation (patch a result), and around the workflow (require a clean
@@ -29,15 +29,15 @@ does that a policy must undo.
 **Their decisions are observable.** Every Hook Evaluation can produce an
 Execution Report in the transcript: a flat, ordered record of which policies
 ran, what they decided, and how long they took. Policy is not judged by
-faith — you read the decision.
+faith—you read the decision.
 
 The rest of the Concepts section explains the two ideas that shape how Hooks
 behave:
 
-- the [Hook Evaluation model](/concepts/evaluation) — the exact sequence from
+- the [Hook Evaluation model](/concepts/evaluation)—the exact sequence from
   Event to Hook Result Event, and the distinction between a Hook's individual
   decision and the Event's aggregate outcome;
-- the [composition model](/concepts/composition) — how Presets, owned Actions,
+- the [composition model](/concepts/composition)—how Presets, owned Actions,
   and `hook_result` combine policies, and where composition deliberately
   stops.
 

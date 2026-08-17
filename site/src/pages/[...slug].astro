@@ -6,6 +6,7 @@ import "@/styles/global.css";
 import { getPageImageUrl, source } from "@/lib/source";
 import Layout from "@/components/layout.astro";
 import type { TOCItemType } from "fumadocs-core/toc";
+import { Home } from "@/components/home";
 
 interface Props {
   page: CollectionEntry<"docs">;
@@ -24,6 +25,10 @@ const slugs = typeof Astro.params.slug === "string" ? Astro.params.slug.split("/
 const docsPage = source.getPage(slugs)!;
 const image = getPageImageUrl(docsPage);
 
+// The root `/` uses the server-rendered landing page. Other pages render
+// the regular docs layout unchanged.
+const isLanding = slugs.length === 0;
+
 const toc: TOCItemType[] = headings.map((heading) => ({
   depth: heading.depth,
   title: heading.text,
@@ -32,21 +37,29 @@ const toc: TOCItemType[] = headings.map((heading) => ({
 ---
 
 <Layout>
-  <title>{page.data.title}</title>
+  {isLanding ? (
+    <title>{"HooKit · Hook engine for Pi"}</title>
+  ) : (
+    <title>{page.data.title}</title>
+  )}
   <meta name="title" content={page.data.title} />
   <meta name="description" content={page.data.description} />
   <meta property="og:image" content={image} />
-  <Docs
-    tree={source.getPageTree()}
-    pathname={Astro.url.pathname}
-    params={Astro.params}
-    page={{ toc }}
-    client:load
-  >
-    <h1 class="font-semibold text-3xl">{page.data.title}</h1>
-    <p class="text-lg text-fd-muted-foreground mb-8">{page.data.description}</p>
-    <div class="prose flex-1">
-      <Content components={{ ...defaultMdxComponents }} />
-    </div>
-  </Docs>
+  {isLanding ? (
+    <Home />
+  ) : (
+    <Docs
+      tree={source.getPageTree()}
+      pathname={Astro.url.pathname}
+      params={Astro.params}
+      page={{ toc }}
+      client:load
+    >
+      <h1 class="font-semibold text-3xl">{page.data.title}</h1>
+      <p class="text-lg text-fd-muted-foreground mb-8">{page.data.description}</p>
+      <div class="prose flex-1">
+        <Content components={{ ...defaultMdxComponents }} />
+      </div>
+    </Docs>
+  )}
 </Layout>

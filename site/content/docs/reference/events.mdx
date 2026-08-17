@@ -60,7 +60,7 @@ the two failure ways:
 
 - **Ordinary non-zero** `when` means "not applicable": the Hook is skipped,
   producing no Hook Result, no Action, and no Evaluation Report row.
-- **Infrastructure failure** — timeout, abort, or spawn failure — **fails
+- **Infrastructure failure**—timeout, abort, or spawn failure—**fails
   closed** with code `null`, producing the event-specific failure outcome so
   an owned failure Action can select it.
 
@@ -88,4 +88,4 @@ Selected Actions are returned as delivery-neutral **Effects** in deterministic
 result-major order and delivered by the Pi adapter best-effort. A delivery
 failure does not change the Event Outcome: a block, patch, cancellation, or
 report stands regardless of whether its Effect was delivered. See
-[Actions](/reference/action).
+[action](/reference/configuration/action).

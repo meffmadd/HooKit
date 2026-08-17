@@ -1,0 +1,35 @@
+---
+title: repos
+description: Repositories available to the /hooks installer and the sections authorized in this storage.
+---
+
+Optional. Lists `owner/repo` repositories available to the `/hooks` installer.
+Every project `owner/repo` Section in this storage must be declared here.
+
+{/* docs-example:valid */}
+```json
+{
+  "repos": ["meffmadd/HooKit"],
+  "local": {
+    "no-env-access": {
+      "description": "Blocks reads and writes to .env files.",
+      "event": "tool_call",
+      "shell": "false"
+    }
+  },
+  "meffmadd/HooKit": {
+    "git-diff-check": {
+      "description": "Checks tracked changes for whitespace errors and conflict markers.",
+      "event": "agent_end",
+      "shell": "git diff --check HEAD --"
+    }
+  }
+}
+```
+
+- **Type** string array · optional · storage root
+- Items match `^[^/]+/[^/]+$` and are unique.
+- A storage whose `repos` is missing may contain only `local`; undeclared
+  project `owner/repo` Sections produce a Catalog failure rather than being
+  silently ignored. [Presets and sources](/reference/configuration/presets-sources)
+  describes source eligibility, merging, and enablement.

@@ -45,10 +45,10 @@ trust, and context values before evaluation:
 | `PI_CONTEXT_PERCENT` | Context usage percentage, when reported. |
 
 Metadata is captured once per Evaluation from Pi's rich callback context and
-projected onto these bounded scalar names — rich callback objects are not
+projected onto these bounded scalar names—rich callback objects are not
 exposed to shells.
 
-Example — a `tool_call` Hook that rejects a suspicious piped command:
+Example—a `tool_call` Hook that rejects a suspicious piped command:
 
 {/* docs-example:valid */}
 ```json
@@ -67,5 +67,5 @@ Example — a `tool_call` Hook that rejects a suspicious piped command:
 
 A `when` and its main `shell` share one Invocation ID, so both see the same
 `PI_HOOK_INVOCATION_ID`. Owned Actions share the owner's source-qualified ref
-and Invocation ID but carry only static payload — they never receive shell
+and Invocation ID but carry only static payload—they never receive shell
 output or interpolated variables.
