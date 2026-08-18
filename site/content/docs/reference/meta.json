@@ -5,6 +5,7 @@
     "events",
     "hooks-panel",
     "shell-environment",
-    "execution-report"
+    "execution-report",
+    "glossary"
   ]
 }

@@ -16,3 +16,22 @@ import { ClientRouter } from 'astro:transitions';
     <slot />
   </body>
 </html>
+
+<script>
+  // Glossary tooltips: one fixed-position element, clamped to the article.
+  // The tooltip element lives on `document.body`, and Astro's ClientRouter
+  // replaces the whole `<body>` on each view-transition navigation, so a
+  // tooltip created once at load would be orphaned on the next page.
+  // `astro:page-load` fires once per page — on the initial `load` and after
+  // every navigation — so `refresh()` destroys the previous instance and
+  // rebuilds it against the new body. `createGlossaryTooltip().destroy()`
+  // removes both the element and its delegated listeners.
+  import { createGlossaryTooltip } from '../glossary-tooltip';
+  let tooltip: ReturnType<typeof createGlossaryTooltip> | undefined;
+  const refresh = (): void => {
+    tooltip?.destroy();
+    tooltip = createGlossaryTooltip();
+  };
+  refresh();
+  document.addEventListener('astro:page-load', refresh);
+</script>

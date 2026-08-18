@@ -121,14 +121,40 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **`skills/hookit/SKILL.md`** — bundled skill describing the format, events,
   filters, Hooks, owned Actions, env vars, and common patterns.
 - **`site/`** — the static fumadocs documentation site (Getting Started, Reference,
-  Concepts) plus its two testing seams: the build-level smoke test
-  (`tests/docs-build.test.ts`) runs the real `astro build`, asserts every
+  Concepts) plus its glossary search and three testing seams. The Reference
+  glossary (`content/docs/reference/glossary.mdx`) documents every capitalized
+  Term from `CONTEXT.md` with one `## Term [#anchor]` heading per entry. The
+  auto-linker (`site/src/glossary-link.ts`, wired as
+  `[remarkGlossaryLinks, { oncePerPage: true }]` in `astro.config.mjs`) links
+  each Term once per page to `/reference/glossary#anchor` — longest phrase
+  first, whole-word and case-sensitive, with `s`/`s'`/`'s`/`ies` flexes and
+  never inside existing links, headings, or code. A rehype pass
+  (`rehypeGlossaryTooltips`) stamps the emitted links with `data-glossary*`
+  attributes (anchor, Term, plain-text definition parsed from the glossary
+  page body, so the definition stays single-sourced), and a small vanilla-JS
+  tooltip (`site/src/glossary-tooltip.ts`, loaded from `layout.astro`) shows
+  a fully opaque definition card after a 300ms dwell, clamped to the visible
+  article area (`resolveTooltipPosition`: above the link, flipping below and
+  clamping both axes so it never overflows the sidebar or viewport edges);
+  the tooltip lives on `document.body` and Astro's `ClientRouter` replaces
+  the whole body on each view-transition navigation, so `layout.astro`
+  rebuilds it on the `astro:page-load` event (fires on the initial `load` and
+  after every navigation) by destroying the previous instance
+  (`createGlossaryTooltip().destroy()` removes element + listeners) before
+  creating the new one — the tooltip must survive any page change, never
+  accumulate instances; the links still navigate. The
+  build-level smoke
+  test (`tests/docs-build.test.ts`) runs the real `astro build`, asserts every
   Getting Started/Reference/Concepts destination is published, preserves redirects
-  for moved Reference pages, and checks the visible 🦉 HooKit brand; `tests/docs-examples.test.ts` validates every designated
+  for moved Reference pages, and checks the visible 🦉 HooKit brand;
+  `tests/docs-examples.test.ts` validates every designated
   fenced `json` block (marked `{/* docs-example:valid */}` or
   `{/* docs-example:invalid */}` in MDX, and `<!-- docs-example:valid -->` or
   `<!-- docs-example:invalid -->` in plain Markdown; invisible in print)
-  against the same `schema.json` users configure against.
+  against the same `schema.json` users configure against; and
+  `tests/glossary-link.test.ts` pins the matcher, the transformer shape, and a
+  drift guard asserting the glossary page stays in sync with the auto-link
+  term list.
 
 ## Key Design Decisions
 

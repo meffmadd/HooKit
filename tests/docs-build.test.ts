@@ -69,6 +69,7 @@ const EXPECTED_ROUTES: Record<string, string> = {
   "/reference/events/": "reference/events/index.html",
   "/reference/shell-environment/": "reference/shell-environment/index.html",
   "/reference/execution-report/": "reference/execution-report/index.html",
+  "/reference/glossary/": "reference/glossary/index.html",
   // Concepts
   "/concepts/overview/": "concepts/overview/index.html",
   "/concepts/evaluation/": "concepts/evaluation/index.html",
@@ -104,6 +105,20 @@ describe("documentation site build", () => {
         `legacy route ${route} should redirect to ${target}`,
       );
     }
+  });
+
+  it("stamps glossary tooltips on every published prose page", () => {
+    const evaluation = readFileSync(join(distDir, "concepts", "evaluation", "index.html"), "utf-8");
+    assert.match(
+      evaluation,
+      /data-glossary-term="/,
+      "a concept page should stamp data-glossary-term for the tooltip CSS",
+    );
+    assert.match(
+      evaluation,
+      /href="\/reference\/glossary#[a-z-]+"[^>]*data-glossary-def="/,
+      "auto-linked Terms should carry their definition for the tooltip",
+    );
   });
 
   it("shows the HooKit owl-avatar brand identity on the landing page", () => {

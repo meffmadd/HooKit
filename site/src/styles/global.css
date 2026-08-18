@@ -15,3 +15,42 @@
 #nd-sidebar a[href^="/reference/configuration/"] {
   font-family: var(--font-mono);
 }
+
+/* Glossary auto-links: a dotted underline hints the definition tooltip
+   (`rehypeGlossaryTooltips` stamps the data attributes). The tooltip itself
+   is rendered by `site/src/glossary-tooltip.ts`: one fully opaque,
+   `position: fixed` element clamped to the visible article area, so it is
+   never see-through and never cut off by an ancestor (e.g. the sidebar). */
+a[data-glossary] {
+  cursor: help;
+  text-decoration: underline dotted var(--color-fd-primary);
+  text-underline-offset: 3px;
+}
+
+.glossary-tooltip {
+  position: fixed;
+  /* Parked off-screen while hidden; JS sets `left`/`top` before showing. */
+  left: -9999px;
+  top: -9999px;
+  z-index: 100;
+  box-sizing: border-box;
+  max-width: min(72vw, 19rem);
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-fd-border, oklch(0.87 0.01 150));
+  border-radius: 0.5rem;
+  background-color: var(--color-fd-popover, #fafafa);
+  color: var(--color-fd-foreground, #111);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  text-align: start;
+  white-space: normal;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.25);
+  /* Always fully opaque — hidden purely via visibility, never faded. */
+  opacity: 1;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.glossary-tooltip--visible {
+  visibility: visible;
+}
