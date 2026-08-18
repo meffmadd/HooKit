@@ -41,13 +41,13 @@ output, or Event fields.
 
 | Action | Required fields | Behavior | Small valid Action |
 |---|---|---|---|
-| `interrupt` | `type`, `outcome` | Requests Pi's supported abort operation. | `{ "type": "interrupt", "outcome": "block" }` |
+| `interrupt` | `type`, `outcome` | Requests Pi's supported interrupt operation. | `{ "type": "interrupt", "outcome": "block" }` |
 | `shutdown` | `type`, `outcome` | Optionally interrupts, then requests graceful shutdown. | `{ "type": "shutdown", "outcome": "report", "interrupt": true }` |
 | `compact` | `type`, `outcome` | Requests Pi compaction with optional instructions. | `{ "type": "compact", "outcome": "pass", "instructions": "Preserve policy decisions." }` |
 | `message` | `type`, `outcome`, `message`, `delivery` | Requests one static Pi message. | `{ "type": "message", "outcome": "block", "message": "Blocked.", "delivery": "followUp" }` |
 | `emit-custom-event` | `type`, `outcome`, `name` | Requests one named custom Event with optional data. | `{ "type": "emit-custom-event", "outcome": "pass", "name": "audit:complete" }` |
 
-## A block message Action
+## A block message action
 
 This Hook blocks a `.env` write and asks Pi to deliver a follow-up message
 explaining the block:

@@ -3,7 +3,7 @@ title: Write a hook
 description: Step-by-step tutorial that blocks access to a dummy .env file.
 ---
 
-In this tutorial you will author one local Hook, enable it, watch it block a
+In this tutorial you author one local Hook, enable it, watch it block a
 matching tool call, inspect the Execution Report, and remove the disposable
 project.
 
@@ -19,7 +19,7 @@ or any external command-line dependency.
 - A terminal in a directory where you can create one disposable folder.
 - Permission to trust that disposable project for this tutorial.
 
-**What you will build**
+**What you build**
 
 A Hook named `no-env-access` that blocks the `read` and `write` tools when
 their `path` identifies a `.env` file:
@@ -32,12 +32,12 @@ their `path` identifies a `.env` file:
 | filter | `toolName` is `read`/`write` and `path` ends in `.env` | Selects the matching calls |
 | shell | `false` | Produces the `block` decision |
 
-> **Security:** Hook shells execute locally as trusted code with your Pi
+> **Security:** hook shells execute locally as trusted code with your Pi
 > process permissions. They are not sandboxed. The 5-second default timeout
 > bounds commands; it is not a sandbox. Use only the dummy value below—never a
 > real secret.
 
-## Step 1—Create the project and dummy file outside Pi
+## Step 1—create the project and dummy file outside Pi
 
 Stay in your terminal. Do **not** start Pi yet. Create a new disposable project
 and its harmless `.env` before any guard is enabled:
@@ -83,7 +83,7 @@ then exact `false` produces `block` with code `1`. Both exact `true` and exact
 `git diff --quiet`—runs through the real local shell. See [filter](/reference/configuration/filter)
 for exact regular-expression semantics.
 
-## Step 3—Start Pi with project trust
+## Step 3—start Pi with project trust
 
 HooKit reads project `.pi/hookit.json` only after Pi trusts the project. Start
 the tutorial session with Pi's one-run trust flag:
@@ -99,7 +99,7 @@ pi --approve
 Project trust controls whether HooKit may read project policy; it is not a
 sandbox. The [security page](/concepts/security) describes the boundary.
 
-## Step 4—Enable the Hook
+## Step 4—enable the hook
 
 Inside Pi:
 
@@ -129,7 +129,7 @@ prompt names `read` explicitly so the exercise follows the Filter you authored.
 If the contents appear, confirm the project was started with `pi --approve`,
 the Hook is enabled, and the prompt was copied exactly.
 
-## Step 6—Inspect the Execution Report
+## Step 6—inspect the execution report
 
 Expand the HooKit Execution Report using the hint shown on its transcript
 entry.
@@ -142,9 +142,9 @@ Tool calls and their results in one tool lifecycle join one **Execution Wave**
 with a single end-to-end duration. [Execution Reports](/reference/execution-report)
 documents the row and duration boundaries.
 
-## Step 7—Clean up
+## Step 7—clean up
 
-Quit Pi with `/quit`. Back in the terminal, remove only the files and empty
+Quit Pi with `/quit`. Then use the terminal to remove only the files and empty
 directories created by this tutorial:
 
 ```bash

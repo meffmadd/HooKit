@@ -21,7 +21,7 @@ reactive Hook matches—and its explicit Event Outcome is then `pass`.
 - A matching reactive Hook gets its own local `pass`/`report` Hook Result and
   may select its own Action.
 - That local result is **never redispatched**, bounding handling to one level.
-- `hook_result` handlers are awaited without the originating abort signal and
+- `hook_result` handlers are awaited without the originating `abort` signal and
   can never alter the frozen Native Event Outcome—the originating Hook
   Result is already immutable.
 - Origin identity remains available separately for accounting and shell
@@ -30,8 +30,9 @@ reactive Hook matches—and its explicit Event Outcome is then `pass`.
 ## Filters
 
 The `hook_result` Filter is limited to `event`, source-qualified `hookRef`,
-`invocationId`, `outcome`, and `code`. Identity fields use the regex/any-of
-string rules; `outcome` and `code` use the exact shared selector semantics of
+`invocationId`, `outcome`, and `code`. Identity fields use the
+regular-expression/any-of string rules; `outcome` and `code` use the exact
+shared selector semantics of
 owned Actions. The [filter](/reference/configuration/filter) page lists all
 candidate fields and matching rules.
 

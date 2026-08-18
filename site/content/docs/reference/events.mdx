@@ -9,7 +9,7 @@ are either **Native Events** originating from Pi, or the **Hook Result Event**
 one **Hook Outcome** per Hook and one aggregated, event-specific **Event
 Outcome**.
 
-## Supported Events
+## Supported events
 
 | Event | Hook Outcome | Event Outcome behavior |
 |---|---|---|
@@ -45,7 +45,7 @@ Action or `hook_result` Hook runs, so reactive Hooks and Actions cannot change
 the aggregate decision. All tool Hooks run even after one fails; aggregating
 Hooks combine every failure into the single block or patch Event Outcome.
 
-## Hook Outcome vs Event Outcome
+## Hook outcome vs event outcome
 
 The **Hook Outcome** is one Hook's decision: `pass`, or the Event's failure
 kind (`block`, `patch`, `cancel`, `report`). The **Event Outcome** is the
@@ -60,7 +60,7 @@ the two failure ways:
 
 - **Ordinary non-zero** `when` means "not applicable": the Hook is skipped,
   producing no Hook Result, no Action, and no Evaluation Report row.
-- **Infrastructure failure**—timeout, abort, or spawn failure—**fails
+- **Infrastructure failure**—a timeout, cancellation, or spawn failure—**fails
   closed** with code `null`, producing the event-specific failure outcome so
   an owned failure Action can select it.
 
@@ -78,8 +78,8 @@ as one Hook row.
 - A `when` and its main shell share one Invocation ID; owned Actions share
   that same source-qualified ref and Invocation ID.
 - Shortcuts honor an already-aborted signal. Already-aborted `turn_end` and
-  `agent_end` evaluations skip Hooks before traversal. Abort after a real
-  shell starts yields code `null` and the event-specific failure outcome.
+  `agent_end` evaluations skip Hooks before traversal. A cancellation after a
+  real shell starts yields code `null` and the event-specific failure outcome.
 - A 5-second default timeout bounds commands and preconditions.
 
 ## Delivery cannot weaken an Outcome

@@ -23,10 +23,11 @@ exist and match. Dot-separated keys resolve nested tool input fields through
 own properties, so a `filter` of `"input.path": "^src/"` reaches inside a
 nested `{ "input": { "path": "..." } }` candidate.
 
-> **Regex behavior.** Exact regex behavior is the JavaScript engine's; HooKit
+> **Regular-expression behavior.** Exact regular-expression behavior is the
+> JavaScript engine's; HooKit
 > passes the source through verbatim without stripping or re-parsing it.
 
-## Candidate fields per Event
+## Candidate fields per event
 
 Tool events expose `toolName` together with the tool's spread input:
 `{ ...event.input, toolName }`. Filters can use `toolName` and the input fields
@@ -73,12 +74,13 @@ tutorial's first Hook:
 - `path: "(^|/)\\.env$"` matches a path that either is `.env` or ends in
   `/.env`. The two fields are ANDed.
 
-## `hook_result` Filters
+## `hook_result` filters
 
 The Hook Result Event's Filter is limited to `event`, source-qualified
 `hookRef`, `invocationId`, `outcome`, and `code`. Identity fields
-(`event`, `hookRef`, `invocationId`) use the regex/any-of string rules above;
-`outcome` and `code` use the exact shared selector semantics of owned Actions.
+(`event`, `hookRef`, `invocationId`) use the regular-expression/any-of string
+rules described earlier; `outcome` and `code` use the exact shared selector
+semantics of owned Actions.
 The same matching implementation handles both `outcome` and `code` here and in
 Actions, so a `hook_result` Filter can select a block with a specific code:
 
