@@ -54,3 +54,59 @@ a[data-glossary] {
 .glossary-tooltip--visible {
   visibility: visible;
 }
+
+/* Hero tagline rotator — a pure-CSS slot cycler for the landing h1's
+   "Your X." suffix. The words are stacked vertically inside an
+   overflow:hidden box; the stack is translated one line-height at a time
+   (translateY % is relative to the stack's own height, so the steps match
+   any font/line-height). Six children = five words + a duplicate of the
+   first, so the wrap from "standards." back to "rules." is seamless
+   (the 100%→0 reset shows the same word). No JS. */
+.hero-rotator {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: top;
+  /* Keep the box exactly one line so the h1 stays single-line. */
+  line-height: 1.25;
+  height: 1.25em;
+}
+
+/* In-flow (NOT absolute): absolute children don't size the parent, which
+   would collapse this box to zero width and clip the stack entirely. */
+.hero-rotator-track {
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  animation: hero-rotate 15s linear infinite;
+}
+
+.hero-rotator-track > span {
+  display: block;
+  width: max-content;
+  white-space: nowrap;
+}
+
+@keyframes hero-rotate {
+  /* 6 slots; one slot = 100%/6 of the stack height. Per word: ~2.5s hold,
+     0.45–0.6s slide; the final slot is the duplicated first word. Slides use
+     a per-keyframe ease (constant-velocity slides read as mechanical), and
+     hold/slide lengths vary slightly between words so the rhythm isn't a
+     metronome. */
+  0%    { transform: translateY(0); }
+  17%   { transform: translateY(0); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+  20%   { transform: translateY(-16.6667%); }
+  36%   { transform: translateY(-16.6667%); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+  40%   { transform: translateY(-33.3333%); }
+  57%   { transform: translateY(-33.3333%); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+  60%   { transform: translateY(-50%); }
+  76%   { transform: translateY(-50%); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+  80%   { transform: translateY(-66.6667%); }
+  96.5% { transform: translateY(-66.6667%); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+  100%  { transform: translateY(-83.3333%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-rotator-track {
+    animation: none;
+  }
+}

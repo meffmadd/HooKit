@@ -3,6 +3,8 @@
  *
  * Presents every supported Event as a non-sequential map, followed by the
  * primary documentation destinations. Server-rendered with no client JS.
+ * The hero carries the chosen copy (variant F, "Your harness. Your rules."),
+ * folding the throwaway hero-copy prototype back in as static markup.
  */
 
 import owlAvatar from '../assets/owl_avatar.png';
@@ -19,12 +21,6 @@ const TASK_KIND_LABEL: Record<(typeof REFERENCE_TASKS)[number]['kind'], string> 
   reference: 'reference',
   concept: 'concept',
 };
-
-const BLURB =
-  'A hook engine for Pi, the agent runtime you are reading this in. ' +
-  'You define a Hook — a small policy that subscribes to a Pi Event. ' +
-  'When the Event happens, HooKit runs your Hook’s shell decision and ' +
-  'may deliver one outcome-selected Pi Action.';
 
 const EVENTS = [
   { name: 'tool_call', hookOutcome: 'pass / block', source: 'Pi · before a tool runs' },
@@ -93,9 +89,33 @@ export function Home() {
                 event → hook → outcome → action
               </p>
               <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-semibold leading-tight tracking-tight text-[#1f322b] sm:text-5xl lg:mx-0">
-                Your policy plugs into the <span className="text-[#367867]">Pi lifecycle</span>.
+                {/* Static full tagline for screen readers/SEO; the visible copy is aria-hidden since it cycles. */}
+                <span className="sr-only">Your harness. Your rules.</span>
+                <span aria-hidden="true">
+                  Your harness. Your{' '}
+                  <span className="hero-rotator">
+                    <span className="hero-rotator-track">
+                      <span className="text-[#367867]">rules.</span>
+                      <span className="text-[#367867]">backpressure.</span>
+                      <span className="text-[#367867]">guardrails.</span>
+                      <span className="text-[#367867]">observability.</span>
+                      <span className="text-[#367867]">standards.</span>
+                      <span className="text-[#367867]">rules.</span>
+                    </span>
+                  </span>
+                </span>
               </h1>
-              <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-[#66706a] lg:mx-0">{BLURB}</p>
+              <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-[#66706a] lg:mx-0">
+                A hook engine for Pi giving you control. Start with a{' '}
+                <a
+                  href="/getting-started/library"
+                  className="font-medium text-[#367867] underline decoration-dotted underline-offset-4"
+                >
+                  ready-made library
+                </a>{' '}
+                or define your own, and install either one from GitHub. Build hooks
+                for yourself, your team or the world!
+              </p>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <a
                   href="/getting-started"
