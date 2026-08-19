@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 const repositoryRoot = new URL("..", import.meta.url);
 
 describe("npm package contents", () => {
-  it("keeps the remote Core Hook catalog out of the npm pack manifest", () => {
+  it("ships the Pi package without repository-only content", () => {
     const packed = spawnSync(
       "npm",
       ["pack", "--dry-run", "--json", "--ignore-scripts"],
@@ -21,11 +21,21 @@ describe("npm package contents", () => {
     }>;
     assert.equal(manifests.length, 1);
     const paths = manifests[0]!.files.map((file) => file.path);
-    assert.ok(paths.includes("hookit/index.ts"));
-    assert.equal(
-      paths.some((path) => path === "hooks" || path.startsWith("hooks/")),
-      false,
-      paths.join("\n"),
-    );
+    for (const required of [
+      "AGENTS.md",
+      "hookit/index.ts",
+      "skills/hookit/SKILL.md",
+    ]) {
+      assert.ok(paths.includes(required), `missing ${required}\n${paths.join("\n")}`);
+    }
+    for (const excluded of ["hooks", "site", "tests"]) {
+      assert.equal(
+        paths.some(
+          (path) => path === excluded || path.startsWith(`${excluded}/`),
+        ),
+        false,
+        paths.join("\n"),
+      );
+    }
   });
 });

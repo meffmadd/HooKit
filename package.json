@@ -2,6 +2,17 @@
   "name": "@meffmadd/hookit",
   "version": "0.1.0",
   "description": "Hooks with outcome-selected Pi Actions for Pi events.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meffmadd/HooKit.git"
+  },
+  "homepage": "https://github.com/meffmadd/HooKit#readme",
+  "bugs": {
+    "url": "https://github.com/meffmadd/HooKit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./hookit/index.ts",
   "files": [
@@ -10,6 +21,7 @@
     "AGENTS.md"
   ],
   "keywords": [
+    "pi-package",
     "pi",
     "guard",
     "security",
@@ -35,6 +47,7 @@
     "docs:preview": "astro preview --root site",
     "test": "node --import tsx --test tests/*.test.ts tests/core-hooks/*.test.ts",
     "check": "npm test",
+    "release:bump": "bumpp --commit \"chore: release {tag}\" --tag \"v{version}\" --push --git-check --execute \"npm run check\"",
     "sandbox": "bash .agents/skills/hookit-sandbox/scripts/run.sh"
   },
   "peerDependencies": {
@@ -54,6 +67,7 @@
     "@types/react-dom": "^19.2.4",
     "ajv": "^8.20.0",
     "astro": "^7.2.2",
+    "bumpp": "^12.2.1",
     "eslint": "^9.39.4",
     "fumadocs-core": "^16.14.4",
     "fumadocs-ui": "^16.14.4",

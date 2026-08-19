@@ -12,3 +12,4 @@ site/.astro/
 !skills/hookit/SKILL.md
 !.agents/skills/hookit-sandbox/SKILL.md
 !docs/adr/*.md
+!docs/releasing.md

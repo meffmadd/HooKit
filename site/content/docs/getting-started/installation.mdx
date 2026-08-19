@@ -4,8 +4,7 @@ description: Install HooKit globally or for one trusted Pi project.
 ---
 
 This guide shows you how to install HooKit as a Pi package. HooKit requires
-**Pi 0.80.4 or newer** and is currently distributed from its canonical Git
-repository rather than npm.
+**Pi 0.80.4 or newer** and is distributed as `@meffmadd/hookit` on npm.
 
 > **Security:** Pi extensions execute with your user permissions and full
 > system access. Review HooKit's source before installing it, just as you would
@@ -23,10 +22,10 @@ tutorial.
    pi --version
    ```
 
-2. Install HooKit from its canonical Git URL:
+2. Install HooKit from npm:
 
    ```bash
-   pi install https://github.com/meffmadd/pi-assert
+   pi install npm:@meffmadd/hookit
    ```
 
 3. Confirm that Pi recorded the package:
@@ -35,9 +34,9 @@ tutorial.
    pi list
    ```
 
-By default, Pi records the package in `~/.pi/agent/settings.json` and clones
-Git package content under `~/.pi/agent/git/`. `pi list` should include the
-HooKit repository URL.
+By default, Pi records the package in `~/.pi/agent/settings.json` and installs
+its content under `~/.pi/agent/npm/`. `pi list` should include
+`npm:@meffmadd/hookit`.
 
 ## Install HooKit for one project
 
@@ -47,7 +46,7 @@ who works in it.
 From the project root, run:
 
 ```bash
-pi install -l https://github.com/meffmadd/pi-assert
+pi install -l npm:@meffmadd/hookit
 ```
 
 Pi records the package in `.pi/settings.json`. When another user opens the
@@ -70,7 +69,7 @@ and restart Pi.
 
 ## Keep the installation current
 
-To update installed Pi extension packages, including an unpinned HooKit Git
+To update installed Pi extension packages, including an unpinned HooKit npm
 installation, run:
 
 ```bash
