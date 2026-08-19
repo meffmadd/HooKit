@@ -34,7 +34,8 @@
     "docs:build": "astro build --root site",
     "docs:preview": "astro preview --root site",
     "test": "node --import tsx --test tests/*.test.ts tests/core-hooks/*.test.ts",
-    "check": "npm test"
+    "check": "npm test",
+    "sandbox": "bash .agents/skills/hookit-sandbox/scripts/run.sh"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

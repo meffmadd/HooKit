@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
+  "local": {
+    "sandbox-block": {
+      "description": "Blocks the exact sandbox trigger command (tool_call guard).",
+      "event": "tool_call",
+      "filter": {
+        "toolName": "^bash$",
+        "command": "^echo hookit-sandbox-block$"
+      },
+      "shell": "exit 1",
+      "default": true
+    },
+    "sandbox-audit": {
+      "description": "Appends tool_result metadata to the sandbox log.",
+      "event": "tool_result",
+      "filter": {
+        "toolName": "^bash$",
+        "command": "^echo hookit-sandbox-audit$"
+      },
+      "shell": "printf 'tool_result tool=%s is_error=%s input=%s\\n' \"$PI_TOOL_NAME\" \"$PI_TOOL_IS_ERROR\" \"$PI_TOOL_INPUT\" >> \"$PI_CWD/.pi/sandbox-log.jsonl\"",
+      "default": true
+    },
+    "sandbox-react": {
+      "description": "Reactive hook_result logger for the block guard.",
+      "event": "hook_result",
+      "filter": {
+        "hookRef": "^local/sandbox-block$",
+        "outcome": "block"
+      },
+      "shell": "printf 'hook_result payload=%s\\n' \"$PI_EVENT_PAYLOAD\" >> \"$PI_CWD/.pi/sandbox-log.jsonl\"",
+      "default": true
+    }
+  }
+}

@@ -1,5 +1,6 @@
 node_modules/
 .pi/
+sandbox/
 *.md
 site/dist/
 site/.astro/
@@ -9,4 +10,5 @@ site/.astro/
 !CONTEXT.md
 !README.md
 !skills/hookit/SKILL.md
+!.agents/skills/hookit-sandbox/SKILL.md
 !docs/adr/*.md

@@ -120,6 +120,27 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   toggle are inherited — no parallel path.
 - **`skills/hookit/SKILL.md`** — bundled skill describing the format, events,
   filters, Hooks, owned Actions, env vars, and common patterns.
+- **`sandbox/` + `.agents/skills/hookit-sandbox/`** — the gitignored
+  manual-test scratch project and its dev-only skill (`skills/` alone is
+  packaged). A Pi session started in `sandbox/` runs the working checkout
+  via `--approve -e <repo>/hookit/index.ts` against only
+  `sandbox/.pi/hookit.json` (project storage resolves from the session cwd,
+  so the repo root catalog never loads there) merged with any global
+  catalog. The skill documents the five environment layers (extension,
+  catalog, trust, session-branch enablement, model-initiated triggers —
+  `!cmd` bypasses the tool pipeline and fires no tool events) and owns the
+  machinery in `scripts/`: `starter-catalog.json` (the single committed
+  source for the starter Hooks `sandbox-block`/`sandbox-audit`/
+  `sandbox-react`), `setup.sh` (idempotent seed + `--fresh`/`--force`),
+  `run.sh` (the one launch incantation — interactive default, `-r` resume
+  with the extension loaded, `-p` print runs with `--ephemeral`/`--name`;
+  `npm run sandbox` delegates here), `check.sh` (ephemeral print-run
+  scenarios asserting expected `sandbox-log.jsonl` lines — one model call
+  each, manual/smoke tier, not wired into `npm test`), `validate.sh`
+  (ajv gate against `schema.json`), and `doctor.sh` (live per-layer state
+  report). Sessions save per-cwd under `~/.pi/agent/sessions/`, never in
+  the sandbox; resuming through `run.sh -r` restores `hookit-config`
+  enablement and past Execution Reports.
 - **`site/`** — the static fumadocs documentation site (Getting Started, Reference,
   Concepts) plus its glossary search and three testing seams. The Reference
   glossary (`content/docs/reference/glossary.mdx`) documents every capitalized
