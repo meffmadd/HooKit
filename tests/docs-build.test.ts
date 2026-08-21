@@ -34,7 +34,12 @@ const LEGACY_REFERENCE_REDIRECTS = [
   {
     route: "/reference/hook-result/",
     artifact: "reference/hook-result/index.html",
-    target: "/reference/configuration/hook-result",
+    target: "/reference/events",
+  },
+  {
+    route: "/reference/configuration/hook-result/",
+    artifact: "reference/configuration/hook-result/index.html",
+    target: "/reference/events",
   },
   {
     route: "/reference/presets-sources/",
@@ -64,7 +69,6 @@ const EXPECTED_ROUTES: Record<string, string> = {
   "/reference/configuration/default/": "reference/configuration/default/index.html",
   "/reference/configuration/preset/": "reference/configuration/preset/index.html",
   "/reference/configuration/presets-sources/": "reference/configuration/presets-sources/index.html",
-  "/reference/configuration/hook-result/": "reference/configuration/hook-result/index.html",
   "/reference/hooks-panel/": "reference/hooks-panel/index.html",
   "/reference/events/": "reference/events/index.html",
   "/reference/shell-environment/": "reference/shell-environment/index.html",

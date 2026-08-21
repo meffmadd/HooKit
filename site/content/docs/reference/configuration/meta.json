@@ -11,7 +11,6 @@
     "action",
     "default",
     "preset",
-    "presets-sources",
-    "hook-result"
+    "presets-sources"
   ]
 }

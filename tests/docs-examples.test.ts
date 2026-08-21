@@ -132,7 +132,7 @@ describe("documentation configuration examples validate against the JSON Schema"
     expectMarkedValid("reference/configuration/index.mdx"); // top-level + sections
     expectMarkedValid("reference/configuration/action.mdx"); // owned Action
     expectMarkedValid("reference/configuration/filter.mdx"); // tool + hook_result Filters
-    expectMarkedValid("reference/configuration/hook-result.mdx");
+    expectMarkedValid("reference/events.mdx"); // Hook Result Event example
     expectMarkedValid("reference/configuration/presets-sources.mdx"); // Preset
     expectMarkedValid("reference/shell-environment.mdx");
 

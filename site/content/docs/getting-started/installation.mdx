@@ -3,32 +3,28 @@ title: Installation
 description: Install HooKit globally or for one trusted Pi project.
 ---
 
-This guide shows you how to install HooKit as a Pi package. HooKit requires
-**Pi 0.80.4 or newer** and is distributed as `@meffmadd/hookit` on npm.
+This guide shows you how to install HooKit as a Pi package. HooKit is
+distributed as `@meffmadd/hookit` on npm.
 
-> **Security:** Pi extensions execute with your user permissions and full
-> system access. Review HooKit's source before installing it, just as you would
-> any third-party executable code.
+<Callout type="warning" title="Security">
+Pi extensions execute with your user permissions and full system access.
+Review HooKit's source before installing it, just as you would any third-party
+executable code.
+</Callout>
 
-## Install HooKit for your user
+## Install HooKit
 
 Use a user installation when you want HooKit available in every Pi session.
 This is the recommended setup for the [Write a hook](/getting-started/first-hook)
 tutorial.
 
-1. Confirm that your Pi version is supported:
-
-   ```bash
-   pi --version
-   ```
-
-2. Install HooKit from npm:
+1. Install HooKit from npm:
 
    ```bash
    pi install npm:@meffmadd/hookit
    ```
 
-3. Confirm that Pi recorded the package:
+2. Confirm that Pi recorded the package:
 
    ```bash
    pi list

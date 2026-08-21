@@ -14,7 +14,6 @@ or any external command-line dependency.
 
 **Prerequisites**
 
-- Pi **0.80.4 or newer**.
 - HooKit installed for your user by following [Installation](/getting-started/installation).
 - A terminal in a directory where you can create one disposable folder.
 - Permission to trust that disposable project for this tutorial.
@@ -96,7 +95,7 @@ pi --approve
 > for this run, so the globally installed HooKit extension can load the project
 > Hook Catalog.
 
-Project trust controls whether HooKit may read project policy; it is not a
+Project trust controls whether HooKit may read project hooks; it is not a
 sandbox. The [security page](/concepts/security) describes the boundary.
 
 ## Step 4—enable the hook
@@ -131,8 +130,8 @@ the Hook is enabled, and the prompt was copied exactly.
 
 ## Step 6—inspect the execution report
 
-Expand the HooKit Execution Report using the hint shown on its transcript
-entry.
+The blocked tool call appends a collapsed HooKit Execution Report entry to the
+transcript. Expand it using the hint shown on that entry.
 
 > **Expected result:** the flat report contains one `✗` Hook row for
 > `local/no-env-access` with its duration. The surrounding tool outcome is the

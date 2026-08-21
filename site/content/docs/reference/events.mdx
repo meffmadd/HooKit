@@ -89,3 +89,64 @@ result-major order and delivered by the Pi adapter best-effort. A delivery
 failure does not change the Event Outcome: a block, patch, cancellation, or
 report stands regardless of whether its Effect was delivered. See
 [action](/reference/configuration/action).
+
+## Hook Result Event
+
+The **Hook Result Event** (`hook_result`) lets one Hook observe another's
+immutable result. For each originating Hook Result, its owned Action is
+considered **first**, followed by configured `hook_result` Hooks in Enabled
+Hook Set order. The projected Event carries only the bounded identity and
+decision the originating Hook produced:
+
+```text
+{ event: "hook_result", hookRef, invocationId, outcome, code }
+```
+
+Every originating result projects exactly one Hook Result Event—including
+when no reactive Hook matches—and its explicit Event Outcome is then `pass`.
+
+Handling is bounded to one level:
+
+- A matching reactive Hook gets its own local `pass`/`report` Hook Result and
+  may select its own Action.
+- That local result is **never redispatched**, bounding handling to one level.
+- `hook_result` handlers are awaited without the originating `abort` signal and
+  can never alter the frozen Native Event Outcome—the originating Hook Result
+  is already immutable.
+- Origin identity remains available separately for accounting and shell
+  environment projection, so you can audit a block without changing it.
+
+The `hook_result` Filter is limited to `event`, source-qualified `hookRef`,
+`invocationId`, `outcome`, and `code`. Identity fields use the
+regular-expression/any-of string rules; `outcome` and `code` use the exact
+shared selector semantics of owned Actions. The [filter](/reference/configuration/filter)
+page lists all candidate fields and matching rules.
+
+### Example: audit every block
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "audit-blocks": {
+      "description": "Emit an event whenever a Hook block occurs",
+      "event": "hook_result",
+      "filter": {
+        "hookRef": "^local/no-env-access$",
+        "outcome": "block",
+        "code": [1, null]
+      },
+      "shell": "./scripts/audit-hook-result.sh",
+      "action": {
+        "type": "emit-custom-event",
+        "outcome": "pass",
+        "name": "example:hook-audited"
+      }
+    }
+  }
+}
+```
+
+Each time `local/no-env-access` produces a `block` with code `1` or `null`,
+`audit-blocks` runs its shell and, on a `pass`, emits the custom Event. It can
+never reverse the block.
