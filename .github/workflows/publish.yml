@@ -2,15 +2,20 @@ name: publish npm
 
 on:
   release:
-    types: [published]
+    types: [released]
 
 concurrency:
   group: npm-publish-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
+  verify:
+    uses: ./.github/workflows/_verify.yml
+    permissions:
+      contents: read
+
   publish:
-    if: github.event.release.prerelease == false
+    needs: verify
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -26,7 +31,6 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm ci
-      - run: npm run check
       - name: Verify release tag matches package version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}

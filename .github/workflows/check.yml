@@ -1,19 +1,18 @@
 name: check
 
 on:
-  push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      # The full gate: typecheck + lint (pretest) and every test,
-      # including the real `astro build` documentation smoke test.
-      - run: npm run check
+  verify:
+    uses: ./.github/workflows/_verify.yml
+    permissions:
+      contents: read
