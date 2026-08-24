@@ -26,13 +26,18 @@ const remarkPlugins = [
 ];
 const rehypePlugins = [rehypeGlossaryTooltips, rehypeCode];
 
+const pagesBasePath = '/HooKit';
+const pagesPath = (path) => `${pagesBasePath}${path}`;
+
 export default defineConfig({
+  site: 'https://meffmadd.github.io',
+  base: pagesBasePath,
   redirects: {
-    '/reference/action': '/reference/configuration/action',
-    '/reference/filter': '/reference/configuration/filter',
-    '/reference/hook-result': '/reference/events',
-    '/reference/configuration/hook-result': '/reference/events',
-    '/reference/presets-sources': '/reference/configuration/presets-sources',
+    '/reference/action': pagesPath('/reference/configuration/action'),
+    '/reference/filter': pagesPath('/reference/configuration/filter'),
+    '/reference/hook-result': pagesPath('/reference/events'),
+    '/reference/configuration/hook-result': pagesPath('/reference/events'),
+    '/reference/presets-sources': pagesPath('/reference/configuration/presets-sources'),
   },
   markdown: {
     processor: unified({

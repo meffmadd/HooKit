@@ -13,44 +13,48 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dirname!, "..");
 const distDir = join(repoRoot, "site", "dist");
 const astroCli = join(repoRoot, "node_modules", "astro", "bin", "astro.mjs");
+const PAGES_ORIGIN = "https://meffmadd.github.io";
+const PAGES_BASE_PATH = "/HooKit";
+const pagesPath = (path: string): string => `${PAGES_BASE_PATH}${path}`;
 
 const LEGACY_REFERENCE_REDIRECTS = [
   {
     route: "/reference/action/",
     artifact: "reference/action/index.html",
-    target: "/reference/configuration/action",
+    target: `${PAGES_ORIGIN}${pagesPath("/reference/configuration/action")}`,
   },
   {
     route: "/reference/filter/",
     artifact: "reference/filter/index.html",
-    target: "/reference/configuration/filter",
+    target: `${PAGES_ORIGIN}${pagesPath("/reference/configuration/filter")}`,
   },
   {
     route: "/reference/hook-result/",
     artifact: "reference/hook-result/index.html",
-    target: "/reference/events",
+    target: `${PAGES_ORIGIN}${pagesPath("/reference/events")}`,
   },
   {
     route: "/reference/configuration/hook-result/",
     artifact: "reference/configuration/hook-result/index.html",
-    target: "/reference/events",
+    target: `${PAGES_ORIGIN}${pagesPath("/reference/events")}`,
   },
   {
     route: "/reference/presets-sources/",
     artifact: "reference/presets-sources/index.html",
-    target: "/reference/configuration/presets-sources",
+    target: `${PAGES_ORIGIN}${pagesPath("/reference/configuration/presets-sources")}`,
   },
 ] as const;
 
 /** Route path → expected built artifact (static site emits index.html). */
 const EXPECTED_ROUTES: Record<string, string> = {
   "/": "index.html",
+  "/api/search": "api/search",
   // Getting Started
   "/getting-started/": "getting-started/index.html",
   "/getting-started/installation/": "getting-started/installation/index.html",
@@ -120,7 +124,7 @@ describe("documentation site build", () => {
     );
     assert.match(
       evaluation,
-      /href="\/reference\/glossary#[a-z-]+"[^>]*data-glossary-def="/,
+      /href="\/HooKit\/reference\/glossary#[a-z-]+"[^>]*data-glossary-def="/,
       "auto-linked Terms should carry their definition for the tooltip",
     );
   });
@@ -141,11 +145,49 @@ describe("documentation site build", () => {
 
   it("links Getting Started, Reference, and Concepts from the landing page", () => {
     const landing = readFileSync(join(distDir, "index.html"), "utf-8");
-    for (const link of ["/getting-started", "/reference", "/concepts"]) {
+    for (const route of ["/getting-started", "/reference", "/concepts"]) {
+      const link = pagesPath(route);
       assert.ok(
         landing.includes(`href="${link}`),
         `landing page should route to ${link}`,
       );
     }
+  });
+
+  it("publishes navigation, metadata, and search beneath the project Pages base", () => {
+    const landing = readFileSync(join(distDir, "index.html"), "utf-8");
+    const introduction = readFileSync(
+      join(distDir, "getting-started", "index.html"),
+      "utf-8",
+    );
+    const searchIndex = readFileSync(join(distDir, "api", "search"), "utf-8");
+    const clientScripts = readdirSync(join(distDir, "_astro"), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+      .map((entry) => readFileSync(join(distDir, "_astro", entry.name), "utf-8"))
+      .join("\n");
+
+    assert.match(landing, /(?:src|href)="\/HooKit\/_astro\//);
+    assert.match(
+      introduction,
+      /href="\/HooKit\/reference\/glossary#[a-z-]+"/,
+      "rendered MDX glossary links should include the Pages base",
+    );
+    assert.doesNotMatch(
+      landing + introduction,
+      /href="\/(?!HooKit(?:[\/#?"]|$))/,
+      "site-root links must not escape to the github.io origin root",
+    );
+    assert.match(
+      introduction,
+      /property="og:image" content="https:\/\/meffmadd\.github\.io\/HooKit\/og\/docs\/getting-started\/image\.webp"/,
+    );
+    assert.ok(
+      searchIndex.includes(`"url":"${pagesPath("/getting-started")}"`),
+      "search result URLs should include the Pages base",
+    );
+    assert.ok(
+      clientScripts.includes(PAGES_BASE_PATH) && clientScripts.includes("/api/search"),
+      "the search client should combine the Pages base with its static endpoint",
+    );
   });
 });

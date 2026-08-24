@@ -10,9 +10,9 @@
 }
 
 /* Reference → Configuration sidebar entries are config keys, so render them
-   in monospace. The folder itself links to `/reference/configuration` (no
-   trailing slash) and stays in the body font. */
-#nd-sidebar a[href^="/reference/configuration/"] {
+   in monospace. Match after the deployment base so the folder itself (with
+   no trailing slash) stays in the body font on local and project Pages URLs. */
+#nd-sidebar a[href*="/reference/configuration/"] {
   font-family: var(--font-mono);
 }
 

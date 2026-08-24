@@ -8,12 +8,13 @@
  */
 
 import owlAvatar from '../assets/owl_avatar.png';
+import { withBasePath } from '../lib/site-path';
 
 const REFERENCE_TASKS = [
-  { glyph: '⚠', title: 'Block a dangerous command', href: '/getting-started/first-hook', kind: 'tutorial' as const },
-  { glyph: '⌘', title: 'Subscribe to the right Event', href: '/reference/events', kind: 'reference' as const },
-  { glyph: '▶', title: 'Pick an Action for an outcome', href: '/reference/configuration/action', kind: 'reference' as const },
-  { glyph: '◈', title: 'Review the trust boundary', href: '/concepts/security', kind: 'concept' as const },
+  { glyph: '⚠', title: 'Block a dangerous command', href: withBasePath('/getting-started/first-hook'), kind: 'tutorial' as const },
+  { glyph: '⌘', title: 'Subscribe to the right Event', href: withBasePath('/reference/events'), kind: 'reference' as const },
+  { glyph: '▶', title: 'Pick an Action for an outcome', href: withBasePath('/reference/configuration/action'), kind: 'reference' as const },
+  { glyph: '◈', title: 'Review the trust boundary', href: withBasePath('/concepts/security'), kind: 'concept' as const },
 ];
 
 const TASK_KIND_LABEL: Record<(typeof REFERENCE_TASKS)[number]['kind'], string> = {
@@ -37,17 +38,17 @@ const GETTING_STARTED = [
   {
     title: 'Installation',
     body: 'Install HooKit globally or for one trusted Pi project and verify that /hooks is available.',
-    href: '/getting-started/installation',
+    href: withBasePath('/getting-started/installation'),
   },
   {
     title: 'Write a hook',
     body: 'Build a dependency-free safety policy against a dummy .env, with an expected result at every step.',
-    href: '/getting-started/first-hook',
+    href: withBasePath('/getting-started/first-hook'),
   },
   {
     title: 'Explore the library',
     body: 'Find stable Core Hooks and specialized HooKit Extras.',
-    href: '/getting-started/library',
+    href: withBasePath('/getting-started/library'),
   },
 ];
 
@@ -61,10 +62,10 @@ export function Home() {
     <div className="min-h-screen bg-[#f4f6f4] text-[#242621]">
       <header className="sticky top-0 z-20 border-b border-[#dde3dd] bg-[#f4f6f4]/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <a href="/" className="flex items-center gap-2 font-semibold tracking-tight text-[#26423a]">
+          <a href={withBasePath('/')} className="flex items-center gap-2 font-semibold tracking-tight text-[#26423a]">
             🦉 HooKit
           </a>
-          <a href="/getting-started" className="text-sm text-[#556158] transition-colors hover:text-[#367867]">
+          <a href={withBasePath('/getting-started')} className="text-sm text-[#556158] transition-colors hover:text-[#367867]">
             Documentation
           </a>
         </div>
@@ -108,7 +109,7 @@ export function Home() {
               <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-[#66706a] lg:mx-0">
                 A hook engine for Pi giving you control. Start with a{' '}
                 <a
-                  href="/getting-started/library"
+                  href={withBasePath('/getting-started/library')}
                   className="font-medium text-[#367867] underline decoration-dotted underline-offset-4"
                 >
                   ready-made library
@@ -118,13 +119,13 @@ export function Home() {
               </p>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <a
-                  href="/getting-started"
+                  href={withBasePath('/getting-started')}
                   className="rounded-lg bg-[#26423a] px-6 py-3 text-sm font-semibold text-[#f2f7f4] transition hover:bg-[#1f3831]"
                 >
                   Getting Started
                 </a>
                 <a
-                  href="/reference/events"
+                  href={withBasePath('/reference/events')}
                   className="rounded-lg border border-[#c8d2cb] bg-white px-6 py-3 text-sm font-medium text-[#3d463f] transition hover:border-[#367867] hover:text-[#367867]"
                 >
                   See every event
@@ -137,7 +138,7 @@ export function Home() {
                 </code>
                 {' · '}managed from{' '}
                 <a
-                  href="/reference/hooks-panel"
+                  href={withBasePath('/reference/hooks-panel')}
                   className="font-medium text-[#367867] underline decoration-dotted underline-offset-4"
                 >
                   /hooks
@@ -166,7 +167,7 @@ export function Home() {
             Native Events; HooKit projects <code className="font-mono text-[#26423a]">hook_result</code> once for each
             originating Hook Result. The Native Event Outcome is frozen before owned Actions and reactive Hooks run.{' '}
             <a
-              href="/reference/events"
+              href={withBasePath('/reference/events')}
               className="font-medium text-[#367867] underline decoration-dotted underline-offset-2"
             >
               Events reference
@@ -233,7 +234,7 @@ export function Home() {
               ))}
             </div>
             <a
-              href="/reference/configuration"
+              href={withBasePath('/reference/configuration')}
               className="group mt-auto flex items-center justify-between border-t border-[#e6eae6] pt-4 text-sm font-semibold text-[#367867]"
             >
               Browse the full Reference

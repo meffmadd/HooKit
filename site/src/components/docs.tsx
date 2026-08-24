@@ -6,6 +6,7 @@ import { navigate } from 'astro:transitions/client';
 import { RootProvider } from 'fumadocs-ui/provider/astro';
 import type { AstroProviderProps } from 'fumadocs-core/framework/astro';
 import SearchDialog from './search';
+import { withBasePath } from '@/lib/site-path';
 
 export function Docs({
   tree,
@@ -35,6 +36,7 @@ export function Docs({
         }}
         nav={{
           title: '🦉 HooKit',
+          url: withBasePath('/'),
         }}
       >
         <DocsPage {...page}>{children}</DocsPage>

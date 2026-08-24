@@ -3,10 +3,11 @@ import { loader } from 'fumadocs-core/source';
 import { type CollectionEntry, getCollection } from 'astro:content';
 import * as path from 'node:path';
 import { structure, type StructuredData } from 'fumadocs-core/mdx-plugins';
+import { withBasePath } from './site-path';
 
 export const source = loader({
   source: await createMySource(),
-  baseUrl: '/',
+  baseUrl: import.meta.env.BASE_URL,
 });
 
 export function getStructuredData(entry: CollectionEntry<'docs'>): StructuredData {
@@ -16,7 +17,9 @@ export function getStructuredData(entry: CollectionEntry<'docs'>): StructuredDat
 export function getPageImageUrl(page: (typeof source)['$inferPage']) {
   const segments = [...page.slugs, 'image.webp'];
 
-  return '/' + [page.locale, 'og', 'docs', ...segments].filter(Boolean).join('/');
+  return withBasePath(
+    '/' + [page.locale, 'og', 'docs', ...segments].filter(Boolean).join('/'),
+  );
 }
 
 async function createMySource() {

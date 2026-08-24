@@ -7,6 +7,7 @@ import { getPageImageUrl, source } from "@/lib/source";
 import Layout from "@/components/layout.astro";
 import type { TOCItemType } from "fumadocs-core/toc";
 import { Home } from "@/components/home";
+import { SiteLink } from "@/components/site-link";
 
 interface Props {
   page: CollectionEntry<"docs">;
@@ -23,7 +24,8 @@ const { page } = Astro.props;
 const { Content, headings } = await render(page);
 const slugs = typeof Astro.params.slug === "string" ? Astro.params.slug.split("/") : [];
 const docsPage = source.getPage(slugs)!;
-const image = getPageImageUrl(docsPage);
+const imagePath = getPageImageUrl(docsPage);
+const image = Astro.site ? new URL(imagePath, Astro.site).href : imagePath;
 
 // The root `/` uses the server-rendered landing page. Other pages render
 // the regular docs layout unchanged.
@@ -58,7 +60,7 @@ const toc: TOCItemType[] = headings.map((heading) => ({
       <h1 class="font-semibold text-3xl">{page.data.title}</h1>
       <p class="text-lg text-fd-muted-foreground mb-8">{page.data.description}</p>
       <div class="prose flex-1">
-        <Content components={{ ...defaultMdxComponents }} />
+        <Content components={{ ...defaultMdxComponents, a: SiteLink }} />
       </div>
     </Docs>
   )}
