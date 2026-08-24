@@ -57,7 +57,7 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   pure outdated classification and picker helpers. It performs no local
   persistence; fetched entries are submitted to Hook Catalog mutations.
 - **`hooks/`** — the remote-only first-party Core catalog under canonical
-  Source `meffmadd/HooKit`: 35 opt-in Hooks and the `read-only` Preset. Core
+  Source `meffmadd/HooKit`: 34 opt-in Hooks and the `read-only` Preset. Core
   entries are schema-, catalog-, installation-, and behavior-tested with
   HooKit, but npm packaging excludes the complete directory. Specialized and
   incubating entries belong to `meffmadd/HooKit-extras`.

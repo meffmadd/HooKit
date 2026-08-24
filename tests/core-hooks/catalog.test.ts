@@ -12,6 +12,8 @@ import {
 } from "./index.js";
 import { fixture } from "./fixtures.js";
 
+const LINUX_MAX_ARG_STRING_BYTES = 128 * 1024;
+
 const EXPECTED_CORE_ENTRIES = [
   "block-bash",
   "block-edit",
@@ -42,7 +44,6 @@ const EXPECTED_CORE_ENTRIES = [
   "read-max-10000-chars",
   "read-max-100000-chars",
   "read-max-20000-chars",
-  "read-max-200000-chars",
   "read-max-500-chars",
   "read-max-50000-chars",
   "read-only",
@@ -52,7 +53,7 @@ const EXPECTED_CORE_ENTRIES = [
 ] as const;
 
 describe("Core Hook catalog", () => {
-  it("contains exactly the supported 36 Catalog Entries", () => {
+  it("contains exactly the supported 35 Catalog Entries", () => {
     assert.deepEqual(
       [...loadCoreEntries().keys()].sort(),
       EXPECTED_CORE_ENTRIES,
@@ -78,8 +79,22 @@ describe("Core Hook catalog", () => {
       project,
     });
     assert.equal(loaded.ok, true, loaded.ok ? undefined : JSON.stringify(loaded.diagnostics));
-    assert.equal(loaded.catalog.entries.length, 36);
+    assert.equal(loaded.catalog.entries.length, 35);
     assert.ok(loaded.catalog.entries.every((entry) => entry.default === false));
+  });
+
+  it("keeps every read threshold reachable through Linux PI_TOOL_RESULT", () => {
+    for (const name of loadCoreEntries().keys()) {
+      const match = /^read-max-(\d+)-chars$/.exec(name);
+      if (!match) continue;
+
+      const limit = Number(match[1]);
+      const environmentBytes = Buffer.byteLength(`PI_TOOL_RESULT=${"x".repeat(limit)}`);
+      assert.ok(
+        environmentBytes < LINUX_MAX_ARG_STRING_BYTES,
+        `${name} needs a ${environmentBytes}-byte environment string; Linux allows less than ${LINUX_MAX_ARG_STRING_BYTES}`,
+      );
+    }
   });
 
   it("defines read-only as the three canonical Core mutation blockers", () => {

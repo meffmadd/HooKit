@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { fixture, toolResultOutcome } from "./fixtures.js";
 
 describe("Core read-result thresholds", () => {
-  for (const limit of [500, 10_000, 20_000, 50_000, 100_000, 200_000]) {
+  for (const limit of [500, 10_000, 20_000, 50_000, 100_000]) {
     const name = `read-max-${limit}-chars`;
     it(`${name} has an inclusive boundary`, async () => {
       const cwd = fixture(name);

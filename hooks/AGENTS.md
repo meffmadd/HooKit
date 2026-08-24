@@ -29,6 +29,10 @@ Missing required tooling or processing must fail the Hook. Never use `when` to
 probe command availability. `when` is only for intrinsic project context, such
 as a project file that makes the policy applicable.
 
+Tool-result shells receive their text through `PI_TOOL_RESULT`. Do not add a
+threshold whose ASCII boundary makes that environment string reach Linux's
+128 KiB per-string execution limit; the shell could not start to evaluate it.
+
 ## Verification
 
 Test observable behavior through the public Hook Evaluation interface. Validate

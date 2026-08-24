@@ -83,14 +83,6 @@
     },
     "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=100000?0:1)'"
   },
-  "read-max-200000-chars": {
-    "description": "Blocks read results exceeding 200,000 characters.",
-    "event": "tool_result",
-    "filter": {
-      "toolName": "^read$"
-    },
-    "shell": "node -e 'process.exit(Array.from(process.env.PI_TOOL_RESULT).length<=200000?0:1)'"
-  },
   "no-env-secrets-in-output": {
     "description": "Blocks tool results containing qualifying secrets from the project .env file.",
     "event": "tool_result",

@@ -43,7 +43,6 @@ Specialized, platform-specific, dependency-heavy, and incubating Hooks live in
 - `read-max-20000-chars`
 - `read-max-50000-chars`
 - `read-max-100000-chars`
-- `read-max-200000-chars`
 
 ### Pi tool controls
 
