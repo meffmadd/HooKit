@@ -87,12 +87,12 @@ describe("shared hint key labels", () => {
     const line = renderHintLine(theme, 200, [
       ["Enter", "act"],
       ["Esc", "close"],
-      ["d", "disable all"],
+      ["d", "reset defaults"],
     ], kb)[0]!;
     const alt = process.platform === "darwin" ? "Option-Left" : "Alt-Left";
     assert.equal(
       line,
-      `  Enter/Tab/Backspace/↑/${alt}/Ctrl-+ act · Esc/Ctrl-C/Shift-Tab close · d disable all`,
+      `  Enter/Tab/Backspace/↑/${alt}/Ctrl-+ act · Esc/Ctrl-C/Shift-Tab close · d reset defaults`,
     );
   });
 });

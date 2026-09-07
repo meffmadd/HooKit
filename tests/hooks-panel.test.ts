@@ -63,7 +63,7 @@ function makePanel(
     },
     enable(entry: CatalogEntry) { enabledEntries.add(entry.name); },
     disable(entry: CatalogEntry) { enabledEntries.delete(entry.name); },
-    disableAll() { enabledEntries.clear(); },
+    resetDefaults() {},
     persist() {},
     updateStatus() {},
   } as unknown as HooksState;
@@ -196,7 +196,7 @@ describe("HooksPanel", () => {
 
     // The framed footer and focused-row action are both reserved by viewport
     // accounting; height 16 leaves room for a three-row active window.
-    const lines = panel.render(80, 16);
+    const lines = panel.render(120, 16);
     const activeHeader = lines.find((l) => l.includes("[Local]"));
 
     assert.ok(activeHeader, "active section header is shown");
@@ -308,7 +308,7 @@ describe("HooksPanel", () => {
 
     panel.nav.cross("down");
 
-    const lines = panel.render(80, 12);
+    const lines = panel.render(120, 12);
 
     assert.ok(
       lines.some((l) => l.includes("repo/aaa")),
@@ -334,7 +334,7 @@ describe("HooksPanel", () => {
     );
 
     for (const h of [5, 8, 10, 12, 15, 20, undefined]) {
-      const lines = panel.render(80, h);
+      const lines = panel.render(120, h);
       assert.ok(
         lines[0]?.includes("Hooks"),
         `first line should be header for terminalHeight=${String(h)}`,
@@ -426,21 +426,21 @@ describe("HooksPanel", () => {
 
   // ── Hint line ───────────────────────────────────────────────────
 
-  it("shows the d disable-all action when entries are enabled", () => {
+  it("shows the d reset-defaults action when entries are enabled", () => {
     const panel = makePanel([makeHook("alpha")], new Set(["alpha"]));
     const lines = panel.render(80);
     assert.ok(
-      lines.some((l) => l.includes("[d] disable all")),
-      "shows disable all when an entry is enabled",
+      lines.some((l) => l.includes("[d] reset defaults")),
+      "shows reset defaults when an entry is enabled",
     );
   });
 
-  it("hides the d disable-all action when nothing is enabled", () => {
+  it("keeps the d reset-defaults action when nothing is enabled", () => {
     const panel = makePanel([makeHook("alpha")]);
     const lines = panel.render(80);
     assert.ok(
-      !lines.some((l) => l.includes("disable all")),
-      "hides disable all when nothing is enabled",
+      lines.some((l) => l.includes("[d] reset defaults")),
+      "reset defaults stays available even from an empty enabled set",
     );
   });
 
@@ -459,14 +459,17 @@ describe("HooksPanel", () => {
 
   // ── d / r keybindings ───────────────────────────────────────────
 
-  it("d clears directly enabled entries and persists", () => {
+  it("d resets direct enablement to the catalog defaults and persists", () => {
     const active = new Set(["alpha", "beta"]);
     let persisted = false;
     let statusUpdated = false;
     const state = {
       entries: [makeHook("alpha"), makeHook("beta")],
       enabledEntries: active,
-      disableAll() { active.clear(); },
+      resetDefaults() {
+        active.clear();
+        active.add("alpha");
+      },
       persist() { persisted = true; },
       updateStatus() { statusUpdated = true; },
     } as unknown as HooksState;
@@ -476,17 +479,17 @@ describe("HooksPanel", () => {
 
     panel.handleInput("d", makeCtx());
 
-    assert.equal(active.size, 0, "direct enablement is cleared");
+    assert.deepEqual(Array.from(active), ["alpha"], "enablement is the defaults set");
     assert.ok(persisted, "persist is called");
     assert.ok(statusUpdated, "status bar is refreshed");
   });
 
-  it("d is a no-op when nothing is enabled directly", () => {
+  it("d resets to defaults even when nothing is enabled directly", () => {
     let persisted = false;
     const state = {
       entries: [makeHook("alpha")],
       enabledEntries: new Set<string>(),
-      disableAll() { /* should not run */ },
+      resetDefaults() {},
       persist() { persisted = true; },
       updateStatus() { },
     } as unknown as HooksState;
@@ -496,7 +499,7 @@ describe("HooksPanel", () => {
 
     panel.handleInput("d", makeCtx());
 
-    assert.ok(!persisted, "must not persist an already-empty enabled set");
+    assert.ok(persisted, "reset persists the defaults-derived set even from empty");
   });
 
   it("r opens the remove confirm for a non-local hook", () => {
@@ -587,7 +590,7 @@ describe("HooksPanel", () => {
     const footer = plain(panel.render(120).find((l) => l.includes("close")) ?? "");
     assert.match(
       footer,
-      /^  \/ search · d disable all · i install hooks · n new preset · Esc close$/,
+      /^  \/ search · d reset defaults · i install hooks · n new preset · Esc close$/,
     );
     assert.ok(!footer.includes("Enter"), "focused-row toggle is not global");
     assert.ok(!footer.includes(" t ") && !footer.includes(" r ") && !footer.includes(" e "));
@@ -620,8 +623,10 @@ describe("HooksPanel", () => {
     ]);
     const assertFramed = (lines: string[], label: string): void => {
       assert.match(lines.at(-1) ?? "", /^─+$/, `${label}: bottom border`);
-      assert.match(lines.at(-3) ?? "", /^─+$/, `${label}: top border`);
-      assert.ok((lines.at(-2) ?? "").trim(), `${label}: hint between borders`);
+      let i = lines.length - 2;
+      assert.ok((lines[i] ?? "").trim(), `${label}: hint between borders`);
+      while (i > 0 && !/^─+$/.test(lines[i] ?? "")) i -= 1;
+      assert.match(lines[i] ?? "", /^─+$/, `${label}: top border`);
     };
 
     assertFramed(makePanel([]).render(80, 20), "empty");
@@ -1178,7 +1183,7 @@ describe("HooksPanel fuzzy search", () => {
       isEnabledDirectly() { return false; },
       enable() {},
       disable() {},
-      disableAll() {},
+      resetDefaults() {},
       persist() {},
     } as unknown as HooksState;
 
@@ -1446,7 +1451,7 @@ describe("HooksPanel fuzzy search", () => {
     const footer = plain(lines.find((l) => l.includes("exit search")) ?? "");
     assert.match(action, /^    › Enter enable$/, "only the still-available row action remains");
     assert.match(footer, /^  Esc exit search$/, "footer advertises only leaving search");
-    assert.ok(!lines.some((l) => /set default|remove|edit preset|disable all|install hooks/.test(l)));
+    assert.ok(!lines.some((l) => /set default|remove|edit preset|reset defaults|install hooks/.test(l)));
   });
 
   it("feeds normal action letters into the query while searching", () => {

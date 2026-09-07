@@ -127,6 +127,31 @@ describe("session state enabled Catalog Entries", () => {
     assert.equal(state.enabledHookSet().size, 0);
   });
 
+  it("resetDefaults sets saved enablement to the current Catalog defaults", () => {
+    const { global, project, state, persisted } = setup("reset-defaults");
+    writeJson(project, {
+      local: {
+        guard: shell("true", true),
+        extra: shell("true"),
+        bundle: {
+          description: "bundle",
+          preset: ["local/extra"],
+          default: true,
+        },
+      },
+    });
+    state.load({ global, project });
+    state.restore(context([]));
+    assert.deepEqual(Array.from(state.enabledEntries), []);
+
+    state.resetDefaults();
+    state.persist();
+
+    const expected = ["local\x00bundle", "local\x00guard"];
+    assert.deepEqual(Array.from(state.enabledEntries).sort(), expected);
+    assert.deepEqual([...(persisted.at(-1) ?? [])].sort(), expected);
+  });
+
   it("restores canonical saved keys and prunes missing ones", () => {
     const { global, project, state } = setup("identity");
     writeJson(project, {

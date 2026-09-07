@@ -238,8 +238,9 @@ export class HooksState {
     this.enabledEntries.delete(this.resolveKey(entry));
   }
 
-  disableAll(): void {
-    this.enabledEntries.clear();
+  /** Set direct enablement to exactly the current Catalog defaults. */
+  resetDefaults(): void {
+    this.enabledEntries = this.enabledEntriesFromDefaults();
   }
 
   toggle(entry: CatalogEntry | string): void {

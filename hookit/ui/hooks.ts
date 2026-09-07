@@ -14,7 +14,7 @@ import { entryKey, entryRef } from "../domain/entry.js";
 import { catalogStorageLocations } from "../config.js";
 import { fetchRepoEntries } from "../installer.js";
 import {
-  HINT_D_DISABLE_ALL,
+  HINT_D_RESET_DEFAULTS,
   HINT_ESC_CANCEL,
   HINT_ESC_CLOSE,
   HINT_ESC_EXIT_SEARCH,
@@ -654,9 +654,13 @@ export class HooksPanel extends SectionedPanel {
       );
     }
 
-    const items: HintItem[] = [HINT_SEARCH];
-    if (this.state.enabledEntries.size > 0) items.push(HINT_D_DISABLE_ALL);
-    items.push(HINT_I_INSTALL_HOOKS, HINT_N_NEW_PRESET, HINT_ESC_CLOSE);
+    const items: HintItem[] = [
+      HINT_SEARCH,
+      HINT_D_RESET_DEFAULTS,
+      HINT_I_INSTALL_HOOKS,
+      HINT_N_NEW_PRESET,
+      HINT_ESC_CLOSE,
+    ];
     return renderHintLine(this.theme, width, items, this.keybindings);
   }
 
@@ -765,10 +769,9 @@ export class HooksPanel extends SectionedPanel {
     const focused = this.groups[this.nav.focusedSection];
     if (!focused) return undefined;
 
-    // ── d: disable all directly enabled Catalog Entries ──
+    // ── d: reset direct enablement to the Catalog defaults ──
     if (matchesKey(data, "d")) {
-      if (this.state.enabledEntries.size === 0) return undefined;
-      this.state.disableAll();
+      this.state.resetDefaults();
       this.state.persist();
       this.state.updateStatus(ctx);
       return undefined;
