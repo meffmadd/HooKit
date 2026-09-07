@@ -268,6 +268,21 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   the filtered model — one shared implementation, no parallel render path.
   Ranking is per-section (`filterSection`) so section grouping and order stay
   stable while matches rank inside each section; empty sections drop out.
+- **The enabled-only view filter is a second filter dimension, composed by
+  broadening before search and reconciling the normal view after input.** `a`
+  toggles a transient `enabledOnly` view in the `/hooks` panel that narrows to
+  effectively enabled entries (`isEffectivelyEnabled` — directly enabled or
+  covered via an enabled Preset, the Enabled Hook definition; the enabled
+  Preset's own row stays) by rebuilding `groups`/`nav` from the latest
+  `allGroups` snapshot while keeping every section in order. Entering search
+  broadens to the full Hook set (search always searches everything). After any
+  input that keeps the panel open, one panel-level reconciliation re-applies
+  the normal view, so `Enter`, `d`, `t`, search exit, and future in-place state
+  changes cannot each forget a filter refresh. A successful `t` refreshes the
+  fresh Catalog snapshot in place; catalog-changing child flows still rebuild
+  the panel. The filter is per-panel-instance, never persisted, and resets on
+  rebuild like the search query — the shared `SectionedPanel` base and the
+  preset editor stay untouched.
 - **Outdated detection excludes `default`.** The content signature
   (`entryContentSignature`) compares only repo-driven fields
   (`description`, `event`, canonical `shell`, optional owned `action`, `filter`,

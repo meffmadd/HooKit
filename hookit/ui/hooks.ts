@@ -114,6 +114,22 @@ export class HooksPanel extends SectionedPanel {
   private confirm: { name: string; source: string } | null = null;
 
   /**
+   * Unfiltered display grouping for the latest immutable Catalog snapshot.
+   * It is the shared base for the enabled-only and search filters. Catalog
+   * actions normally rebuild the panel; the in-place default toggle refreshes
+   * this snapshot when `HooksState` installs fresh entry objects.
+   */
+  private allGroups: Group[];
+  private catalogEntriesSnapshot: readonly CatalogEntry[];
+
+  /**
+   * Transient enabled-only view toggle (`a`).  Narrows the list to
+   * effectively enabled entries; the same key restores the full list.
+   * Never persisted and reset on rebuild — a fresh panel always shows all.
+   */
+  private enabledOnly = false;
+
+  /**
    * Composite keys (`${source}\0${name}`) of installed hooks that no longer
    * exist in their source repo (removed upstream).  Keyed by source+name so a
    * local hook (or a different repo's hook) sharing a name with an
@@ -134,11 +150,9 @@ export class HooksPanel extends SectionedPanel {
   /**
    * Reverse lookup for dangling-ref detection: `"source/name"` → the installed
    * Hook at that ref (Presets excluded — a ref to a Preset is a
-   * nested-preset ref, always dangling for v1).  Lazy-computed once: the
-   * panel is recreated after every reload (install/remove/create), and within
-   * a panel instance `state.entries` (which hooks exist) never changes —
-   * only direct enablement and `default` flags do — so the map is stable for the
-   * panel's lifetime.  Synchronous, unlike the async orphaned fetch.
+   * nested-preset ref, always dangling for v1). Lazy-computed per Catalog
+   * snapshot and invalidated when an in-place default mutation installs fresh
+   * entries. Synchronous, unlike the async orphaned fetch.
    */
   private _byRef: Map<string, CatalogEntry> | null = null;
   private get byRef(): Map<string, CatalogEntry> {
@@ -191,7 +205,9 @@ export class HooksPanel extends SectionedPanel {
     initialFocus?: PanelFocusBookmark,
   ) {
     super();
-    this.groups = groupBySource(state.entries);
+    this.catalogEntriesSnapshot = state.entries;
+    this.allGroups = groupBySource(state.entries);
+    this.groups = this.allGroups;
     this.nav = new SectionNavigator<CatalogEntry>(
       this.groups.map((g) => ({ items: g.hooks })),
     );
@@ -342,21 +358,30 @@ export class HooksPanel extends SectionedPanel {
   // `SectionedPanel` — the two panels share one composition path.  These
   // hooks supply the panel-specific branches that `bodyLines` delegates to.
   protected emptyBodyLines(_width: number): string[] {
-    // No hooks at all (fresh install or broken config).  The Presets
-    // section is still rendered (header shown even when empty — the home
-    // for `p`/`n`) so the user has somewhere to land; the message guides them.
-    return [
-      ...this.renderHeaderLines(),
-      this.renderSectionHeader(0),
-      this.theme.fg(
-        "dim",
-        this.state.broken
-          ? "Configuration is invalid; fix hookit.json to continue."
-          : "No hooks defined! Press " +
-            this.theme.fg("accent", "i") + " to install or " +
-            this.theme.fg("accent", "n") + " for a new preset.",
-      ),
-    ];
+    // Nothing to list (broken config, empty catalog, or an enabled-only view
+    // with nothing enabled). Every retained section header still renders so
+    // the filtered view preserves Catalog structure and section navigation.
+    // The message sits below the focused header. The broken-config branch keeps
+    // precedence, and the filtered-empty branch applies only when the Catalog
+    // itself has entries.
+    const hasEntries = this.allGroups.some((g) => g.hooks.length > 0);
+    const message = this.state.broken
+      ? "Configuration is invalid; fix hookit.json to continue."
+      : this.enabledOnly && hasEntries
+      ? "No enabled hooks — press " +
+        this.theme.fg("accent", "a") +
+        " to show all."
+      : "No hooks defined! Press " +
+        this.theme.fg("accent", "i") + " to install or " +
+        this.theme.fg("accent", "n") + " for a new preset.";
+    const sectionLines = this.groups.flatMap((_, index) => [
+      this.renderSectionHeader(index),
+      ...(index === this.nav.focusedSection
+        ? [this.theme.fg("dim", message)]
+        : []),
+      ...(index < this.groups.length - 1 ? [""] : []),
+    ]);
+    return [...this.renderHeaderLines(), ...sectionLines];
   }
 
   protected modeBodyLines(_width: number): string[] | null {
@@ -402,6 +427,63 @@ export class HooksPanel extends SectionedPanel {
     return this.state.isEnabledDirectly(entry);
   }
 
+  /**
+   * The Enabled Hook definition (glossary): directly enabled, or covered via
+   * an enabled Preset.  Shared by `renderStatus` (which renders the three
+   * visible states) and the enabled-only view filter, so "what's on" stays
+   * one definition.
+   */
+  private isEffectivelyEnabled(a: CatalogEntry): boolean {
+    return this.enabledDirectly(a) ||
+      this.coverage.has(entryKey(a.source, a.name));
+  }
+
+  /**
+   * Reconcile the normal view after every input that keeps the panel open.
+   * Search owns `groups`/`nav` while active; on search exit this method
+   * automatically restores the enabled-only dimension. Centralizing the
+   * reconciliation keeps every current and future in-place state change from
+   * having to remember its own filter refresh.
+   */
+  private reconcileNormalView(): void {
+    if (this.searchActive) return;
+    const catalogChanged = this.catalogEntriesSnapshot !== this.state.entries;
+    if (!this.enabledOnly && !catalogChanged && this.groups === this.allGroups) {
+      return;
+    }
+
+    const focusCandidate = this.nav.focusedItem;
+    if (catalogChanged) {
+      this.catalogEntriesSnapshot = this.state.entries;
+      this.allGroups = groupBySource(this.state.entries);
+      this._byRef = null;
+    }
+    const visibleGroups = this.enabledOnly
+      ? this.allGroups.map((group) => ({
+        source: group.source,
+        hooks: group.hooks.filter((entry) => this.isEffectivelyEnabled(entry)),
+      }))
+      : this.allGroups;
+    this.replaceVisibleGroups(visibleGroups, focusCandidate);
+  }
+
+  /** Replace the visible model and restore the focused Catalog identity. */
+  private replaceVisibleGroups(
+    groups: Group[],
+    focusCandidate: CatalogEntry | undefined,
+  ): void {
+    this.groups = groups;
+    this.nav = new SectionNavigator<CatalogEntry>(
+      groups.map((group) => ({ items: group.hooks })),
+    );
+    const freshFocus = focusCandidate
+      ? groups.flatMap((group) => group.hooks).find((entry) =>
+        entry.source === focusCandidate.source && entry.name === focusCandidate.name
+      )
+      : undefined;
+    this.restoreFocus(freshFocus ?? focusCandidate);
+  }
+
   /** The plain row label: `name` plus the optional ` (default)` tag. */
   private plainLabel(a: CatalogEntry): string {
     return a.default ? `${a.name} (default)` : a.name;
@@ -424,8 +506,8 @@ export class HooksPanel extends SectionedPanel {
     if (this.enabledDirectly(a)) {
       return this.theme.fg("accent", "enabled");
     }
-    const via = this.coverage.get(entryKey(a.source, a.name));
-    if (via && via.length > 0) {
+    if (this.isEffectivelyEnabled(a)) {
+      const via = this.coverage.get(entryKey(a.source, a.name)) ?? [];
       const label = via.length === 1
         ? `via ${via[0]}`
         : `via ${via.length} presets`;
@@ -656,12 +738,35 @@ export class HooksPanel extends SectionedPanel {
 
     const items: HintItem[] = [
       HINT_SEARCH,
+      // Transient enabled-only view toggle (spec: `a` narrows to effectively
+      // enabled entries; the same key restores the full list).
+      this.enabledOnly ? ["a", "show all"] : ["a", "show enabled"],
       HINT_D_RESET_DEFAULTS,
       HINT_I_INSTALL_HOOKS,
       HINT_N_NEW_PRESET,
       HINT_ESC_CLOSE,
     ];
     return renderHintLine(this.theme, width, items, this.keybindings);
+  }
+
+  // ── Search composition (override the shared lifecycle) ────────────
+  // The enabled-only view is a second filter dimension, composed with search
+  // by broadening before and re-applying after: search always searches the
+  // whole hook set, and `Esc` returns to the enabled-only view.
+
+  /**
+   * Search ignores the enabled-only filter (user story 7): broaden
+   * `groups`/`nav` to the stable `allGroups` snapshot BEFORE `super` snapshots
+   * them into `savedGroups`, so the base query-filters the full set.  Focus
+   * continuity is preserved by restoring the currently focused entry onto the
+   * broadened navigator before `super` captures it.
+   */
+  protected enterSearch(): void {
+    if (this.enabledOnly && this.canSearch()) {
+      const focusCandidate = this.nav.focusedItem;
+      this.replaceVisibleGroups(this.allGroups, focusCandidate);
+    }
+    super.enterSearch();
   }
 
   // ── Theme access ───────────────────────────────────────────────────
@@ -695,7 +800,16 @@ export class HooksPanel extends SectionedPanel {
    */
   handleInput(data: string, ctx: ExtensionContext): PanelAction | undefined {
     this._ctx = ctx;
+    const action = this.dispatchInput(data, ctx);
+    if (action === undefined) this.reconcileNormalView();
+    return action;
+  }
 
+  /** Route one key; normal-view reconciliation belongs to `handleInput`. */
+  private dispatchInput(
+    data: string,
+    ctx: ExtensionContext,
+  ): PanelAction | undefined {
     // ── Confirmation mode ──
     if (this.confirm) {
       if (matchesKey(data, "y")) {
@@ -764,6 +878,13 @@ export class HooksPanel extends SectionedPanel {
       this.nav.selection[0] = 0;
       return undefined;
     }
+    // `a` toggles the transient enabled-only view filter (hint: `show
+    // enabled` / `show all`).  Inert during search and confirm — search
+    // swallows printable input first and confirm is handled first.
+    if (matchesKey(data, "a")) {
+      this.enabledOnly = !this.enabledOnly;
+      return undefined;
+    }
     if (this.matchesCancel(data)) return "cancel";
 
     const focused = this.groups[this.nav.focusedSection];
@@ -802,7 +923,8 @@ export class HooksPanel extends SectionedPanel {
         );
         return undefined;
       }
-      return "reload";
+      this.state.updateStatus(ctx);
+      return undefined;
     }
 
     // ── e: edit focused preset (local presets only) ──

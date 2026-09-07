@@ -111,6 +111,11 @@ A Section is a group of Catalog Entries. HooKit uses the group in storage or in
 the UI. A Section does not set the identity of an entry. A Section does not
 have to match one Hook Source.
 
+**Default Entry**:
+A Default Entry is a Hook or a Preset marked to be enabled when no enablement
+is saved. The mark belongs to the entry's record, not to the session.
+_Avoid_: built-in, pre-installed
+
 **Enabled Catalog Entry**:
 An Enabled Catalog Entry is a Hook or a Preset. The current session branch
 enables the entry directly. HooKit saves only direct enablement. If no

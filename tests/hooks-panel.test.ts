@@ -12,6 +12,7 @@ import {
 import { HooksState } from "../hookit/ui/state.js";
 import type { CatalogEntry } from "../hookit/hook-catalog/index.js";
 import { clearRepoEntriesCache } from "../hookit/installer.js";
+import { entryKey } from "../hookit/domain/entry.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -58,11 +59,14 @@ function makePanel(
     entries,
     enabledEntries,
     isEnabledDirectly(entry: CatalogEntry) {
-      return enabledEntries.has(entry.name) ||
-        enabledEntries.has(`${entry.source}\x00${entry.name}`);
+      return enabledEntries.has(entryKey(entry.source, entry.name));
     },
-    enable(entry: CatalogEntry) { enabledEntries.add(entry.name); },
-    disable(entry: CatalogEntry) { enabledEntries.delete(entry.name); },
+    enable(entry: CatalogEntry) {
+      enabledEntries.add(entryKey(entry.source, entry.name));
+    },
+    disable(entry: CatalogEntry) {
+      enabledEntries.delete(entryKey(entry.source, entry.name));
+    },
     resetDefaults() {},
     persist() {},
     updateStatus() {},
@@ -427,7 +431,10 @@ describe("HooksPanel", () => {
   // ── Hint line ───────────────────────────────────────────────────
 
   it("shows the d reset-defaults action when entries are enabled", () => {
-    const panel = makePanel([makeHook("alpha")], new Set(["alpha"]));
+    const panel = makePanel(
+      [makeHook("alpha")],
+      new Set([entryKey("local", "alpha")]),
+    );
     const lines = panel.render(80);
     assert.ok(
       lines.some((l) => l.includes("[d] reset defaults")),
@@ -460,7 +467,10 @@ describe("HooksPanel", () => {
   // ── d / r keybindings ───────────────────────────────────────────
 
   it("d resets direct enablement to the catalog defaults and persists", () => {
-    const active = new Set(["alpha", "beta"]);
+    const active = new Set([
+      entryKey("local", "alpha"),
+      entryKey("local", "beta"),
+    ]);
     let persisted = false;
     let statusUpdated = false;
     const state = {
@@ -468,7 +478,7 @@ describe("HooksPanel", () => {
       enabledEntries: active,
       resetDefaults() {
         active.clear();
-        active.add("alpha");
+        active.add(entryKey("local", "alpha"));
       },
       persist() { persisted = true; },
       updateStatus() { statusUpdated = true; },
@@ -479,7 +489,11 @@ describe("HooksPanel", () => {
 
     panel.handleInput("d", makeCtx());
 
-    assert.deepEqual(Array.from(active), ["alpha"], "enablement is the defaults set");
+    assert.deepEqual(
+      Array.from(active),
+      [entryKey("local", "alpha")],
+      "enablement is the defaults set",
+    );
     assert.ok(persisted, "persist is called");
     assert.ok(statusUpdated, "status bar is refreshed");
   });
@@ -555,7 +569,7 @@ describe("HooksPanel", () => {
 
     const enabledDefault = makePanel(
       [makeHook("alpha", "local", true)],
-      new Set(["alpha"]),
+      new Set([entryKey("local", "alpha")]),
     );
     const next = plain(enabledDefault.render(100).find((l) => l.includes("[›]")) ?? "");
     assert.match(next, /› Enter disable · t unset default · r remove/);
@@ -564,7 +578,7 @@ describe("HooksPanel", () => {
   it("Enter toggles direct enablement even when a Preset covers the entry", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
-      new Set(["safety"]),
+      new Set([entryKey("local", "safety")]),
     );
     panel.nav.cycleSection("next"); // Presets → Local (guard)
     const action = plain(panel.render(100).find((l) => l.includes("[›]")) ?? "");
@@ -586,11 +600,14 @@ describe("HooksPanel", () => {
   });
 
   it("keeps only panel-wide commands in the normal footer, in order", () => {
-    const panel = makePanel([makeHook("alpha")], new Set(["alpha"]));
+    const panel = makePanel(
+      [makeHook("alpha")],
+      new Set([entryKey("local", "alpha")]),
+    );
     const footer = plain(panel.render(120).find((l) => l.includes("close")) ?? "");
     assert.match(
       footer,
-      /^  \/ search · d reset defaults · i install hooks · n new preset · Esc close$/,
+      /^  \/ search · a show enabled · d reset defaults · i install hooks · n new preset · Esc close$/,
     );
     assert.ok(!footer.includes("Enter"), "focused-row toggle is not global");
     assert.ok(!footer.includes(" t ") && !footer.includes(" r ") && !footer.includes(" e "));
@@ -608,7 +625,10 @@ describe("HooksPanel", () => {
     assert.ok(lines.some((l) => l.includes("[Space] enable")));
     assert.ok(lines.some((l) => l.includes("[Ctrl-X] close")));
     panel.handleInput(" ", makeCtx());
-    assert.ok(active.has("alpha"), "custom confirm key toggles the focused entry");
+    assert.ok(
+      active.has(entryKey("local", "alpha")),
+      "custom confirm key toggles the focused entry",
+    );
     lines = panel.render(100);
     assert.ok(lines.some((l) => l.includes("[Space] disable")));
     assert.equal(panel.handleInput("\x18", makeCtx()), "cancel", "custom cancel key closes");
@@ -1298,7 +1318,10 @@ describe("HooksPanel fuzzy search", () => {
     panel.handleInput("v", makeCtx());
     panel.handleInput("\r", makeCtx()); // Enter toggles no-env
 
-    assert.ok(active.has("no-env"), "Enter toggles the focused match on");
+    assert.ok(
+      active.has(entryKey("local", "no-env")),
+      "Enter toggles the focused match on",
+    );
   });
 
   it("Space appends to the query (and ignores it for matching in v1a)", () => {
@@ -1440,7 +1463,10 @@ describe("HooksPanel fuzzy search", () => {
     assert.equal(active.size, 0, "Space does not toggle in normal mode");
 
     panel.handleInput("\r", makeCtx()); // Enter — toggles on
-    assert.ok(active.has("alpha"), "Enter toggles in normal mode");
+    assert.ok(
+      active.has(entryKey("local", "alpha")),
+      "Enter toggles in normal mode",
+    );
   });
 
   it("shows only Enter context plus exit-search footer while searching", () => {
@@ -1545,6 +1571,312 @@ describe("HooksPanel fuzzy search", () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════
+// Enabled-only view filter (a) — transient panel-wide view that narrows
+// the list to effectively-enabled entries (directly enabled or covered
+// via an enabled Preset).  Search always searches the whole hook set.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("HooksPanel enabled-only view (a)", () => {
+  it("advertises `a show enabled` in the normal footer", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    const footer = plain(panel.render(120).find((l) => l.includes("close")) ?? "");
+    assert.match(footer, /a show enabled/);
+  });
+
+  it("a keeps direct + via-preset + enabled-preset rows, hides disabled; toggles back", () => {
+    const panel = makePanel(
+      [
+        makeHook("direct"),
+        makeHook("covered"),
+        makePreset("pak", ["local/covered"]),
+        makeHook("hidden"),
+      ],
+      new Set([
+        entryKey("local", "direct"),
+        entryKey("local", "pak"),
+      ]),
+    );
+
+    panel.handleInput("a", makeCtx());
+
+    const lines = panel.render(120);
+    assert.ok(rowFor(lines, "direct"), "directly enabled Hook stays");
+    assert.ok(rowFor(lines, "covered"), "Hook covered via an enabled Preset stays");
+    assert.ok(rowFor(lines, "pak"), "the enabled Preset's own row stays");
+    assert.ok(!lines.some((l) => plain(l).includes("hidden")),
+      "disabled Hook is filtered out");
+    const footer = plain(lines.find((l) => l.includes("close")) ?? "");
+    assert.match(footer, /a show all/, "hint flips while filtered");
+
+    panel.handleInput("a", makeCtx());
+    const all = panel.render(120);
+    assert.ok(all.some((l) => plain(l).includes("hidden")),
+      "`a` again restores the full list");
+    const footerAll = plain(all.find((l) => l.includes("close")) ?? "");
+    assert.match(footerAll, /a show enabled/, "hint flips back");
+  });
+
+  it("Enter-disabling in the enabled-only view removes the row immediately", () => {
+    const enabledEntries = new Set([
+      entryKey("local", "vanish"),
+      entryKey("local", "stays"),
+    ]);
+    const panel = makePanel(
+      [makeHook("vanish"), makeHook("stays")],
+      enabledEntries,
+    );
+    panel.handleInput("a", makeCtx());
+
+    panel.handleInput("\r", makeCtx()); // Enter disables the focused "vanish"
+
+    const lines = panel.render(120);
+    assert.ok(
+      !lines.some((l) => plain(l).includes("vanish")),
+      "the disabled row leaves the view immediately",
+    );
+    assert.ok(
+      lines.some((l) => plain(l).includes("stays")),
+      "still-enabled rows remain",
+    );
+  });
+
+  it("d reset-defaults re-filters the enabled-only view live", () => {
+    const enabledEntries = new Set([
+      entryKey("local", "vanish"),
+      entryKey("local", "stays"),
+    ]);
+    const state = {
+      entries: [makeHook("vanish"), makeHook("stays")],
+      enabledEntries,
+      isEnabledDirectly(entry: CatalogEntry) {
+        return enabledEntries.has(entryKey(entry.source, entry.name));
+      },
+      enable(entry: CatalogEntry) {
+        enabledEntries.add(entryKey(entry.source, entry.name));
+      },
+      disable(entry: CatalogEntry) {
+        enabledEntries.delete(entryKey(entry.source, entry.name));
+      },
+      resetDefaults() { enabledEntries.clear(); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as HooksState;
+    const panel = new HooksPanel(state);
+    panel.setTheme(mockTheme());
+    panel.handleInput("a", makeCtx());
+
+    panel.handleInput("d", makeCtx()); // mass reset → every row leaves
+
+    const lines = panel.render(120);
+    assert.ok(
+      !lines.some((l) => plain(l).includes("vanish")) &&
+        !lines.some((l) => plain(l).includes("stays")),
+      "a mass reset leaves a clean enabled-only view",
+    );
+  });
+
+  it("search sees the whole hook set while filtered; Esc restores the filter", () => {
+    const enabledEntries = new Set([entryKey("local", "yon")]);
+    const panel = makePanel(
+      [makeHook("yon"), makeHook("zebra")],
+      enabledEntries,
+    );
+    panel.handleInput("a", makeCtx());
+    assert.ok(
+      !panel.render(120).some((l) => plain(l).includes("zebra")),
+      "zebra filtered out before search",
+    );
+
+    panel.handleInput("/", makeCtx());
+    for (const ch of "zeb") panel.handleInput(ch, makeCtx());
+    const lines = panel.render(120);
+    const zebraRow = rowFor(lines, "zebra");
+    assert.ok(zebraRow, "the disabled match is visible while searching (filter ignored)");
+    assert.ok(/disabled/.test(plain(zebraRow!)), "its disabled status is visible");
+
+    panel.handleInput("\x1b", makeCtx()); // Esc exits search
+    const after = panel.render(120);
+    assert.ok(
+      !after.some((l) => plain(l).includes("zebra")),
+      "the filter is re-applied after Esc",
+    );
+    assert.ok(after.some((l) => plain(l).includes("yon")), "enabled row still shown");
+  });
+
+  it("a stays inert while searching (feeds the query; no hint)", () => {
+    const panel = makePanel([makeHook("zebra")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("a", makeCtx());
+
+    assert.ok(panel.isSearchActive, "still searching");
+    const lines = panel.render(120);
+    const q = lines.find((l) => l.includes("▏"));
+    assert.ok(q && plain(q).includes("/a"), "a appended to the query, not toggled");
+    const footer = plain(lines.find((l) => l.includes("exit search")) ?? "");
+    assert.ok(
+      !footer.includes("show enabled") && !footer.includes("show all"),
+      "the search footer does not advertise `a`",
+    );
+  });
+
+  it("a hint is absent in confirm-remove mode", () => {
+    const panel = makePanel([makeHook("alpha", "repo/owner")]);
+    panel.handleInput("r", makeCtx());
+    const lines = panel.render(120);
+    assert.ok(
+      !lines.some((l) => l.includes("show enabled")),
+      "confirm mode owns the hint line",
+    );
+  });
+
+  it("Enter-disabling during search removes the row when Esc restores the filtered view", () => {
+    const enabledEntries = new Set([entryKey("local", "yon")]);
+    const panel = makePanel([makeHook("yon")], enabledEntries);
+    panel.handleInput("a", makeCtx());
+
+    panel.handleInput("/", makeCtx());
+    for (const ch of "yo") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // Enter disables yon mid-search
+    panel.handleInput("\x1b", makeCtx()); // Esc → filter re-applied
+
+    const lines = panel.render(120);
+    assert.ok(
+      !lines.some((l) => plain(l).includes("yon")),
+      "a Hook disabled mid-search vanishes after Esc",
+    );
+  });
+
+  it("empty enabled-only view shows the dedicated message, not the no-hooks copy", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
+    panel.handleInput("a", makeCtx());
+
+    const lines = panel.render(120);
+    assert.ok(
+      lines.some((l) => l.includes("No enabled hooks")),
+      "the filtered view explains it is filtered, not empty",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("No hooks defined")),
+      "the generic no-hooks copy is replaced",
+    );
+    panel.handleInput("a", makeCtx());
+    assert.ok(
+      panel.render(120).some((l) => plain(l).includes("alpha")),
+      "`a` again shows the full list",
+    );
+  });
+
+  it("keeps every source header when the enabled-only view has no rows", () => {
+    const panel = makePanel([
+      makeHook("alpha", "repo/aaa"),
+      makeHook("zebra", "repo/zzz"),
+    ]);
+    panel.handleInput("a", makeCtx());
+
+    const lines = panel.render(120).map(plain);
+    assert.ok(lines.some((line) => line.includes("repo/aaa")));
+    assert.ok(lines.some((line) => line.includes("repo/zzz")));
+  });
+
+  it("removes a default-derived Hook when `t` unsets its default", () => {
+    const alpha = makeHook("alpha", "local", true);
+    const enabledEntries = new Set([entryKey("local", "alpha")]);
+    const state = {
+      entries: [alpha],
+      enabledEntries,
+      isEnabledDirectly(entry: CatalogEntry) {
+        return enabledEntries.has(entryKey(entry.source, entry.name));
+      },
+      mutate() {
+        this.entries = [{ ...alpha, default: false }];
+        enabledEntries.clear();
+        return { ok: true };
+      },
+      updateStatus() {},
+    } as unknown as HooksState;
+    const panel = new HooksPanel(state);
+    panel.setTheme(mockTheme());
+    panel.handleInput("a", makeCtx());
+
+    const action = panel.handleInput("t", makeCtx());
+
+    assert.equal(action, undefined, "the filtered panel stays open");
+    assert.equal(rowFor(panel.render(120), "alpha"), undefined);
+  });
+
+  it("`/` still opens search over the whole hook set from the empty filtered view", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("a", makeCtx());
+    panel.handleInput("/", makeCtx());
+    for (const ch of "alpha") panel.handleInput(ch, makeCtx());
+
+    assert.ok(panel.isSearchActive, "search opens from the filtered-empty view");
+    assert.ok(
+      panel.render(120).some((l) => plain(l).includes("alpha")),
+      "the disabled Hook is findable without leaving the filter",
+    );
+  });
+
+  it("broken-config message keeps precedence over the empty-filtered message", () => {
+    const state = {
+      entries: [],
+      enabledEntries: new Set<string>(),
+      broken: true,
+    } as unknown as HooksState;
+    const panel = new HooksPanel(state);
+    panel.setTheme(mockTheme());
+    panel.handleInput("a", makeCtx());
+
+    const lines = panel.render(120);
+    assert.ok(
+      lines.some((l) => l.includes("Configuration is invalid")),
+      "the broken-config message wins",
+    );
+    assert.ok(
+      !lines.some((l) => l.includes("No enabled hooks")),
+      "the filtered-empty message never misleads on a broken config",
+    );
+  });
+
+  it("section headers stay rendered while their rows are filtered away", () => {
+    const panel = makePanel([
+      makeHook("kept-1", "repo/aaa"),
+      makeHook("hidden-1", "repo/zzz"),
+    ], new Set([entryKey("repo/aaa", "kept-1")]));
+    panel.handleInput("a", makeCtx());
+
+    const lines = panel.render(120);
+    assert.ok(
+      lines.some((l) => plain(l).includes("repo/aaa")),
+      "the section with kept rows keeps its header",
+    );
+    assert.ok(
+      lines.some((l) => plain(l).includes("repo/zzz")),
+      "an emptied section keeps its header (structure intact)",
+    );
+    assert.ok(
+      !lines.some((l) => plain(l).includes("hidden-1")),
+      "its rows are filtered away",
+    );
+    panel.handleInput("p", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "p still jumps to Presets");
+  });
+
+  it("a fresh panel always starts showing all (no filter)", () => {
+    const panel = makePanel(
+      [makeHook("on-1"), makeHook("off-1")],
+      new Set([entryKey("local", "on-1")]),
+    );
+    const lines = panel.render(120);
+    assert.ok(lines.some((l) => plain(l).includes("on-1")));
+    assert.ok(
+      lines.some((l) => plain(l).includes("off-1")),
+      "disabled rows render until `a` is pressed",
+    );
+  });
+});
+
 // ── Presets ───────────────────────────────────────────────────────
 //
 // M1: a preset renders in its existing local/repo group with an `hooks:`
@@ -1612,9 +1944,15 @@ describe("HooksPanel presets", () => {
     const ctx = makeCtx();
     // Enter enables either Catalog Entry kind directly.
     panel.handleInput("\r", ctx);
-    assert.ok(active.has("bundle"), "preset is enabled after Enter");
+    assert.ok(
+      active.has(entryKey("local", "bundle")),
+      "preset is enabled after Enter",
+    );
     panel.handleInput("\r", ctx);
-    assert.ok(!active.has("bundle"), "preset is disabled after a second Enter");
+    assert.ok(
+      !active.has(entryKey("local", "bundle")),
+      "preset is disabled after a second Enter",
+    );
   });
 });
 
@@ -1627,7 +1965,10 @@ describe("HooksPanel Preset enablement status", () => {
   it("counts directly enabled Catalog Entries rather than effective Hooks", () => {
     const guard = makeHook("guard");
     const safety = makePreset("safety", ["local/guard"]);
-    const panel = makePanel([guard, safety], new Set(["safety"]));
+    const panel = makePanel(
+      [guard, safety],
+      new Set([entryKey("local", "safety")]),
+    );
 
     const lines = panel.render(80);
 
@@ -1637,7 +1978,7 @@ describe("HooksPanel Preset enablement status", () => {
   it("shows 'enabled · via {preset}' for a member of an enabled Preset", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
-      new Set(["safety"]),
+      new Set([entryKey("local", "safety")]),
     );
     const lines = panel.render(80);
     const guardLine = rowFor(lines, "guard");
@@ -1660,7 +2001,7 @@ describe("HooksPanel Preset enablement status", () => {
         makePreset("safety", ["local/guard"], "local"),
         makeHook("other", "owner/repo"),
       ],
-      new Set(["safety"]),
+      new Set([entryKey("local", "safety")]),
     );
     // Focus the repo section so the local section is non-focused (dimmed).
     panel.nav.cycleSection("next");
@@ -1676,7 +2017,10 @@ describe("HooksPanel Preset enablement status", () => {
   it("shows plain 'enabled' when a member is enabled directly too", () => {
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
-      new Set(["guard", "safety"]),
+      new Set([
+        entryKey("local", "guard"),
+        entryKey("local", "safety"),
+      ]),
     );
     const lines = panel.render(80);
     const guardLine = rowFor(lines, "guard");
@@ -1716,7 +2060,10 @@ describe("HooksPanel Preset enablement status", () => {
         makePreset("p1", ["local/guard"]),
         makePreset("p2", ["local/guard"]),
       ],
-      new Set(["p1", "p2"]),
+      new Set([
+        entryKey("local", "p1"),
+        entryKey("local", "p2"),
+      ]),
     );
     const lines = panel.render(80);
     const guardLine = rowFor(lines, "guard");
@@ -1728,7 +2075,7 @@ describe("HooksPanel Preset enablement status", () => {
   });
 
   it("reflects branch enablement restored while the panel remains open", () => {
-    const enabledEntries = new Set(["safety"]);
+    const enabledEntries = new Set([entryKey("local", "safety")]);
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
       enabledEntries,
@@ -1741,7 +2088,7 @@ describe("HooksPanel Preset enablement status", () => {
   });
 
   it("updates coverage status after toggling the preset off", () => {
-    const active = new Set<string>(["safety"]);
+    const active = new Set<string>([entryKey("local", "safety")]);
     const panel = makePanel(
       [makeHook("guard"), makePreset("safety", ["local/guard"])],
       active,
@@ -1756,7 +2103,10 @@ describe("HooksPanel Preset enablement status", () => {
     // Focus the preset (2nd row) and toggle it off.
     panel.nav.moveWithin("down");
     panel.handleInput("\r", ctx);
-    assert.ok(!active.has("safety"), "safety toggled off");
+    assert.ok(
+      !active.has(entryKey("local", "safety")),
+      "safety toggled off",
+    );
 
     // After toggle: guard shows 'disabled' (no enabled Preset covers it).
     panel.nav.moveWithin("up"); // focus back to guard
@@ -2296,7 +2646,7 @@ describe("HooksPanel M3: source-qualified catalog mutations", () => {
     assert.equal(stepIndex, steps.length, "all expected UI steps ran");
   }
 
-  it("t keeps focus on the highlighted hook after setting it as default", async () => {
+  it("t refreshes the entry in place and keeps focus", async () => {
     const cwd = join(tmpRoot, "toggle-default-focus");
     writeConfig(cwd, {
       local: {
@@ -2310,8 +2660,6 @@ describe("HooksPanel M3: source-qualified catalog mutations", () => {
         component.handleInput("\x1b[B");
         assertComponentFocus(component, "gamma");
         component.handleInput("t");
-      },
-      (component) => {
         assertComponentFocus(component, "gamma", "(default)");
         component.handleInput("\x1b");
       },
