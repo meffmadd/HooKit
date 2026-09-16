@@ -1,12 +1,13 @@
 /**
  * Shared base for sectioned panels with fzf-style search — the `/hooks`
  * panel and the preset editor's hook picker.  Single-sources the search
- * lifecycle (enter/exit/append/pop/apply/restore), the `/query▕` render
- * line, the sectioned-body composition (`render`/`bodyLines`/windowing/
- * `renderSectionHeader`/`moveFocus`), the section-header jump-key hints
- * (`Tab`/`Shift+Tab`), AND the shared input (search-mode block + normal-mode
- * navigation: `handleSearchInput`/`handleNavInput`) so the two views share
- * one implementation (no drift; see AGENTS.md "Prefer one shared implementation
+ * lifecycle (normal → editing → filtered work mode: enter/resume/exit/append/
+ * pop/apply/restore), the `/query▕` render line, the sectioned-body
+ * composition (`render`/`bodyLines`/windowing/`renderSectionHeader`/
+ * `moveFocus`), the section-header jump-key hints (`Tab`/`Shift+Tab`), AND
+ * the shared input (search-mode block + normal-mode navigation:
+ * `handleSearchInput`/`handleNavInput`) so the two views share one
+ * implementation (no drift; see AGENTS.md "Prefer one shared implementation
  * over two").
  *
  * The search swaps `groups`/`nav` (not the renderer): during search they point
@@ -86,6 +87,14 @@ export abstract class SectionedPanel {
   nav!: SectionNavigator<CatalogEntry>;
 
   protected searchActive = false;
+  /**
+   * Whether query input is active (editing).  `searchActive` alone means a
+   * search filter is applied; filtered work mode is active search with
+   * `searchEditing === false` — the retained result set stays on screen and
+   * row/panel actions are reachable again.  Composes: editing ⇒ search
+   * active, but search active does not imply editing.
+   */
+  protected searchEditing = false;
   protected query = "";
   protected savedGroups: Group[] | null = null;
   protected savedNav: SectionNavigator<CatalogEntry> | null = null;
@@ -371,23 +380,53 @@ export abstract class SectionedPanel {
   // single-sourced here (no drift; see AGENTS.md).
 
   /**
-   * Handle the search-mode keys (Esc exit, Backspace pop, Enter toggle,
-   * arrows, Tab/Shift+Tab cycle, else append query).  Returns `true` iff the
-   * key was consumed — callers return `undefined` and stay open.  No-op
-   * (returns `false`) when search is inactive, so the subclass can call it
-   * unconditionally as the first input check.
+   * Handle the shared search keys.  Search has three states — normal,
+   * query editing (`searchEditing`), and filtered work mode (active search
+   * without `searchEditing`):
+   *
+   *  - Editing: configured confirm locks the current filter into work mode
+   *    (retaining the query, filtered Sections, focus, and saved normal-view
+   *    snapshot); configured cancel exits search completely. Backspace edits,
+   *    arrows / Tab / Shift+Tab navigate, and other printable input extends
+   *    the query (consumed). Enter never acts on a row while editing.
+   *  - Filtered work mode: configured cancel performs the complete search
+   *    exit (restore saved model, clear query), `/` resumes editing the
+   *    retained query, Enter/arrows/Tab act on the result set, and every
+   *    other key FALLS THROUGH (`false`) for panel-specific action routing
+   *    without ever implicitly editing the query.
+   *
+   * Returns `true` iff the key was consumed — callers return `undefined`
+   * and stay open.  No-op (returns `false`) when search is inactive, so the
+   * subclass can call it unconditionally as the first input check.
    */
   protected handleSearchInput(data: string): boolean {
     if (!this.searchActive) return false;
-    if (this.matchesSelect(data, "tui.select.cancel", Key.escape)) { this.exitSearch(); return true; }
-    if (matchesKey(data, "backspace"))        { this.popQuery();   return true; }
+
+    if (this.searchEditing) {
+      if (this.matchesCancel(data))                         { this.exitSearch(); return true; }
+      if (this.matchesSelect(data, "tui.select.confirm", "enter")) {
+        this.searchEditing = false;
+        return true;
+      }
+      if (matchesKey(data, "backspace"))                   { this.popQuery();   return true; }
+      if (this.matchesSelect(data, "tui.select.up", "up"))         { this.moveFocus("up");   return true; }
+      if (this.matchesSelect(data, "tui.select.down", "down"))     { this.moveFocus("down"); return true; }
+      if (matchesKey(data, Key.tab))          { this.nav.cycleSection("next"); return true; }
+      if (matchesKey(data, Key.shift("tab"))) { this.nav.cycleSection("prev"); return true; }
+      this.appendQuery(data); // filterPrintable inside; no-op for bare controls
+      return true;
+    }
+
+    // Filtered work mode: the focused result set stays on screen; only the
+    // explicit transitions below act on it.
+    if (this.matchesCancel(data))             { this.exitSearch(); return true; }
+    if (matchesKey(data, "/"))               { this.resumeEditing(); return true; }
     if (this.matchesSelect(data, "tui.select.confirm", "enter")) { this.toggleFocused(); return true; }
     if (this.matchesSelect(data, "tui.select.up", "up"))         { this.moveFocus("up");   return true; }
     if (this.matchesSelect(data, "tui.select.down", "down"))     { this.moveFocus("down"); return true; }
     if (matchesKey(data, Key.tab))             { this.nav.cycleSection("next"); return true; }
-    if (matchesKey(data, Key.shift("tab")))    { this.nav.cycleSection("prev"); return true; }
-    this.appendQuery(data); // filterPrintable inside; no-op for bare controls
-    return true;
+    if (matchesKey(data, Key.shift("tab")))   { this.nav.cycleSection("prev"); return true; }
+    return false; // panel-specific routing; never implicitly edits the query
   }
 
   /**
@@ -425,6 +464,7 @@ export abstract class SectionedPanel {
   protected enterSearch(): void {
     if (!this.canSearch()) return;
     this.searchActive = true;
+    this.searchEditing = true;
     this.query = "";
     this.savedGroups = this.groups;
     this.savedNav = this.nav;
@@ -439,6 +479,7 @@ export abstract class SectionedPanel {
     this.savedGroups = null;
     this.savedNav = null;
     this.searchActive = false;
+    this.searchEditing = false;
     this.query = "";
     if (kept) this.restoreFocus(kept);
   }
@@ -478,6 +519,15 @@ export abstract class SectionedPanel {
     this.restoreFocus(keep);
   }
 
+  /**
+   * Resume editing the retained query from filtered work mode.  The query
+   * text, filtered groups, focus, and saved normal-view snapshot are all
+   * preserved unchanged — only the editing state flips back on.
+   */
+  protected resumeEditing(): void {
+    this.searchEditing = true;
+  }
+
   /** Point `nav` at `a`'s section/index in the current (filtered) groups. */
   protected restoreFocus(a: CatalogEntry | undefined): void {
     if (!a) {
@@ -507,10 +557,18 @@ export abstract class SectionedPanel {
     }
   }
 
-  /** The `/query▏` line shown at the top of the body during search. */
+  /**
+   * The `/query` line shown at the top of the body during search.  Editing
+   * renders the existing accent `/query` with a block cursor; filtered work
+   * mode renders dim `/query` without a cursor so the retained filter is
+   * legible but unmistakably no longer being typed into.
+   */
   protected renderSearchQueryLine(width: number): string {
     const prompt = "/" + this.query;
     const truncated = truncateToWidth(prompt, Math.max(1, width - 3));
-    return `  ${this.theme.fg("accent", truncated)}▏`;
+    if (this.searchEditing) {
+      return `  ${this.theme.fg("accent", truncated)}▏`;
+    }
+    return `  ${this.theme.fg("dim", truncated)}`;
   }
 }

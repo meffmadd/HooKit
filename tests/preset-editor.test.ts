@@ -255,13 +255,15 @@ describe("PresetEditorPanel commit", () => {
     assert.deepEqual(result, { value: ["local/a"] });
   });
 
-  it("Esc in search exits search (not commit)", () => {
+  it("Esc exits query editing without locking or committing", () => {
     const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
+    panel.handleInput("alp");
     assert.ok(panel.isSearchActive, "search entered");
     const result = panel.handleInput(ESC);
     assert.strictEqual(result, undefined, "Esc exits search, no result");
-    assert.ok(!panel.isSearchActive, "search exited");
+    assert.ok(!panel.isSearchActive, "search exited instead of being locked");
+    assert.ok(panel.render(80).some((line) => plain(line).includes("beta")), "full picker restored");
   });
 });
 
@@ -270,7 +272,7 @@ describe("PresetEditorPanel commit", () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe("PresetEditorPanel search", () => {
-  it("/ enters search, typing filters, Esc exits", () => {
+  it("/ enters search, Enter locks the filter, and Esc exits", () => {
     const panel = makePanel([makeHook("alpha"), makeHook("beta"), makeHook("gamma")]);
     panel.handleInput("/");
     assert.ok(panel.isSearchActive);
@@ -279,25 +281,29 @@ describe("PresetEditorPanel search", () => {
     assert.ok(lines.some((l) => plain(l).includes("alpha")), "alpha matches");
     assert.ok(!lines.some((l) => plain(l).includes("beta")), "beta filtered out");
     assert.ok(!lines.some((l) => plain(l).includes("gamma")), "gamma filtered out");
-    panel.handleInput(ESC); // Esc exits
+    panel.handleInput(ENTER); // lock search → filtered work mode
+    assert.ok(panel.isSearchActive, "result set retained in filtered work mode");
+    panel.handleInput(ESC); // exit
     assert.ok(!panel.isSearchActive);
   });
 
-  it("Enter toggles in search mode (not a query char)", () => {
+  it("Enter locks search mode without toggling the focused match", () => {
     const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
     panel.handleInput("al"); // matches alpha
-    panel.handleInput(ENTER); // toggle — not append to query
-    assert.deepEqual(panel.value, ["local/alpha"], "Enter toggled the focused match");
+    panel.handleInput(ENTER); // lock — not append or toggle
+    assert.deepEqual(panel.value, [], "locking search did not toggle the focused match");
+    assert.ok(panel.render(80).some((line) => /^  \/al/.test(line) && !line.includes("▏")));
   });
 
-  it("Enter toggles in search mode (does not commit)", () => {
+  it("Enter toggles only after the search is locked (and does not commit)", () => {
     const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
     panel.handleInput("/");
     panel.handleInput("al");
+    assert.strictEqual(panel.handleInput(ENTER), undefined, "first Enter locks search");
     const result = panel.handleInput(ENTER);
-    assert.strictEqual(result, undefined, "Enter toggles, does not commit");
-    assert.deepEqual(panel.value, ["local/alpha"], "toggled the focused match");
+    assert.strictEqual(result, undefined, "second Enter toggles, but does not commit");
+    assert.deepEqual(panel.value, ["local/alpha"], "toggled the locked focused match");
   });
 
   it("Space feeds the query in search mode (not a toggle)", () => {
@@ -318,6 +324,137 @@ describe("PresetEditorPanel search", () => {
     panel.handleInput("z");
     const lines = panel.render(80);
     assert.ok(lines.some((l) => plain(l).includes("No matches")));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Filtered work mode — the shared three-state search lifecycle. Enter locks
+// the current filter; `/` resumes the retained query; Esc clears search
+// WITHOUT committing (undefined); a further Esc from normal mode saves and
+// returns.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("PresetEditorPanel filtered work mode", () => {
+  /** Editing `/query▏` line (accent + cursor). */
+  const editingQuery = (lines: string[]) =>
+    lines.find((l) => l.includes("▏") && l.includes("/"));
+  /** Dim cursorless `/query` line in filtered work mode. */
+  const filteredQuery = (lines: string[]) =>
+    lines.find((l) => /^  \//.test(l) && !l.includes("▏"));
+
+  it("Enter enters filtered work mode and retains rows, focus, and query", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta"), makeHook("gamma")]);
+    panel.handleInput("/");
+    panel.handleInput("alp");
+    const result = panel.handleInput(ENTER); // lock filter
+
+    assert.strictEqual(result, undefined, "filtered work mode does not commit or toggle");
+    assert.ok(panel.isSearchActive, "search stays active in filtered work mode");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => plain(l).includes("alpha")), "match stays");
+    assert.ok(!plain(lines.join("\n")).includes("beta"), "query still filters");
+    assert.equal(panel.nav.focusedItem?.name, "alpha", "focused match retained");
+    const q = filteredQuery(lines);
+    assert.ok(q && plain(q).includes("/alp"), "dim cursorless retained query");
+    assert.ok(lines.some((l) => plain(l).includes("clear search")), "footer shows clear search");
+  });
+
+  it("filtered footer advertises / search + clear search; Enter add/remove stays contextual", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("/");
+    panel.handleInput("alp");
+    panel.handleInput(ENTER); // filtered
+    const footer = plain(panel.render(80).find((l) => l.includes("clear search")) ?? "");
+    assert.equal(footer, "  / search · Esc clear search");
+    const action = panel.render(80).find((l) => plain(l).includes("Enter add"))!;
+    assert.ok(plain(action).includes("›"), "focused-row membership action stays");
+  });
+
+  it("navigation and Enter add/remove work in filtered work mode", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("env-thing")]);
+    panel.handleInput("/");
+    for (const ch of "env") panel.handleInput(ch);
+    panel.handleInput(ENTER); // filtered work mode
+
+    assert.equal(panel.nav.focusedItem?.name, "no-env");
+    panel.handleInput(ENTER);
+    assert.deepEqual(panel.value, ["local/no-env"], "Enter adds the focused match");
+    panel.handleInput(DOWN);
+    assert.equal(panel.nav.focusedItem?.name, "env-thing", "arrow navigation works on matches");
+    panel.handleInput(ENTER);
+    assert.deepEqual(
+      panel.value,
+      ["local/no-env", "local/env-thing"],
+      "Enter adds the second match",
+    );
+  });
+
+  it("unrelated printable input leaves the retained query unchanged", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("/");
+    panel.handleInput("al");
+    panel.handleInput(ENTER); // filtered
+    panel.handleInput("x"); // must not append to the query
+    const q = filteredQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/al"), "query unchanged by non-/ printable input");
+  });
+
+  it("`/` resumes the exact retained query (editing cursor and exit-search footer)", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("write-guard")]);
+    panel.handleInput("/");
+    for (const ch of "no env") panel.handleInput(ch); // literal space in the query
+    panel.handleInput(ENTER); // filtered
+
+    panel.handleInput("/"); // resume
+    let q = editingQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/no env"), "exact retained query including the space");
+    assert.ok(panel.render(80).some((l) => l.includes("exit search")), "editing footer returns");
+    panel.handleInput("x");
+    q = editingQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/no envx"), "new chars append on resume");
+  });
+
+  it("Esc clears a locked search without committing; the next Esc commits", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
+    panel.handleInput("/");
+    panel.handleInput("al");
+    panel.handleInput(ENTER); // lock filter
+    panel.handleInput(ENTER); // add alpha from filtered work mode
+    assert.ok(panel.isSearchActive);
+
+    const cleared = panel.handleInput(ESC);
+    assert.strictEqual(cleared, undefined, "clearing search does NOT commit");
+    assert.ok(!panel.isSearchActive, "search cleared");
+
+    const committed = panel.handleInput(ESC); // normal-mode cancel
+    assert.deepEqual(committed, { value: ["local/alpha"] }, "normal-mode Esc saves and returns");
+  });
+
+  it("Esc with an empty query exits search immediately", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("/");
+    const result = panel.handleInput(ESC);
+    assert.strictEqual(result, undefined, "empty-query cancel does not commit");
+    assert.ok(!panel.isSearchActive, "exits search immediately");
+  });
+
+  it("clearing search restores the full picker, then normal Esc saves", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("env-thing")]);
+    panel.handleInput("/");
+    for (const ch of "env") panel.handleInput(ch);
+    panel.handleInput(ENTER); // filtered (both match)
+    assert.ok(!panel.render(80).some((l) => plain(l).includes("No matches")));
+    panel.nav.moveWithin("down");
+    panel.handleInput(ENTER); // toggle env-thing
+    panel.handleInput(ESC); // clear search (no commit)
+    const lines = panel.render(80);
+    assert.ok(
+      lines.some((l) => plain(l).includes("no-env")) &&
+        lines.some((l) => plain(l).includes("env-thing")),
+      "full picker restored after clearing",
+    );
+    const result = panel.handleInput(ESC); // normal commit
+    assert.deepEqual(result, { value: ["local/env-thing"] });
   });
 });
 
@@ -406,15 +543,14 @@ describe("PresetEditorPanel hints", () => {
     assert.ok(action, "action updates after removal");
   });
 
-  it("retains Enter add/remove in search while the footer only exits search", () => {
+  it("hides membership actions while editing and advertises locking search", () => {
     const panel = makePanel([makeHook("alpha")]);
     panel.handleInput("/");
     panel.handleInput("a");
     const lines = panel.render(80);
-    assert.ok(lines.some((l) => plain(l).includes("› Enter add")));
-    const footer = plain(lines.find((l) => plain(l).includes("exit search")) ?? "");
-    assert.equal(footer, "  Esc exit search");
-    assert.ok(!footer.includes("Enter"));
+    assert.ok(!lines.some((l) => plain(l).includes("› Enter add")));
+    const footer = plain(lines.find((l) => plain(l).includes("lock search")) ?? "");
+    assert.equal(footer, "  Enter lock search · Esc exit search");
   });
 
   it("keeps the focused row, contextual action, and framed footer in a constrained viewport", () => {

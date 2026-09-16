@@ -103,12 +103,16 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **`hookit/ui/hooks.ts`** — the `/hooks` panel. Detects orphaned
   hooks (installed names removed from their source repo) via an async,
   session-cached `fetchRepoEntries` on panel open, marking them with `⚠` and
-  reusing the existing `r` remove flow.
+  reusing the existing `r` remove flow. In filtered work mode it keeps `d`, `t`,
+  `r`, and applicable `e` usable on the result set while consuming `a`/`i`/`n`/`p`
+  inertly (search must be cleared before the enabled-only dimension or a child
+  flow returns).
 - **`hookit/ui/sectioned-panel.ts`** — `SectionedPanel`, the shared base
   for the `/hooks` panel and the preset editor's hook picker. Owns the
   composition (`render`/`bodyLines`/windowing/`renderSectionHeader`/
-  `moveFocus`), full-width muted `DynamicBorder` footer framing, the search
-  lifecycle, the section-header `Tab`/`Shift+Tab` jump-key hints, AND the
+  `moveFocus`), full-width muted `DynamicBorder` footer framing, the
+  three-state search lifecycle (normal / query editing / filtered work mode),
+  the section-header `Tab`/`Shift+Tab` jump-key hints, AND the
   shared input (`handleSearchInput`/`handleNavInput`/`toggleFocused`) so both
   views are identical except for panel-specific action keys (which live in
   each subclass `handleInput`).
@@ -261,13 +265,36 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
 - **Fuzzy search ranks by coarse field tier, not relevance.** Entries rank by
   their highest matching field tier (name > description > source > body); ties
   keep catalog order. Matched positions drive highlighting only.
-- **Search swaps `groups`/`nav`, not the renderer.** The `/hooks` panel's
-  fuzzy-search mode filters by pointing `this.groups`/`this.nav` at filtered
-  subsets of the same `Hook` objects (originals saved and restored on `Esc`).
+- **Search swaps `groups`/`nav`, not the renderer.** Search is a three-state
+  lifecycle shared by both sectioned panels: normal, query editing
+  (`searchEditing`), and filtered work mode (active search without editing).
+  The `/hooks` panel's fuzzy-search mode filters by pointing
+  `this.groups`/`this.nav` at filtered subsets of the same `Hook` objects
+  (originals saved and restored on full search exit).
   `bodyLines`, `renderSection`, and the windowing math run **unchanged** against
   the filtered model — one shared implementation, no parallel render path.
   Ranking is per-section (`filterSection`) so section grouping and order stay
   stable while matches rank inside each section; empty sections drop out.
+- **Filtered work mode is active search without query editing.** Configured
+  confirm (`Enter`) locks the current query into filtered work mode, retaining
+  the query (displayed dim, cursorless), filtered Sections, focus, and saved
+  normal-view snapshot — so ordinary row/panel actions stay reachable on the
+  result set. Configured cancel (`Esc`) exits search instead of locking it.
+  `/` (an ordinary query char while editing) is the explicit resume-editing
+  command in filtered work mode and never appends a slash. Cancel from filtered
+  work mode performs the full search exit and restores focus to the retained
+  Catalog Entry where possible. Query text, including whitespace-only text, is
+  retained literally even though fuzzy matching ignores spaces. The editing
+  footer says `Enter lock search · Esc exit search`; filtered work mode says
+  `clear search`. Focused-row actions are hidden while editing because Enter
+  owns the search transition; filtered work mode restores `Enter` plus
+  `t`/`r`/applicable `e` in `/hooks` and `Enter add/remove` in the preset
+  editor. The shared `handleSearchInput` owns both states; unmatched keys fall
+  through from filtered work mode for panel-specific routing but never
+  implicitly edit the query. Normal-mode cancel stays panel-specific after a
+  full search exit (`/hooks` closes; the preset editor saves and returns), so
+  the preset editor's non-empty-search sequence is Enter → filtered work mode,
+  cancel → clear without committing, cancel → save and return.
 - **The enabled-only view filter is a second filter dimension, composed by
   broadening before search and reconciling the normal view after input.** `a`
   toggles a transient `enabledOnly` view in the `/hooks` panel that narrows to
@@ -275,12 +302,17 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   covered via an enabled Preset, the Enabled Hook definition; the enabled
   Preset's own row stays) by rebuilding `groups`/`nav` from the latest
   `allGroups` snapshot while keeping every section in order. Entering search
-  broadens to the full Hook set (search always searches everything). After any
-  input that keeps the panel open, one panel-level reconciliation re-applies
-  the normal view, so `Enter`, `d`, `t`, search exit, and future in-place state
-  changes cannot each forget a filter refresh. A successful `t` refreshes the
-  fresh Catalog snapshot in place; catalog-changing child flows still rebuild
-  the panel. The filter is per-panel-instance, never persisted, and resets on
+  broadens to the full Hook set (search always searches everything); Enter
+  retains that broad result set in filtered work mode, `a` stays inert in both
+  search states, and cancel restores and reconciles the enabled-only view. A
+  catalog mutation performed in filtered work mode
+  (e.g. the `t` default toggle) rebases the saved normal model and reapplies
+  the retained query to fresh Catalog Entries, restoring focus by
+  source-qualified identity — the displayed rows and forecasts stay truthful
+  without clearing search. After any input that keeps the panel open, one
+  panel-level reconciliation re-applies the normal view, so `Enter`, `d`, `t`,
+  search exit, and future in-place state changes cannot each forget a filter
+  refresh. The filter is per-panel-instance, never persisted, and resets on
   rebuild like the search query — the shared `SectionedPanel` base and the
   preset editor stay untouched.
 - **Outdated detection excludes `default`.** The content signature
@@ -303,7 +335,8 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   builds on. When adding a new view or event, extend the shared core instead of
   copying the logic — two copies will silently drift.
 - **Sectioned panels share input, not just rendering.** `SectionedPanel`
-  owns the search-mode block and the normal-mode navigation keys
+  owns the search-mode block (both query editing and filtered work mode) and
+  the normal-mode navigation keys
   (`handleSearchInput`/`handleNavInput`) plus `toggleFocused`; the `/hooks`
   panel and the preset editor's hook picker are identical except for
   panel-specific action keys in each subclass `handleInput` (search first via
@@ -311,6 +344,14 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   The only keys that differ are the hint line and each panel's own actions
   (`i`/`n`/`p`/`d`/`r`/`t`/`e`/`Esc`=cancel in `/hooks`; `Esc`=commit in
   the preset editor).
+- **Filtered-work-mode controls are panel-specific; suppression is a `/hooks`
+  guard, not a shared rule.** The base only owns the search transitions,
+  navigation, `Enter`, and `/` resume. `/hooks` allows `d`, `t`, `r`, and
+  applicable `e` in filtered work mode while explicitly consuming `a`, `i`,
+  `n`, and `p` (inert, never advertised) because those open child flows or a
+  second view-filter dimension that must not change under an active search.
+  The preset editor has no child-flow keys, so its filtered work mode leaves
+  everything else as a no-op through the shared navigator.
 - **Highlighting is a render concern, not a filter concern.** Search match
   highlighting recomputes `highlightSegments(query, field)` per visible field
   at render time rather than threading matched positions through the panel.
@@ -332,7 +373,9 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   footer.** Both sectioned panels append an unboxed accent `›` action run as
   the final focused-row detail. `/hooks` predicts individual enable/disable
   and default transitions, always offers removal, and offers editing only for
-  local presets; search retains only its still-applicable Enter action. The preset
+  local presets; query editing retains only its still-applicable Enter action,
+  while filtered work mode restores `t`/`r`/applicable `e` on the focused
+  result. The preset
   editor predicts membership add/remove. The persistent footer contains only
   search, panel-wide commands, and close/back, framed by full-width muted
   `DynamicBorder` rules. Shared hint formatting normalizes configured Pi key

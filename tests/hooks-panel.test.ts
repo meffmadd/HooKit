@@ -1248,16 +1248,25 @@ describe("HooksPanel fuzzy search", () => {
             ? maxHeight
             : Math.floor(rows * Number.parseFloat(maxHeight) / 100);
           const overlayMaxHeight = Math.min(requestedHeight, rows - margin * 2);
-          const visible = component.render(80).slice(0, overlayMaxHeight);
+          let visible = component.render(80).slice(0, overlayMaxHeight);
           assert.ok(
             visible.some((line: string) => line.includes("exit search")),
-            "the overlay viewport retains the search hint",
+            "the overlay viewport retains the editing search hint",
+          );
+          // Lock the filter with Enter and verify the clear-search hint +
+          // bottom border stay inside the same constrained viewport.
+          component.handleInput("e");
+          component.handleInput("\r");
+          visible = component.render(80).slice(0, overlayMaxHeight);
+          assert.ok(
+            visible.some((line: string) => line.includes("clear search")),
+            "the overlay viewport retains the filtered-work-mode hint",
           );
           const lastVisible = [...visible].reverse().find((line: string) => line.trim());
           assert.match(
             lastVisible?.trim() ?? "",
             /^─+$/,
-            "the bottom footer border remains visible after the hint",
+            "the bottom footer border remains visible after the filtered hint",
           );
           return null;
         },
@@ -1305,7 +1314,7 @@ describe("HooksPanel fuzzy search", () => {
     assert.equal(panel.nav.focusedIndex, 1, "moved within the filtered local section");
   });
 
-  it("Enter toggles the focused match", () => {
+  it("Enter locks the focused search without toggling the match", () => {
     const active = new Set<string>();
     const panel = makePanel(
       [makeHook("no-env"), makeHook("write-guard")],
@@ -1316,11 +1325,13 @@ describe("HooksPanel fuzzy search", () => {
     panel.handleInput("e", makeCtx());
     panel.handleInput("n", makeCtx());
     panel.handleInput("v", makeCtx());
-    panel.handleInput("\r", makeCtx()); // Enter toggles no-env
+    panel.handleInput("\r", makeCtx()); // Enter locks the search
 
+    assert.equal(active.size, 0, "locking search does not act on the focused match");
+    assert.ok(panel.isSearchActive, "the locked filter remains active");
     assert.ok(
-      active.has(entryKey("local", "no-env")),
-      "Enter toggles the focused match on",
+      panel.render(80).some((line) => /^  \/env/.test(line) && !line.includes("▏")),
+      "the query is locked in filtered work mode",
     );
   });
 
@@ -1357,16 +1368,19 @@ describe("HooksPanel fuzzy search", () => {
     assert.equal(panel.nav.focusedSection, 1, "Tab cycles to repo/aaa");
   });
 
-  it("Esc exits search WITHOUT closing the panel (returns undefined)", () => {
+  it("Enter with a non-empty query enters filtered work mode; Esc fully exits", () => {
     const panel = makePanel([makeHook("no-env"), makeHook("write-guard")]);
     panel.handleInput("/", makeCtx());
     panel.handleInput("e", makeCtx());
-    const result = panel.handleInput("\x1b", makeCtx()); // Esc
-    assert.equal(result, undefined, "Esc during search does NOT cancel the panel");
-    assert.ok(!panel.isSearchActive, "search mode is exited");
+    let result = panel.handleInput("\r", makeCtx()); // Enter
+    assert.equal(result, undefined, "Enter locks the current search without acting on a row");
+    assert.ok(panel.isSearchActive, "still filtered after locking the search");
+    result = panel.handleInput("\x1b", makeCtx()); // Esc
+    assert.equal(result, undefined, "Esc exits search without closing the panel");
+    assert.ok(!panel.isSearchActive, "Esc fully exits the locked search");
   });
 
-  it("Esc restores focus to the highlighted match in the unfiltered view", () => {
+  it("Enter keeps focus in filtered work mode, then Esc restores it in the unfiltered view", () => {
     const panel = makePanel([
       makeHook("alpha"),
       makeHook("no-env"),
@@ -1379,6 +1393,11 @@ describe("HooksPanel fuzzy search", () => {
     // Only "no-env" matches; it's the sole row in the filtered local section.
     assert.equal(panel.nav.focusedSection, 0);
     assert.equal(panel.nav.focusedIndex, 0);
+
+    panel.handleInput("\r", makeCtx()); // Enter → filtered work mode
+    assert.ok(panel.isSearchActive, "search stays active in filtered work mode");
+    assert.equal(panel.nav.focusedSection, 0, "filtered focus is retained");
+    assert.equal(panel.nav.focusedItem?.name, "no-env", "focused match retained");
 
     panel.handleInput("\x1b", makeCtx()); // Esc → exit
     assert.ok(!panel.isSearchActive);
@@ -1469,14 +1488,17 @@ describe("HooksPanel fuzzy search", () => {
     );
   });
 
-  it("shows only Enter context plus exit-search footer while searching", () => {
+  it("shows lock-search and exit-search hints while editing", () => {
     const panel = makePanel([makeHook("alpha"), makeHook("beta", "repo/aaa")]);
     panel.handleInput("/", makeCtx());
     const lines = panel.render(100);
-    const action = plain(lines.find((l) => l.includes("[›]")) ?? "");
-    const footer = plain(lines.find((l) => l.includes("exit search")) ?? "");
-    assert.match(action, /^    › Enter enable$/, "only the still-available row action remains");
-    assert.match(footer, /^  Esc exit search$/, "footer advertises only leaving search");
+    const footer = plain(lines.find((l) => l.includes("lock search")) ?? "");
+    assert.ok(!lines.some((l) => l.includes("[›]")), "editing exposes no row action");
+    assert.match(
+      footer,
+      /^  Enter lock search · Esc exit search$/,
+      "footer advertises locking or cancelling the search",
+    );
     assert.ok(!lines.some((l) => /set default|remove|edit preset|reset defaults|install hooks/.test(l)));
   });
 
@@ -1568,6 +1590,429 @@ describe("HooksPanel fuzzy search", () => {
     const shellLine = panel.render(80).find((l) => l.includes("shell:"))!;
     assert.ok(shellLine.includes("<u>env</u>"),
       "matched chars in the shell detail are underlined on the focused row");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Filtered work mode — the shared three-state search lifecycle
+// (normal / editing / filtered work mode). Configured confirm locks the
+// current filter so the panel's ordinary row and panel-wide actions stay
+// usable; `/` resumes editing the retained query; cancel clears search.
+// ═══════════════════════════════════════════════════════════════════
+
+describe("HooksPanel filtered work mode", () => {
+  /** The editing `/query▏` line (accent + block cursor). */
+  const editingQuery = (lines: string[]) =>
+    lines.find((l) => l.includes("▏") && l.includes("/"));
+  /** The dim cursorless `/query` line shown in filtered work mode. */
+  const filteredQuery = (lines: string[]) =>
+    lines.find((l) => /^  \//.test(l) && !l.includes("▏"));
+
+  it("Enter locks the filtered result set and focus", () => {
+    const panel = makePanel([
+      makeHook("no-env"),
+      makeHook("write-guard"),
+      makeHook("env-thing", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    assert.equal(panel.nav.focusedItem?.name, "no-env");
+
+    const result = panel.handleInput("\r", makeCtx()); // confirm search
+
+    assert.equal(result, undefined, "Enter locks the search without acting on a row");
+    assert.ok(panel.isSearchActive, "search stays active in filtered work mode");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => plain(l).includes("no-env")), "matching result stays");
+    assert.ok(lines.some((l) => plain(l).includes("env-thing")), "other-section match stays");
+    assert.ok(!plain(lines.join("\n")).includes("write-guard"), "query still filters non-matches");
+    assert.equal(
+      panel.nav.focusedItem?.name,
+      "no-env",
+      "the focused result is retained",
+    );
+    assert.ok(lines.some((l) => l.includes("clear search")), "footer shows clear search");
+  });
+
+  it("the retained query renders dim and cursorless in filtered work mode", () => {
+    const panel = makePanel([makeHook("no-env")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    let lines = panel.render(80);
+    let q = editingQuery(lines);
+    assert.ok(q && q.includes("[/env]"), "editing renders accent /query with a cursor");
+    assert.ok(q!.includes("▏"), "editing shows the block cursor");
+
+    panel.handleInput("\r", makeCtx()); // filtered work mode
+    lines = panel.render(80);
+    q = filteredQuery(lines);
+    assert.ok(q, "filtered work mode renders a /query line");
+    assert.ok(plain(q).includes("/env"), "query text is retained");
+    assert.ok(!q.includes("▏"), "no cursor in filtered work mode");
+    assert.ok(!q.includes("["), "plain (dim) styling, not accent brackets");
+  });
+
+  it("matched characters stay highlighted in filtered work mode", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    const before = panel.render(80).find((l) => l.includes("no-") && l.includes("env"));
+    assert.ok(before!.includes("[env]"), "highlight emitted while editing");
+
+    panel.handleInput("\r", makeCtx()); // filtered
+    const after = panel.render(80).find((l) => l.includes("no-") && l.includes("env"));
+    assert.ok(after!.includes("[env]"), "highlight persists in filtered work mode");
+  });
+
+  it("Esc exits query editing instead of locking the filter", () => {
+    for (const query of ["", "zzz"]) {
+      const panel = makePanel([makeHook("alpha")]);
+      panel.handleInput("/", makeCtx());
+      for (const char of query) panel.handleInput(char, makeCtx());
+      const result = panel.handleInput("\x1b", makeCtx());
+      assert.equal(result, undefined, "search exit does not close the panel");
+      assert.ok(!panel.isSearchActive, `query ${JSON.stringify(query)} was not locked`);
+      assert.ok(
+        panel.render(80).some((line) => plain(line).includes("alpha")),
+        "normal view is restored",
+      );
+    }
+  });
+
+  it("Enter locks a whitespace-only query as retained text", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput(" ", makeCtx()); // query is a single space
+    assert.ok(
+      panel.render(80).some((l) => plain(l).includes("no-env")),
+      "space does not narrow fuzzy matches (shows everything)",
+    );
+    panel.handleInput("\r", makeCtx());
+    assert.ok(panel.isSearchActive, "Enter locks the whitespace-only query");
+    const q = filteredQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/ "), "the literal space is retained in the query line");
+  });
+
+  it("`/` resumes editing the exact retained query; typed chars append", () => {
+    const panel = makePanel([makeHook("no-env"), makeHook("write-guard")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "no env") panel.handleInput(ch, makeCtx()); // literal space
+    panel.handleInput("\r", makeCtx()); // filtered work mode
+
+    panel.handleInput("/", makeCtx()); // resume editing
+    let q = editingQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/no env"), "exact query text (incl. space) preserved");
+    assert.ok(panel.isSearchActive, "still searching after resume");
+
+    panel.handleInput("x", makeCtx());
+    q = editingQuery(panel.render(80));
+    assert.ok(q && plain(q).includes("/no envx"), "new chars append to the retained query");
+
+    panel.handleInput("\r", makeCtx()); // confirm edited query → filtered again
+    assert.ok(panel.isSearchActive, "Enter locks the edited query without clearing");
+    const fq = filteredQuery(panel.render(80));
+    assert.ok(fq && plain(fq).includes("/no envx"), "edited query retained after locking again");
+  });
+
+  it("Esc clears a locked search, restores the full model, and keeps focus", () => {
+    const panel = makePanel([
+      makeHook("alpha"),
+      makeHook("no-env"),
+      makeHook("write-guard", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    assert.equal(panel.nav.focusedItem?.name, "no-env");
+    panel.handleInput("\r", makeCtx()); // Enter → filtered
+    panel.handleInput("\x1b", makeCtx()); // Esc → clear
+
+    assert.ok(!panel.isSearchActive, "search fully cleared");
+    const lines = panel.render(80);
+    assert.ok(!editingQuery(lines) && !filteredQuery(lines), "query indicator removed");
+    assert.ok(lines.some((l) => l.includes("write-guard")), "full model restored (all rows back)");
+    const row = rowFor(lines, "no-env");
+    assert.ok(row && !row.includes("[env]"), "highlight cleared in the unfiltered view");
+    assert.equal(panel.nav.focusedItem?.name, "no-env", "focus restored to the highlighted entry");
+  });
+
+  it("arrows move through matches in filtered work mode", () => {
+    const panel = makePanel([makeHook("alpha-env"), makeHook("beta-env")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+    assert.equal(panel.nav.focusedIndex, 0);
+    panel.handleInput("\x1b[B", makeCtx());
+    assert.equal(panel.nav.focusedItem?.name, "beta-env", "down moves through matches");
+    panel.handleInput("\x1b[A", makeCtx());
+    assert.equal(panel.nav.focusedItem?.name, "alpha-env", "up moves back");
+  });
+
+  it("Tab / Shift+Tab cycle non-empty filtered Sections in filtered work mode", () => {
+    const panel = makePanel([
+      makeHook("local-env"),
+      makeHook("repo-env", "repo/aaa"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+    assert.equal(panel.nav.focusedSection, 0, "starts on local");
+    panel.handleInput("\t", makeCtx());
+    assert.equal(panel.nav.focusedSection, 1, "Tab cycles to a non-empty filtered section");
+    panel.handleInput("\x1b[Z", makeCtx());
+    assert.equal(panel.nav.focusedSection, 0, "Shift+Tab cycles back");
+  });
+
+  it("Enter toggles the focused result in filtered work mode", () => {
+    const active = new Set<string>();
+    const panel = makePanel([makeHook("no-env"), makeHook("write-guard")], active);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "env") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // lock filter
+    panel.handleInput("\r", makeCtx()); // toggle focused result
+    assert.ok(active.has(entryKey("local", "no-env")), "Enter toggles the focused result once locked");
+    assert.ok(panel.isSearchActive, "still filtered after toggle");
+    assert.equal(panel.nav.focusedItem?.name, "no-env", "focus kept after toggle");
+  });
+
+  it("filtered work mode restores the t/r (and applicable e) contextual actions", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta", "repo/aaa")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "al") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+    const action = plain(panel.render(100).find((l) => l.includes("[›]")) ?? "");
+    assert.match(
+      action,
+      /› Enter enable · t set default · r remove/,
+      "t/r come back onto the focused result in filtered work mode",
+    );
+  });
+
+  it("editing advertises Enter lock search plus Esc exit search", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta", "repo/aaa")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "al") panel.handleInput(ch, makeCtx());
+    const lines = panel.render(100);
+    const footer = plain(lines.find((l) => l.includes("lock search")) ?? "");
+    assert.ok(!lines.some((l) => l.includes("[›]")), "row actions are hidden while editing");
+    assert.equal(
+      footer,
+      "  Enter lock search · Esc exit search",
+      "editing footer explains both transitions",
+    );
+  });
+
+  it("d resets defaults in filtered work mode (panel-wide action stays usable)", () => {
+    const enabledEntries = new Set([
+      entryKey("local", "alpha"),
+      entryKey("local", "beta"),
+    ]);
+    let reset = 0;
+    const state = {
+      entries: [makeHook("alpha"), makeHook("beta")],
+      enabledEntries,
+      isEnabledDirectly(entry: CatalogEntry) {
+        return enabledEntries.has(entryKey(entry.source, entry.name));
+      },
+      resetDefaults() { reset++; enabledEntries.clear(); },
+      persist() {},
+      updateStatus() {},
+    } as unknown as HooksState;
+    const panel = new HooksPanel(state);
+    panel.setTheme(mockTheme());
+    panel.handleInput("/", makeCtx());
+    for (const ch of "al") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+
+    panel.handleInput("d", makeCtx());
+
+    assert.equal(reset, 1, "d resets in filtered work mode");
+    assert.ok(panel.isSearchActive, "query retained");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("clear search")), "filtered footer restored");
+    assert.ok(lines.some((l) => l.includes("reset defaults")), "d stays advertised in the footer");
+  });
+
+  it("t toggles the focused entry's default in filtered work mode, refreshing in place", () => {
+    const alpha = makeHook("alpha", "local", false);
+    const beta = makeHook("beta", "local", false);
+    const state = {
+      entries: [alpha, beta],
+      enabledEntries: new Set<string>(),
+      isEnabledDirectly() { return false; },
+      mutate(_intent: unknown) {
+        // Install fresh immutable entry objects (default toggled), mirroring
+        // the real Catalog's re-read-before-write.
+        this.entries = [
+          { ...alpha, default: true },
+          beta,
+        ];
+        return { ok: true };
+      },
+      updateStatus() {},
+      persist() {},
+    } as unknown as HooksState;
+    const panel = new HooksPanel(state);
+    panel.setTheme(mockTheme());
+    panel.handleInput("/", makeCtx());
+    for (const ch of "al") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered work mode
+
+    panel.handleInput("t", makeCtx());
+
+    assert.ok(panel.isSearchActive, "search not cleared by an in-place mutation");
+    assert.equal(
+      panel.nav.focusedItem?.name,
+      "alpha",
+      "focus restored to the fresh entry by source-qualified identity",
+    );
+    const lines = panel.render(120);
+    assert.ok(rowFor(lines, "alpha")?.includes("(default)"), "default marker refreshes in place");
+    const action = plain(lines.find((l) => l.includes("[›]")) ?? "");
+    assert.match(action, /t unset default/, "predictive action reflects the fresh default");
+    assert.ok(filteredQuery(lines), "the retained query is still applied");
+  });
+
+  it("r from filtered work mode opens confirm; cancelling returns to the retained results", () => {
+    const panel = makePanel([makeHook("alpha", "repo/owner")]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "al") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+
+    panel.handleInput("r", makeCtx());
+    assert.ok(panel.render(80).some((l) => l.includes(`Remove "alpha"?`)));
+
+    panel.handleInput("n", makeCtx()); // cancel confirmation
+    assert.ok(panel.isSearchActive, "cancelling confirm returns to filtered work mode");
+    const lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("clear search")), "filtered footer restored");
+    assert.ok(!lines.some((l) => l.includes('Remove "alpha"?')), "confirm dismissed");
+    assert.ok(plain(lines.join("\n")).includes("alpha"), "filtered result set intact");
+  });
+
+  it("e on a focused local Preset works from filtered work mode", () => {
+    const panel = makePanel([
+      makePreset("bundle", ["local/guard"], "local"),
+      makeHook("guard"),
+    ]);
+    panel.handleInput("/", makeCtx());
+    for (const ch of "bun") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+    assert.equal(panel.nav.focusedItem?.name, "bundle");
+
+    const result = panel.handleInput("e", makeCtx());
+    assert.ok(
+      result && typeof result === "object" && result.type === "edit-preset",
+      "e returns the edit-preset action from filtered work mode",
+    );
+  });
+
+  it("a, i, n, p are inert in filtered work mode and omitted from the footer", () => {
+    const panel = makePanel([makeHook("alpha"), makeHook("beta")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("a", makeCtx()); // query "a"
+    panel.handleInput("\r", makeCtx()); // filtered
+    const footer = plain(panel.render(120).find((l) => l.includes("clear search")) ?? "");
+    assert.match(footer, /^  \/ search · d reset defaults · Esc clear search$/);
+    assert.ok(!footer.includes("install"), "i not advertised");
+    assert.ok(!footer.includes("new preset"), "n not advertised");
+    assert.ok(
+      !footer.includes("show enabled") && !footer.includes("show all"),
+      "a not advertised",
+    );
+
+    // Each suppressed key neither opens a flow, moves focus, nor edits the query.
+    const focusBefore = panel.nav.focusedSection;
+    for (const key of ["i", "n", "p", "a"]) {
+      assert.equal(panel.handleInput(key, makeCtx()), undefined, `${key} opens nothing`);
+    }
+    assert.ok(panel.isSearchActive, "still in filtered work mode");
+    assert.equal(panel.nav.focusedSection, focusBefore, "p did not jump focus");
+    assert.equal(panel.nav.focusedIndex, 0, "focus row untouched");
+    assert.ok(
+      filteredQuery(panel.render(120))?.includes("/a"),
+      "unrelated printable input left the retained query unchanged",
+    );
+  });
+
+  it("a stays inert in filtered work mode; the enabled-only view returns only after search clears", () => {
+    const enabledEntries = new Set([entryKey("local", "yon")]);
+    const panel = makePanel([makeHook("yon"), makeHook("zebra")], enabledEntries);
+    panel.handleInput("a", makeCtx()); // enabled-only view
+    assert.ok(!panel.render(120).some((l) => plain(l).includes("zebra")));
+
+    panel.handleInput("/", makeCtx());
+    for (const ch of "zeb") panel.handleInput(ch, makeCtx());
+    panel.handleInput("\r", makeCtx()); // Enter → filtered work mode
+    panel.handleInput("a", makeCtx()); // must be inert, not a toggle
+    panel.handleInput("\x1b", makeCtx()); // Esc → clear search
+
+    const lines = panel.render(120);
+    assert.ok(!lines.some((l) => plain(l).includes("zebra")), "enabled-only view still applied");
+    assert.ok(lines.some((l) => plain(l).includes("yon")));
+    const footer = plain(lines.find((l) => l.includes("close")) ?? "");
+    assert.match(footer, /a show all/, "enabled-only (not show enabled) after an inert a");
+  });
+
+  it("filtered no-match view supports `/` resume and cancel clearing", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("z", makeCtx());
+    panel.handleInput("z", makeCtx());
+    panel.handleInput("\r", makeCtx()); // Enter → filtered (still no matches)
+    assert.ok(panel.isSearchActive);
+    let lines = panel.render(80);
+    assert.ok(lines.some((l) => l.includes("No matches")), "No matches in filtered work mode");
+    assert.ok(filteredQuery(lines), "dim cursorless query in filtered no-match");
+    assert.ok(lines.some((l) => l.includes("clear search")), "clear-search recovery footer");
+
+    panel.handleInput("/", makeCtx()); // resume editing from filtered no-match
+    lines = panel.render(80);
+    assert.ok(editingQuery(lines), "editing resumes from filtered no-match");
+    assert.ok(lines.some((l) => l.includes("exit search")));
+
+    panel.handleInput("\r", makeCtx()); // → filtered again
+    panel.handleInput("\x1b", makeCtx()); // → clear
+    assert.ok(!panel.isSearchActive);
+    assert.ok(panel.render(80).some((l) => plain(l).includes("alpha")), "normal view restored");
+  });
+
+  it("configured confirm locks search and configured cancel exits it", () => {
+    const active = new Set<string>();
+    const panel = makePanel([makeHook("alpha")], active);
+    panel.setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.confirm": "ctrl+y",
+      "tui.select.cancel": "ctrl+x",
+    }));
+
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("a", makeCtx());
+    let lines = panel.render(100);
+    assert.ok(
+      lines.some((l) => l.includes("[Ctrl-Y] lock search · [Ctrl-X] exit search")),
+      "editing footer pairs configured confirm/cancel with both transitions",
+    );
+
+    panel.handleInput("\x19", makeCtx()); // ctrl+y → filtered work mode
+    assert.ok(panel.isSearchActive, "configured confirm locks the current search");
+    assert.equal(active.size, 0, "locking does not toggle the focused row");
+    lines = panel.render(100);
+    assert.ok(
+      lines.some((l) => l.includes("[Ctrl-X] clear search")),
+      "filtered footer pairs the configured cancel with clear search",
+    );
+
+    panel.handleInput("\x18", makeCtx()); // ctrl+x → exit
+    assert.ok(!panel.isSearchActive, "configured cancel fully exits search");
+  });
+
+  it("Esc closes the panel again after search is fully cleared (normal-mode contract)", () => {
+    const panel = makePanel([makeHook("alpha")]);
+    panel.handleInput("/", makeCtx());
+    panel.handleInput("a", makeCtx());
+    panel.handleInput("\r", makeCtx()); // filtered
+    panel.handleInput("\x1b", makeCtx()); // clear
+    const result = panel.handleInput("\x1b", makeCtx()); // normal Esc
+    assert.equal(result, "cancel", "/hooks closes on Esc when no search is active");
   });
 });
 
@@ -1676,7 +2121,7 @@ describe("HooksPanel enabled-only view (a)", () => {
     );
   });
 
-  it("search sees the whole hook set while filtered; Esc restores the filter", () => {
+  it("search sees the whole hook set while locked; Esc restores the enabled-only filter", () => {
     const enabledEntries = new Set([entryKey("local", "yon")]);
     const panel = makePanel(
       [makeHook("yon"), makeHook("zebra")],
@@ -1695,11 +2140,18 @@ describe("HooksPanel enabled-only view (a)", () => {
     assert.ok(zebraRow, "the disabled match is visible while searching (filter ignored)");
     assert.ok(/disabled/.test(plain(zebraRow!)), "its disabled status is visible");
 
+    panel.handleInput("\r", makeCtx()); // Enter → filtered work mode
+    assert.ok(panel.isSearchActive, "search (and the broad result set) is retained");
+    assert.ok(
+      panel.render(120).some((l) => plain(l).includes("zebra")),
+      "the broad result set stays on screen after Enter locks the search",
+    );
+
     panel.handleInput("\x1b", makeCtx()); // Esc exits search
     const after = panel.render(120);
     assert.ok(
       !after.some((l) => plain(l).includes("zebra")),
-      "the filter is re-applied after Esc",
+      "the filter is re-applied after Esc clears search",
     );
     assert.ok(after.some((l) => plain(l).includes("yon")), "enabled row still shown");
   });
@@ -1730,20 +2182,25 @@ describe("HooksPanel enabled-only view (a)", () => {
     );
   });
 
-  it("Enter-disabling during search removes the row when Esc restores the filtered view", () => {
+  it("Enter-disabling in filtered work mode removes the row when search is cleared", () => {
     const enabledEntries = new Set([entryKey("local", "yon")]);
     const panel = makePanel([makeHook("yon")], enabledEntries);
     panel.handleInput("a", makeCtx());
 
     panel.handleInput("/", makeCtx());
     for (const ch of "yo") panel.handleInput(ch, makeCtx());
-    panel.handleInput("\r", makeCtx()); // Enter disables yon mid-search
+    panel.handleInput("\r", makeCtx()); // Enter locks the search
+    panel.handleInput("\r", makeCtx()); // Enter disables yon in work mode
+    assert.ok(
+      panel.render(120).some((l) => plain(l).includes("yon")),
+      "search retains the disabled result in filtered work mode",
+    );
     panel.handleInput("\x1b", makeCtx()); // Esc → filter re-applied
 
     const lines = panel.render(120);
     assert.ok(
       !lines.some((l) => plain(l).includes("yon")),
-      "a Hook disabled mid-search vanishes after Esc",
+      "a Hook disabled mid-search vanishes after the filter is re-applied",
     );
   });
 

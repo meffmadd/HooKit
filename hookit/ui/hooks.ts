@@ -16,9 +16,11 @@ import { fetchRepoEntries } from "../installer.js";
 import {
   HINT_D_RESET_DEFAULTS,
   HINT_ESC_CANCEL,
+  HINT_ESC_CLEAR_SEARCH,
   HINT_ESC_CLOSE,
   HINT_ESC_EXIT_SEARCH,
   HINT_ENTER_CONFIRM,
+  HINT_ENTER_LOCK_SEARCH,
   HINT_I_INSTALL_HOOKS,
   HINT_N_NEW_PRESET,
   HINT_SEARCH,
@@ -398,15 +400,17 @@ export class HooksPanel extends SectionedPanel {
   }
 
   protected detailSuffixFor(a: CatalogEntry, width: number): string[] {
+    // Enter locks the query while editing, so no focused-row action applies
+    // until the result set is in filtered work mode.
+    if (this.searchEditing) return [];
+
     const items: HintItem[] = [
       ["Enter", this.enabledDirectly(a) ? "disable" : "enable"],
+      ["t", a.default ? "unset default" : "set default"],
+      ["r", "remove"],
     ];
-    if (!this.searchActive) {
-      items.push(["t", a.default ? "unset default" : "set default"]);
-      items.push(["r", "remove"]);
-      if (isCatalogPreset(a) && a.source === "local") {
-        items.push(["e", "edit preset"]);
-      }
+    if (isCatalogPreset(a) && a.source === "local") {
+      items.push(["e", "edit preset"]);
     }
     return renderContextualActions(this.theme, width, items, this.keybindings);
   }
@@ -439,17 +443,17 @@ export class HooksPanel extends SectionedPanel {
   }
 
   /**
-   * Reconcile the normal view after every input that keeps the panel open.
+   * Reconcile the visible model after every input that keeps the panel open.
    * Search owns `groups`/`nav` while active; on search exit this method
    * automatically restores the enabled-only dimension. Centralizing the
    * reconciliation keeps every current and future in-place state change from
    * having to remember its own filter refresh.
    */
   private reconcileNormalView(): void {
-    if (this.searchActive) return;
     const catalogChanged = this.catalogEntriesSnapshot !== this.state.entries;
-    if (!this.enabledOnly && !catalogChanged && this.groups === this.allGroups) {
-      return;
+    if (!catalogChanged) {
+      if (this.searchActive) return; // enablement-only changes refresh via render
+      if (!this.enabledOnly && this.groups === this.allGroups) return;
     }
 
     const focusCandidate = this.nav.focusedItem;
@@ -458,6 +462,29 @@ export class HooksPanel extends SectionedPanel {
       this.allGroups = groupBySource(this.state.entries);
       this._byRef = null;
     }
+
+    if (this.searchActive) {
+      // An in-place catalog mutation (e.g. `t` default toggle) installed
+      // fresh immutable entries mid-search. Rebase the saved normal model so
+      // search-exit restores fresh data, then reapply the retained query to
+      // the fresh Catalog Entries and restore focus by source-qualified
+      // identity — the displayed rows, default marker, and forecasts stay
+      // truthful without clearing search.
+      this.savedGroups = this.allGroups;
+      this.savedNav = new SectionNavigator<CatalogEntry>(
+        this.allGroups.map((group) => ({ items: group.hooks })),
+      );
+      const fresh = focusCandidate
+        ? this.allGroups.flatMap((group) => group.hooks).find((entry) =>
+          entry.source === focusCandidate.source && entry.name === focusCandidate.name)
+        : undefined;
+      this.groups = this.allGroups;
+      this.nav = this.savedNav;
+      if (fresh) this.restoreFocus(fresh);
+      this.applyFilter();
+      return;
+    }
+
     const visibleGroups = this.enabledOnly
       ? this.allGroups.map((group) => ({
         source: group.source,
@@ -728,10 +755,21 @@ export class HooksPanel extends SectionedPanel {
     }
 
     if (this.searchActive) {
+      if (this.searchEditing) {
+        return renderHintLine(
+          this.theme,
+          width,
+          [HINT_ENTER_LOCK_SEARCH, HINT_ESC_EXIT_SEARCH],
+          this.keybindings,
+        );
+      }
+      // Filtered work mode: `/` resumes editing, `d` stays usable on the
+      // result set, cancel clears search.  `a`/`i`/`n`/`p` are omitted — they
+      // are inert (consumed, never advertised) while a filter is active.
       return renderHintLine(
         this.theme,
         width,
-        [HINT_ESC_EXIT_SEARCH],
+        [HINT_SEARCH, HINT_D_RESET_DEFAULTS, HINT_ESC_CLEAR_SEARCH],
         this.keybindings,
       );
     }
@@ -845,7 +883,12 @@ export class HooksPanel extends SectionedPanel {
     // ── Panel-specific hotkeys (hooks-panel-only) ──
     // `/` (search), Enter (toggle), Tab/Shift+Tab, arrows are shared and live
     // in `handleNavInput` at the bottom; `i`/`n`/`p`/Esc are hooks-only.
+    // While a search filter is active these panel-wide hotkeys are inert in
+    // filtered work mode: editing consumes them as query text already, and
+    // here they are explicitly swallowed without state change or child flow
+    // (US 13–16).
     if (matchesKey(data, "i")) {
+      if (this.searchActive) return undefined;
       if (this.state.projectTrusted === false) {
         ctx.ui.notify("hookit: trust this project before installing hooks.", "error");
         return undefined;
@@ -858,9 +901,11 @@ export class HooksPanel extends SectionedPanel {
     }
     // `n` opens the new-preset dialog (handled by the command loop).  In
     // confirm mode `n` cancels (confirm is checked first); in search `n`
-    // feeds the query (search is checked first) — so this branch is only
-    // reached in normal mode.
+    // feeds the query while editing or is inert in filtered work mode
+    // (search is checked first) — so this branch only opens the flow in
+    // normal mode.
     if (matchesKey(data, "n")) {
+      if (this.searchActive) return undefined;
       if (this.state.projectTrusted === false) {
         ctx.ui.notify("hookit: trust this project before creating a preset.", "error");
         return undefined;
@@ -872,16 +917,20 @@ export class HooksPanel extends SectionedPanel {
       return "create-preset";
     }
     // `p` jumps to the always-first Presets section (row 0, or the header
-    // when empty).  Presets is always index 0 (see `groupBySource`).
+    // when empty).  Presets is always index 0 (see `groupBySource`).  Inert
+    // in filtered work mode — search has removed sections, so the jump
+    // target may not exist (US 16).
     if (matchesKey(data, "p")) {
+      if (this.searchActive) return undefined;
       this.nav.focus = 0;
       this.nav.selection[0] = 0;
       return undefined;
     }
     // `a` toggles the transient enabled-only view filter (hint: `show
-    // enabled` / `show all`).  Inert during search and confirm — search
-    // swallows printable input first and confirm is handled first.
+    // enabled` / `show all`).  Inert while a search filter is active — search
+    // must be cleared before the enabled-only dimension can change (US 37).
     if (matchesKey(data, "a")) {
+      if (this.searchActive) return undefined;
       this.enabledOnly = !this.enabledOnly;
       return undefined;
     }

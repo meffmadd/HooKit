@@ -30,8 +30,10 @@ import {
   type CatalogPreset,
 } from "../hook-catalog/index.js";
 import {
+  HINT_ESC_CLEAR_SEARCH,
   HINT_ESC_SAVE_BACK,
   HINT_ESC_EXIT_SEARCH,
+  HINT_ENTER_LOCK_SEARCH,
   HINT_SEARCH,
   OverlayBox,
   SectionNavigator,
@@ -145,10 +147,21 @@ export class PresetEditorPanel extends SectionedPanel {
 
   protected hintLine(width?: number): string[] {
     if (this.searchActive) {
+      if (this.searchEditing) {
+        return renderHintLine(
+          this.theme,
+          width,
+          [HINT_ENTER_LOCK_SEARCH, HINT_ESC_EXIT_SEARCH],
+          this.keybindings,
+        );
+      }
+      // Filtered work mode: `/` resumes the retained query, cancel clears
+      // search without committing (US 41).  Membership stays on the focused
+      // row's contextual action, so the footer stays small.
       return renderHintLine(
         this.theme,
         width,
-        [HINT_ESC_EXIT_SEARCH],
+        [HINT_SEARCH, HINT_ESC_CLEAR_SEARCH],
         this.keybindings,
       );
     }
@@ -161,6 +174,7 @@ export class PresetEditorPanel extends SectionedPanel {
   }
 
   protected detailSuffixFor(a: CatalogEntry, width: number): string[] {
+    if (this.searchEditing) return [];
     return renderContextualActions(this.theme, width, [[
       "Enter",
       this.selected.has(this.refOf(a)) ? "remove" : "add",

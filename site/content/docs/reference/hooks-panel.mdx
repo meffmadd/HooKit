@@ -18,19 +18,33 @@ project storage.
 |---|---|
 | Up / Down | Moves focus through entries, crossing Section boundaries. Configured `tui.select.up` and `tui.select.down` bindings also apply. |
 | Tab / Shift+Tab | Jumps to the next or previous Source Section. |
-| `/` | Enters fuzzy search over name, description, Source, shell, `when`, Action detail, and Preset references. |
-| Backspace | Removes the last search character while search is active. |
-| Esc | Leaves search when search is active; otherwise closes `/hooks`. Configured `tui.select.cancel` also applies. |
-| Enter | Toggles direct enablement for the focused entry, including from search results. Configured `tui.select.confirm` also applies. |
+| `/` | Enters fuzzy search over name, description, Source, shell, `when`, Action detail, and Preset references. While a search filter is active, `/` resumes editing the retained query. |
+| Backspace | Removes the last search character while editing a query. |
+| Esc | Exits search and restores the normal view, whether query editing or filtered work mode is active. With no search active, closes `/hooks`. Configured `tui.select.cancel` also applies. |
+| Enter | While query editing, locks the current filter into filtered work mode without changing enablement. Otherwise, toggles direct enablement for the focused entry. Configured `tui.select.confirm` also applies. |
 
 Search ranks matches by field tier—name, description, Source, then body fields—
 and preserves Catalog order within a tier. Search changes only the visible
 subset; it does not create a second Catalog or renderer path.
 
+### Filtered work mode
+
+`Enter` locks the current filter into filtered work mode: the retained query
+stays applied (shown dim, without a cursor), the matching Catalog Entries stay
+filtered, the focused row stays focused, and match highlighting persists.
+Locking the search does not toggle the focused entry. In filtered work mode the
+ordinary panel-wide action below (`d`) and focused-row actions (`Enter`, `t`,
+`r`, `e`) are reachable again, so several matching entries can be changed
+without retyping the query. `Esc` clears search and restores the full view; `/`
+returns to editing the retained query.
+
 ## Panel actions
 
-These keys apply in normal mode. While search is active, printable keys become
-part of the query instead.
+These keys apply in the normal view. While editing a query, printable keys
+become part of the query instead. `a`, `i`, `n`, and `p` stay inert whenever a
+search filter is active (editing or filtered work mode) so an active result set
+cannot be hidden, rebuilt, or jumped away from; `d`, `t`, `r`, and `e` remain
+available in filtered work mode.
 
 | Key | Action | Scope and constraints |
 |---|---|---|
