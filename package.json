@@ -1,6 +1,6 @@
 {
   "name": "@meffmadd/hookit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hooks with outcome-selected Pi Actions for Pi events.",
   "repository": {
     "type": "git",
