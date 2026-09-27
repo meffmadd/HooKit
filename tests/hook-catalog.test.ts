@@ -173,6 +173,13 @@ describe("Hook Catalog creation", () => {
       name: "test:event",
       data: { nested: [1, true] },
     };
+    const userAction = {
+      type: "message" as const,
+      outcome: "pass" as const,
+      message: "/skill:review catalog",
+      delivery: "followUp" as const,
+      sendAs: "user" as const,
+    };
     writeJson(paths.project!, {
       local: {
         handler: {
@@ -182,6 +189,11 @@ describe("Hook Catalog creation", () => {
           when: "true",
           action,
           default: true,
+        },
+        userMessage: {
+          description: "Continue with a user message",
+          event: "tool_call",
+          action: userAction,
         },
       },
     });
@@ -194,6 +206,10 @@ describe("Hook Catalog creation", () => {
     assert.notStrictEqual(handler.action, action);
     assert.equal(handler.default, true);
     assert.equal("path" in handler, false);
+    const userMessage = find(loaded, id("local", "userMessage"));
+    assert.ok(userMessage && "action" in userMessage);
+    assert.deepEqual(userMessage.action, userAction);
+    assert.notStrictEqual(userMessage.action, userAction);
   });
 
   it("keeps global repository sections visible without project declaration", () => {
@@ -357,6 +373,7 @@ describe("Hook Catalog creation", () => {
       outcome: ["pass", "block"] as unknown as "pass",
       message: "Review",
       delivery: "followUp" as const,
+      sendAs: "custom" as const,
       code: [0, 1],
     };
     writeJson(paths.project!, {
@@ -811,10 +828,16 @@ describe("Hook Catalog mutations", () => {
       identity: id("local", "shadowed"),
       entry: localShell("new-project"),
     }));
+    const userMessageUpdate = localAction({
+      type: "message",
+      message: "/skill:review updated catalog",
+      delivery: "followUp",
+      sendAs: "user",
+    });
     current = catalog(current.mutate({
       type: "update",
       identity: id("local", "handler"),
-      entry: localAction({ type: "shutdown", interrupt: true }),
+      entry: userMessageUpdate,
     }));
 
     const global = readJson(paths.global);
@@ -840,16 +863,25 @@ describe("Hook Catalog mutations", () => {
       description: "Local action",
       event: "tool_call",
       shell: "true",
-      action: { type: "shutdown", outcome: "pass", interrupt: true },
+      action: {
+        type: "message",
+        outcome: "pass",
+        message: "/skill:review updated catalog",
+        delivery: "followUp",
+        sendAs: "user",
+      },
       default: true,
     });
     const handler = find(current, id("local", "handler"));
     assert.ok(handler && "action" in handler);
     assert.deepEqual(handler.action, {
-      type: "shutdown",
+      type: "message",
       outcome: "pass",
-      interrupt: true,
+      message: "/skill:review updated catalog",
+      delivery: "followUp",
+      sendAs: "user",
     });
+    assert.notStrictEqual(handler.action, userMessageUpdate.action);
     assert.equal(handler.default, true);
   });
 

@@ -147,6 +147,7 @@ describe("renderHookDetail — owned Action", () => {
         code: 0,
         message: "Please review the block",
         delivery: "followUp",
+        sendAs: "custom",
         triggerTurn: true,
       },
       when: "test -f .needs-review",
@@ -154,10 +155,27 @@ describe("renderHookDetail — owned Action", () => {
     const text = lines.join("\n");
     assert.match(text, /shell: true/);
     assert.match(text, /action: outcome: pass, report · code: 0 · type: message/);
+    assert.match(text, /sendAs: custom/);
     assert.match(text, /delivery: followUp/);
     assert.match(text, /triggerTurn: true/);
     assert.match(text, /message: Please\s+review the block/);
     assert.match(text, /when: test -f \.needs-review/);
+  });
+
+  it("renders genuine user delivery without custom trigger metadata", () => {
+    const lines = renderHookDetail(mockTheme(), 120, {
+      action: {
+        type: "message",
+        outcome: "pass",
+        message: "/skill:review this change",
+        delivery: "steer",
+        sendAs: "user",
+      },
+    });
+    const text = lines.join("\n");
+    assert.match(text, /sendAs: user/);
+    assert.match(text, /delivery: steer/);
+    assert.doesNotMatch(text, /triggerTurn/);
   });
 
   it("renders bounded JSON custom-event data in configuration detail", () => {

@@ -89,12 +89,23 @@ export interface CompactAction {
   readonly instructions?: string;
 }
 
-export interface MessageAction {
+export interface CustomMessageAction {
   readonly type: "message";
   readonly message: string;
   readonly delivery: "steer" | "followUp" | "nextTurn";
+  readonly sendAs?: "custom";
   readonly triggerTurn?: boolean;
 }
+
+export interface UserMessageAction {
+  readonly type: "message";
+  readonly message: string;
+  readonly delivery: "steer" | "followUp";
+  readonly sendAs: "user";
+  readonly triggerTurn?: never;
+}
+
+export type MessageAction = CustomMessageAction | UserMessageAction;
 
 export interface EmitCustomEventAction {
   readonly type: "emit-custom-event";
@@ -180,10 +191,19 @@ export function actionRequest(action: Action): ActionRequest {
           : { instructions: action.instructions }),
       };
     case "message":
+      if (action.sendAs === "user") {
+        return {
+          type: "message",
+          message: action.message,
+          delivery: action.delivery,
+          sendAs: "user",
+        };
+      }
       return {
         type: "message",
         message: action.message,
         delivery: action.delivery,
+        ...(action.sendAs === undefined ? {} : { sendAs: action.sendAs }),
         ...(action.triggerTurn === undefined
           ? {}
           : { triggerTurn: action.triggerTurn }),
@@ -225,9 +245,10 @@ export function actionDetailText(action: Action): string {
         ? `${selector}compact`
         : `${selector}compact · instructions: ${action.instructions}`;
     case "message":
-      return `${selector}message · delivery: ${action.delivery} · triggerTurn: ${
-        action.triggerTurn ?? false
-      } · message: ${action.message}`;
+      return `${selector}message · sendAs: ${action.sendAs ?? "custom"} · delivery: ${
+        action.delivery
+      }${action.sendAs === "user" ? "" : ` · triggerTurn: ${action.triggerTurn ?? false}`}` +
+        ` · message: ${action.message}`;
     case "emit-custom-event":
       return `${selector}emit-custom-event · name: ${action.name}${
         action.data === undefined ? "" : ` · data: ${JSON.stringify(action.data)}`

@@ -266,6 +266,13 @@ export default function (pi: ExtensionAPI) {
         });
         return;
       case "message":
+        if (action.sendAs === "user") {
+          pi.sendUserMessage(action.message, {
+            deliverAs: action.delivery,
+            expandPromptTemplates: true,
+          });
+          return;
+        }
         pi.sendMessage(
           {
             customType: "hookit",
@@ -274,7 +281,11 @@ export default function (pi: ExtensionAPI) {
           },
           {
             deliverAs: action.delivery,
-            triggerTurn: action.triggerTurn ?? false,
+            triggerTurn: action.delivery === "nextTurn"
+              ? false
+              : safeRead(() => ctx.isIdle()) === true
+                ? action.triggerTurn ?? false
+                : true,
           },
         );
         return;

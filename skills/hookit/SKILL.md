@@ -37,7 +37,8 @@ subprocess; only those exact strings are optimized. Other strings run through
         "outcome": "block",
         "code": 1,
         "message": "HooKit blocked a dangerous removal command.",
-        "delivery": "followUp"
+        "delivery": "followUp",
+        "sendAs": "custom"
       },
       "default": true
     },
@@ -113,16 +114,38 @@ Supported payloads:
 - `interrupt`
 - `shutdown`, optional `interrupt`
 - `compact`, optional static `instructions`
-- `message`, with static `message`, `delivery` (`steer`, `followUp`, or
-  `nextTurn`), and optional `triggerTurn`
+- `message`, with a static non-whitespace `message`, `delivery`, and optional
+  `sendAs`:
+  - omitted `sendAs` or `sendAs: "custom"`: `steer`, `followUp`, or `nextTurn`;
+    optional `triggerTurn` defaults to `false`, and `nextTurn` forbids `true`
+  - `sendAs: "user"`: only `steer` or `followUp`; `triggerTurn` is forbidden
 - `emit-custom-event`, with non-empty `name` and optional JSON `data`
 
 Selectors are removed from the Action Request Effect. Payload text/data is
-static: there is no environment, template, event, or stdout expansion. Effect
-delivery is ordered and best-effort and cannot alter any already-frozen Event
-Outcome.
-Multiple message Actions remain distinct; Pi owns steering/follow-up batching.
-Broad Actions can cause later Pi events, so avoid accidental continuation loops.
+static: there is no environment, Event, shell-output, or HooKit template
+interpolation. Effect delivery is ordered and best-effort and cannot alter any
+already-frozen Event Outcome. Multiple message Actions remain distinct; Pi
+owns steering/follow-up batching.
+
+Custom `steer` and `followUp` request their queue positions while Pi is active
+regardless of `triggerTurn`; when Pi is idle, `triggerTurn` alone controls
+whether they start work. Custom `nextTurn` waits for a later external prompt.
+After a tool Event, `steer` means after the current assistant tool batch and
+before the next model call, not immediately after one parallel tool finishes.
+
+A user message is a genuine user-role message and always starts or continues
+execution. HooKit enables Pi's normal programmatic input processing, so the
+`input` middleware sees extension provenance and Pi can dispatch extension
+commands or expand Skill commands and prompt templates. Unknown input remains
+literal according to Pi. A recognized extension command may run immediately
+before Pi applies `steer`/`followUp`; interactive-only built-in commands that
+`sendUserMessage` does not expose remain unsupported. Do not add an attribution
+prefix before a leading slash command.
+
+Generated user work can produce later Events and select the same Action again.
+There is no HooKit loop guard, cooldown, or deduplication. Narrow with Filters,
+Preconditions, shells, or external state. In particular, an unconditional user
+message on `agent_settled` creates an endless continuation loop.
 
 To request an unconditional Action after a Native Event, omit shell and select `pass`.
 It remains one Hook, runs as optimized canonical `true`, counts as a normal

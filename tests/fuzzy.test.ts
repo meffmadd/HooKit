@@ -50,7 +50,26 @@ function makeAction(name: string): CatalogEntry {
       outcome: "pass",
       message: "Please investigate",
       delivery: "followUp",
+      sendAs: "custom",
       triggerTurn: true,
+    },
+    default: false,
+  };
+}
+
+function makeUserAction(name: string): CatalogEntry {
+  return {
+    name,
+    source: "local",
+    description: "continuation",
+    event: "hook_result",
+    shell: "true",
+    action: {
+      type: "message",
+      outcome: "pass",
+      message: "/skill:review this",
+      delivery: "steer",
+      sendAs: "user",
     },
     default: false,
   };
@@ -280,6 +299,12 @@ describe("filterSection", () => {
     assert.deepEqual(filterSection("followUp", [action]), [action]);
     assert.deepEqual(filterSection("investigate", [action]), [action]);
     assert.deepEqual(filterSection("triggerTurn", [action]), [action]);
+    assert.deepEqual(filterSection("custom", [action]), [action]);
+  });
+
+  it("matches genuine user message delivery through the shared Action detail", () => {
+    const action = makeUserAction("notify");
+    assert.deepEqual(filterSection("user", [action]), [action]);
   });
 
   it("excludes entries that match no field", () => {

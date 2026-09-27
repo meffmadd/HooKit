@@ -157,6 +157,27 @@ describe("entryNeedsUpdate", () => {
     );
   });
 
+  it("returns true when a repository message changes delivery kind", () => {
+    const installed = {
+      description: "notify",
+      event: "tool_call",
+      action: {
+        type: "message" as const,
+        outcome: "pass" as const,
+        message: "review",
+        delivery: "followUp" as const,
+      },
+      default: true,
+    };
+    const repo = {
+      ...installed,
+      action: { ...installed.action, sendAs: "user" as const },
+      default: false,
+    };
+
+    assert.equal(entryNeedsUpdate(installed, repo), true);
+  });
+
   it("returns false when only default differs (default is excluded)", () => {
     const installed = { ...base, default: true } as HookEntry;
     const repo = { ...base } as HookEntry;

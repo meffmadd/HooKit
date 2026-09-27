@@ -27,15 +27,16 @@ selected Action becomes an Action Request Effect.
 |---|---|---|---|---|---|---|---|
 | `interrupt` | boolean | optional | `false` | `shutdown` | — | Requests an interrupt before graceful shutdown. | `true` |
 | `instructions` | string | optional | — | `compact` | Static text. | Passes instructions to Pi compaction. | `"Preserve policy decisions."` |
-| `message` | string | required | — | `message` | Static text. | Supplies the message Pi should deliver. | `"A policy blocked this call."` |
-| `delivery` | string enum | required | — | `message` | `steer`, `followUp`, or `nextTurn` | Chooses Pi's message delivery mode. | `"followUp"` |
-| `triggerTurn` | boolean | optional | `false` | `message` | `true` is invalid with `delivery: "nextTurn"`. | Requests a new turn where the delivery mode permits it. | `true` |
+| `message` | string | required | — | `message` | Must contain at least one non-whitespace character. | Supplies the original, untrimmed message text Pi should deliver. | `"A policy blocked this call."` |
+| `sendAs` | string enum | optional | `custom` | `message` | `custom` or `user` | Chooses custom-context or genuine user-message delivery. Omission behaves as `custom`. | `"user"` |
+| `delivery` | string enum | required | — | `message` | Custom: `steer`, `followUp`, or `nextTurn`. User: `steer` or `followUp`. | Chooses Pi's message queue position. | `"followUp"` |
+| `triggerTurn` | boolean | optional | `false` | custom `message` only | Forbidden with `sendAs: "user"`; `true` is invalid with `delivery: "nextTurn"`. | Controls whether custom delivery starts an idle agent. | `true` |
 | `name` | string | required | — | `emit-custom-event` | Must contain at least one non-whitespace character. | Names the custom Pi Event. | `"audit:blocked"` |
 | `data` | any JSON value | optional | — | `emit-custom-event` | Static JSON data. | Supplies the custom Event payload. | `{ "source": "HooKit" }` |
 
 Every variant rejects fields outside its own shape. Action strings and `data`
-are static: they do not interpolate environment variables, templates, shell
-output, or Event fields.
+are static: HooKit does not interpolate environment variables, shell output,
+or Event fields. Pi may process genuine user input as described below.
 
 ## Supported variants
 
@@ -44,13 +45,45 @@ output, or Event fields.
 | `interrupt` | `type`, `outcome` | Requests Pi's supported interrupt operation. | `{ "type": "interrupt", "outcome": "block" }` |
 | `shutdown` | `type`, `outcome` | Optionally interrupts, then requests graceful shutdown. | `{ "type": "shutdown", "outcome": "report", "interrupt": true }` |
 | `compact` | `type`, `outcome` | Requests Pi compaction with optional instructions. | `{ "type": "compact", "outcome": "pass", "instructions": "Preserve policy decisions." }` |
-| `message` | `type`, `outcome`, `message`, `delivery` | Requests one static Pi message. | `{ "type": "message", "outcome": "block", "message": "Blocked.", "delivery": "followUp" }` |
+| `message` | `type`, `outcome`, `message`, `delivery` | Requests one static custom or user message. | `{ "type": "message", "outcome": "block", "message": "Blocked.", "delivery": "followUp" }` |
 | `emit-custom-event` | `type`, `outcome`, `name` | Requests one named custom Event with optional data. | `{ "type": "emit-custom-event", "outcome": "pass", "name": "audit:complete" }` |
 
-## A block message action
+## Message delivery
 
-This Hook blocks a `.env` write and asks Pi to deliver a follow-up message
-explaining the block:
+| `sendAs` | Pi delivery | Supported `delivery` | Continuation |
+|---|---|---|---|
+| omitted or `custom` | A HooKit custom message that participates in model context. | `steer`, `followUp`, `nextTurn` | `triggerTurn` controls only whether an idle agent starts. |
+| `user` | A genuine Pi user message retained as user-role history. | `steer`, `followUp` | Always starts an idle agent or continues active execution. `triggerTurn` is forbidden. |
+
+For an active agent, custom `steer` and `followUp` delivery requests active
+continuation regardless of the configured `triggerTurn`. This keeps the
+selected queue position meaningful: `steer` reaches the model after the
+current assistant tool batch and before the next model call; `followUp` waits
+until the existing tool chain settles. This is batch timing, not a promise to
+interrupt or follow one parallel tool completion immediately.
+
+For an idle agent, custom delivery honors `triggerTurn`, which defaults to
+`false`. Custom `nextTurn` is always deferred until a later external user
+prompt and never requests immediate work.
+
+A user message passes through Pi's normal programmatic input path with input
+expansion enabled. Other extensions receive the `input` Event with extension
+provenance and may transform or handle it. If it continues, Pi can dispatch an
+extension command, expand a `/skill:name` command, or expand a prompt template.
+HooKit does not maintain an allowlist, preflight command availability, or
+reimplement discovery. Unknown commands and missing Skills remain literal user
+text according to Pi behavior.
+
+A recognized extension command is dispatched before Pi applies the streaming
+queue selection, so it may execute immediately even when the Action configures
+`delivery: "followUp"`. The selected delivery governs input that becomes a
+queued message. Interactive-only built-in commands, such as commands Pi handles only
+in the TUI, are not exposed by `sendUserMessage`; HooKit does not make them
+executable. They remain subject to Pi's literal-input behavior.
+
+## A custom block message
+
+This Hook blocks a `.env` write and asks Pi to deliver custom follow-up context:
 
 {/* docs-example:valid */}
 ```json
@@ -66,15 +99,92 @@ explaining the block:
         "outcome": "block",
         "code": 1,
         "message": "A dotenv write was blocked by HooKit.",
-        "delivery": "followUp"
+        "delivery": "followUp",
+        "sendAs": "custom"
       }
     }
   }
 }
 ```
 
-The `outcome: "block"` and `code: 1` select the owned result; only the static
-message Effect is delivered.
+The `outcome: "block"` and `code: 1` select the owner's result. The static
+message is additive to the authoritative block reason; it does not replace it.
+
+## A user message with Pi input processing
+
+This Hook sends user-directed work after a passing tool result. Pi receives the
+leading Skill command unchanged and performs any supported expansion:
+
+{/* docs-example:valid */}
+```json
+{
+  "local": {
+    "review-after-tool": {
+      "description": "Ask the review Skill to inspect a completed tool result",
+      "event": "tool_result",
+      "action": {
+        "type": "message",
+        "outcome": "pass",
+        "message": "/skill:review focus on safety",
+        "delivery": "steer",
+        "sendAs": "user"
+      }
+    }
+  }
+}
+```
+
+HooKit adds no attribution prefix, so leading command syntax remains intact.
+The resulting user message is retained as genuine user-role session history.
+The nearby Execution Report preserves bounded HooKit provenance by recording a
+`message` Action row without storing the message body, delivery mode, or
+expanded content.
+
+## Invalid message combinations
+
+A user message cannot use `nextTurn` or configure `triggerTurn`:
+
+{/* docs-example:invalid */}
+```json
+{
+  "local": {
+    "invalid-user-message": {
+      "description": "Contradictory user continuation settings",
+      "event": "agent_settled",
+      "action": {
+        "type": "message",
+        "outcome": "pass",
+        "message": "Continue",
+        "delivery": "nextTurn",
+        "sendAs": "user",
+        "triggerTurn": false
+      }
+    }
+  }
+}
+```
+
+A custom `nextTurn` message cannot request an immediate turn:
+
+{/* docs-example:invalid */}
+```json
+{
+  "local": {
+    "invalid-custom-message": {
+      "description": "Contradictory custom continuation settings",
+      "event": "agent_settled",
+      "action": {
+        "type": "message",
+        "outcome": "pass",
+        "message": "Continue later",
+        "delivery": "nextTurn",
+        "sendAs": "custom",
+        "triggerTurn": true
+      }
+    }
+  }
+}
+```
 
 ## Selection is separated from delivery
 
@@ -82,14 +192,20 @@ HooKit freezes the Native Event Outcome before Actions are considered, and
 Actions are returned as immutable delivery-neutral **Effects** in
 deterministic, result-major order. The Pi adapter delivers them best-effort:
 **a delivery failure cannot weaken an Event Outcome**. A block, patch,
-cancellation, or report stands even if an Effect fails to deliver. The Effect
-itself is best-effort: if a shutdown request fails delivery, for example, Pi
-may remain running, but the already-frozen Event Outcome does not change.
+cancellation, or report stands even if an Effect fails to deliver. Multiple
+message Actions remain separate ordered Effects; Pi owns any downstream
+steering or follow-up batching.
 
 ## Continuation caution
 
 Message, compact, interrupt, and shutdown Actions can cause later Pi Events.
-A broad, frequently matching Hook can therefore create continuation loops. A
-`pass`-only Hook that omits `shell` is the optimized canonical `"true"` Hook;
-it still emits an ordinary `hook_result`. The
-[filter](/reference/configuration/filter) field limits which Events match.
+Generated user work can call more tools, producing independent Hook
+Evaluations that may select the same Action again. HooKit adds no loop guard,
+cooldown, or message deduplication; use narrow Filters, Preconditions, shells,
+or external state to make continuation self-limiting.
+
+In particular, a genuine user message always starts or continues execution. An
+unconditional `sendAs: "user"` Action on `agent_settled` creates an endless
+continuation loop unless a Precondition, shell, Filter, or external state
+eventually prevents selection. A `pass`-only Hook that omits `shell` is still
+an optimized canonical `"true"` Hook and emits an ordinary `hook_result`.

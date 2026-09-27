@@ -1372,7 +1372,7 @@ describe("index owned Action delivery", () => {
               outcome: "pass",
               message: "steer now",
               delivery: "steer",
-              triggerTurn: true,
+              triggerTurn: false,
             },
             default: true,
           },
@@ -1384,6 +1384,8 @@ describe("index owned Action delivery", () => {
               outcome: "pass",
               message: "follow later",
               delivery: "followUp",
+              sendAs: "custom",
+              triggerTurn: false,
             },
             default: true,
           },
@@ -1395,6 +1397,30 @@ describe("index owned Action delivery", () => {
               outcome: "pass",
               message: "next prompt",
               delivery: "nextTurn",
+            },
+            default: true,
+          },
+          userSteer: {
+            description: "send genuine user steering",
+            event: "tool_call",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "/skill:review now",
+              delivery: "steer",
+              sendAs: "user",
+            },
+            default: true,
+          },
+          userFollow: {
+            description: "send genuine user follow-up",
+            event: "tool_call",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "/review after this",
+              delivery: "followUp",
+              sendAs: "user",
             },
             default: true,
           },
@@ -1419,6 +1445,7 @@ describe("index owned Action delivery", () => {
         hasUI: true,
         isProjectTrusted: () => true,
         sessionManager: { getBranch: () => [] },
+        isIdle: () => false,
         abort: () => calls.push({ type: "abort" }),
         shutdown: () => calls.push({ type: "shutdown" }),
         compact: (options: { customInstructions?: string; onError?: (error: Error) => void }) => {
@@ -1435,9 +1462,15 @@ describe("index owned Action delivery", () => {
       const harness = extensionHarness();
       (harness.pi as unknown as {
         sendMessage: (message: unknown, options: unknown) => void;
+        sendUserMessage: (message: unknown, options: unknown) => void;
         events: { emit: (name: string, data: unknown) => void };
       }).sendMessage = (message, options) => {
         calls.push({ type: "message", value: { message, options } });
+      };
+      (harness.pi as unknown as {
+        sendUserMessage: (message: unknown, options: unknown) => void;
+      }).sendUserMessage = (message, options) => {
+        calls.push({ type: "user-message", value: { message, options } });
       };
       (harness.pi as unknown as {
         events: { emit: (name: string, data: unknown) => void };
@@ -1469,6 +1502,8 @@ describe("index owned Action delivery", () => {
         "message",
         "message",
         "message",
+        "user-message",
+        "user-message",
         "event",
       ]);
       assert.equal(calls[4]?.value, "Keep decisions");
@@ -1477,11 +1512,23 @@ describe("index owned Action delivery", () => {
         message: { customType: "hookit", content: "steer now", display: true },
         options: { deliverAs: "steer", triggerTurn: true },
       });
+      assert.deepEqual(calls[7]?.value, {
+        message: { customType: "hookit", content: "follow later", display: true },
+        options: { deliverAs: "followUp", triggerTurn: true },
+      });
       assert.deepEqual(calls[8]?.value, {
         message: { customType: "hookit", content: "next prompt", display: true },
         options: { deliverAs: "nextTurn", triggerTurn: false },
       });
       assert.deepEqual(calls[9]?.value, {
+        message: "/skill:review now",
+        options: { deliverAs: "steer", expandPromptTemplates: true },
+      });
+      assert.deepEqual(calls[10]?.value, {
+        message: "/review after this",
+        options: { deliverAs: "followUp", expandPromptTemplates: true },
+      });
+      assert.deepEqual(calls[11]?.value, {
         name: "session_start",
         data: { safe: true },
       });
@@ -1494,10 +1541,10 @@ describe("index owned Action delivery", () => {
       assert.equal(data.type, "tool-wave");
       assert.deepEqual(
         data.segments.map((segment) => segment.rows.length),
-        [18, 0],
+        [22, 0],
       );
       const rows = data.segments.flatMap((segment) => segment.rows);
-      assert.equal(rows.filter((row) => row.type === "hook").length, 9);
+      assert.equal(rows.filter((row) => row.type === "hook").length, 11);
       assert.deepEqual(
         rows
           .filter((row): row is { type: "action"; actionType: string } =>
@@ -1512,17 +1559,108 @@ describe("index owned Action delivery", () => {
           "message",
           "message",
           "message",
+          "message",
+          "message",
           "emit-custom-event",
         ],
       );
       assert.match(
         renderEntry(harness, 0, false),
-        /HooKit guarded 1 tool with 9 Hooks and requested 9 Actions in \d+ms · bash ×1/,
+        /HooKit guarded 1 tool with 11 Hooks and requested 11 Actions in \d+ms · bash ×1/,
       );
       assert.match(renderEntry(harness, 0, true), /local\/event · emit-custom-event requested · pass/);
 
       compactError?.(new Error("compact exploded"));
       assert.match(String(calls.at(-1)?.value), /compact exploded/);
+    });
+  });
+
+  it("honors custom triggerTurn only when the agent is idle", async () => {
+    await withTemporaryHome("HooKit-index-idle-messages-", async (root) => {
+      const path = projectFilePath(root);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({
+        local: {
+          passive: {
+            description: "append context without starting work",
+            event: "agent_settled",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "passive context",
+              delivery: "steer",
+            },
+            default: true,
+          },
+          active: {
+            description: "start idle work",
+            event: "agent_settled",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "continue now",
+              delivery: "followUp",
+              sendAs: "custom",
+              triggerTurn: true,
+            },
+            default: true,
+          },
+          deferred: {
+            description: "wait for external input",
+            event: "agent_settled",
+            action: {
+              type: "message",
+              outcome: "pass",
+              message: "next prompt context",
+              delivery: "nextTurn",
+              sendAs: "custom",
+            },
+            default: true,
+          },
+        },
+      }));
+
+      const deliveries: unknown[] = [];
+      const ctx = {
+        cwd: root,
+        hasUI: true,
+        isProjectTrusted: () => true,
+        isIdle: () => true,
+        sessionManager: { getBranch: () => [] },
+        ui: {
+          theme: { fg: (_color: string, text: string) => text },
+          setStatus: () => {},
+          notify: () => {},
+        },
+      } as unknown as ExtensionContext;
+      const harness = extensionHarness();
+      (harness.pi as unknown as {
+        sendMessage: (message: unknown, options: unknown) => void;
+      }).sendMessage = (message, options) => {
+        deliveries.push({ message, options });
+      };
+      registerExtension(harness.pi);
+      await harness.handler("session_start")(
+        { type: "session_start", reason: "startup" },
+        ctx,
+      );
+
+      await harness.handler("agent_settled")({}, ctx);
+
+      assert.deepEqual(deliveries, [
+        {
+          message: { customType: "hookit", content: "passive context", display: true },
+          options: { deliverAs: "steer", triggerTurn: false },
+        },
+        {
+          message: { customType: "hookit", content: "continue now", display: true },
+          options: { deliverAs: "followUp", triggerTurn: true },
+        },
+        {
+          message: { customType: "hookit", content: "next prompt context", display: true },
+          options: { deliverAs: "nextTurn", triggerTurn: false },
+        },
+      ]);
     });
   });
 
@@ -1546,6 +1684,7 @@ describe("index owned Action delivery", () => {
               outcome: "pass",
               message: "x",
               delivery: "steer",
+              sendAs: "user",
             },
             default: true,
           },
@@ -1575,7 +1714,7 @@ describe("index owned Action delivery", () => {
         },
       } as unknown as ExtensionContext;
       const harness = extensionHarness();
-      (harness.pi as unknown as { sendMessage: () => void }).sendMessage = () => {
+      (harness.pi as unknown as { sendUserMessage: () => void }).sendUserMessage = () => {
         throw new Error("message failed");
       };
       (harness.pi as unknown as {

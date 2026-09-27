@@ -895,8 +895,9 @@ describe("owned Action evaluation", () => {
         hook("not-run", "tool_call", "true"),
         hookWithAction("message", "tool_call", {
           type: "message",
-          message: "blocked",
+          message: "/skill:review blocked call",
           delivery: "followUp",
+          sendAs: "user",
         }),
         hookWithAction("miss", "tool_call", { type: "interrupt" }, {
           filter: { toolName: "^read$" },
@@ -914,6 +915,13 @@ describe("owned Action evaluation", () => {
       "local/message",
       "local/interrupt",
     ]);
+    assert.deepEqual(effects[0]?.action, {
+      type: "message",
+      message: "/skill:review blocked call",
+      delivery: "followUp",
+      sendAs: "user",
+    }, "the immutable Action Request keeps delivery data and strips selectors");
+    assert.ok(Object.isFrozen(effects[0]?.action));
     assert.deepEqual(
       actionRows(result.evaluationReport).map((request) => ({
         ref: request.hookRef,
@@ -923,6 +931,11 @@ describe("owned Action evaluation", () => {
         { ref: "local/message", type: "message" },
         { ref: "local/interrupt", type: "interrupt" },
       ],
+    );
+    assert.deepEqual(
+      Object.keys(actionRows(result.evaluationReport)[0]!).sort(),
+      ["actionType", "hookRef", "outcome", "type"],
+      "report rows stay bounded and omit message delivery payloads",
     );
     assert.ok(Object.isFrozen(result.evaluationReport?.rows));
   });

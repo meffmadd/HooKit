@@ -712,6 +712,7 @@
             },
             {
               "type": "object",
+              "description": "A static custom-context or genuine user message delivered by Pi.",
               "required": [
                 "type",
                 "outcome",
@@ -729,7 +730,9 @@
                   "$ref": "#/$defs/codeSelector"
                 },
                 "message": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "\\S",
+                  "description": "Static message text containing at least one non-whitespace character. The original string is delivered unchanged."
                 },
                 "delivery": {
                   "type": "string",
@@ -737,27 +740,69 @@
                     "steer",
                     "followUp",
                     "nextTurn"
-                  ]
+                  ],
+                  "description": "Queue position. User messages support only steer and followUp."
+                },
+                "sendAs": {
+                  "type": "string",
+                  "enum": [
+                    "custom",
+                    "user"
+                  ],
+                  "default": "custom",
+                  "description": "Deliver as Pi custom context or as a genuine user message with normal input processing. Omission behaves as custom."
                 },
                 "triggerTurn": {
                   "type": "boolean",
-                  "default": false
+                  "default": false,
+                  "description": "Whether custom delivery starts an idle agent. Forbidden for user messages and ineffective with nextTurn."
                 }
               },
-              "not": {
-                "properties": {
-                  "delivery": {
-                    "const": "nextTurn"
-                  },
-                  "triggerTurn": {
-                    "const": true
+              "allOf": [
+                {
+                  "not": {
+                    "properties": {
+                      "delivery": {
+                        "const": "nextTurn"
+                      },
+                      "triggerTurn": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "delivery",
+                      "triggerTurn"
+                    ]
                   }
                 },
-                "required": [
-                  "delivery",
-                  "triggerTurn"
-                ]
-              },
+                {
+                  "if": {
+                    "properties": {
+                      "sendAs": {
+                        "const": "user"
+                      }
+                    },
+                    "required": [
+                      "sendAs"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "delivery": {
+                        "enum": [
+                          "steer",
+                          "followUp"
+                        ]
+                      }
+                    },
+                    "not": {
+                      "required": [
+                        "triggerTurn"
+                      ]
+                    }
+                  }
+                }
+              ],
               "additionalProperties": false
             },
             {

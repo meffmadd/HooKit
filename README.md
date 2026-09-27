@@ -42,7 +42,8 @@ JSON configuration example is validated against it.
         "outcome": "block",
         "code": 1,
         "message": "A dotenv write was blocked by HooKit.",
-        "delivery": "followUp"
+        "delivery": "followUp",
+        "sendAs": "custom"
       },
       "default": true
     }

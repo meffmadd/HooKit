@@ -15,8 +15,9 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   translates the first Event Outcome in each Hook Evaluation Outcome into
   Pi callbacks, and delivers ordered Effects best-effort without changing
   Event Outcomes when delivery fails. It maps delivery-neutral Action Requests
-  onto ordinary
-  Pi context/API operations; it owns no catalog or hook policy.
+  onto ordinary Pi context/API operations, including custom-message active/idle
+  continuation policy and genuine user messages with Pi input processing; it
+  owns no catalog or hook policy.
 - **`hookit/hook-catalog/`** — the session-scoped deep Hook Catalog
   module. Its facade exposes immutable `HookCatalog` snapshots, entries
   without storage paths, explicit `{ source, name }` identities, structured
@@ -210,8 +211,11 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   sequentially and aggregate failures. Unexpected per-Hook errors fail the
   event closed without stopping siblings and invent no result or Action.
 - The thin adapter maps Effects to `ctx.abort`, `ctx.shutdown`, `ctx.compact`,
-  HooKit custom messages, or `pi.events.emit` and delivers them in order,
-  best-effort, without changing Event Outcomes. Only the first Native Event
+  HooKit custom messages, genuine Pi user messages, or `pi.events.emit` and
+  delivers them in order, best-effort, without changing Event Outcomes. User
+  messages opt into Pi input processing; active custom `steer`/`followUp`
+  delivery requests continuation independently of idle `triggerTurn`, while
+  custom `nextTurn` remains deferred. Only the first Native Event
   Outcome has Pi control authority; reactive Event Outcomes remain observable.
 - Lifecycle adapters expose bounded scalar candidates through both Filters and
   JSON `PI_EVENT_PAYLOAD`; rich Native Event objects are intentionally deferred.

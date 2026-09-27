@@ -29,6 +29,7 @@ const ACTION_KEYS: Readonly<Record<Action["type"], ReadonlySet<string>>> = {
     "code",
     "message",
     "delivery",
+    "sendAs",
     "triggerTurn",
   ]),
   "emit-custom-event": new Set(["type", "outcome", "code", "name", "data"]),
@@ -186,13 +187,21 @@ function validAction(value: unknown, event: Event): value is Action {
       return value.interrupt === undefined || typeof value.interrupt === "boolean";
     case "compact":
       return value.instructions === undefined || typeof value.instructions === "string";
-    case "message":
-      return typeof value.message === "string" &&
+    case "message": {
+      if (typeof value.message !== "string" || value.message.trim().length === 0) {
+        return false;
+      }
+      if (value.sendAs === "user") {
+        return (value.delivery === "steer" || value.delivery === "followUp") &&
+          value.triggerTurn === undefined;
+      }
+      return (value.sendAs === undefined || value.sendAs === "custom") &&
         (value.delivery === "steer" ||
           value.delivery === "followUp" ||
           value.delivery === "nextTurn") &&
         (value.triggerTurn === undefined || typeof value.triggerTurn === "boolean") &&
         !(value.delivery === "nextTurn" && value.triggerTurn === true);
+    }
     case "emit-custom-event":
       return typeof value.name === "string" && value.name.trim().length > 0 &&
         (value.data === undefined || validJsonValue(value.data));
