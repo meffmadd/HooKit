@@ -13,6 +13,15 @@ transcript. There are two concepts to keep straight:
   one transcript entry for one non-tool Evaluation Report, or for **all
   Evaluation Reports in one Execution Wave**.
 
+## Runtime modes
+
+Execution Report creation is mode-neutral: HooKit appends custom session
+entries in TUI, RPC, JSON, and print modes. Pi owns session persistence;
+ephemeral sessions keep entries only in memory. Collapsed summaries, expansion
+controls, and per-tool breakdown rendering are TUI-only. Headless runs retain
+report data, not HooKit's terminal presentation. See
+[Runtime modes](/reference/runtime-modes) for raw-entry observability.
+
 ## When a report appears
 
 An Evaluation Report is absent when no main Hook shell starts and no Action is

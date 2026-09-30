@@ -1140,6 +1140,15 @@ export function registerHooksCommand(
   pi.registerCommand("hooks", {
     description: "Enable / disable Hooks and Presets",
     handler: async (_args, ctx) => {
+      // RPC hasUI is true, but custom panels require the interactive TUI.
+      // Return before refreshing the Catalog or changing session enablement.
+      if (ctx.mode !== "tui") {
+        if (ctx.mode === "rpc") {
+          ctx.ui.notify("hookit: /hooks requires Pi TUI mode.", "error");
+        }
+        return;
+      }
+
       const trustAware = ctx as ExtensionContext & {
         isProjectTrusted?: () => boolean;
       };

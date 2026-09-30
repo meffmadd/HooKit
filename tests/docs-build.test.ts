@@ -74,6 +74,7 @@ const EXPECTED_ROUTES: Record<string, string> = {
   "/reference/configuration/preset/": "reference/configuration/preset/index.html",
   "/reference/configuration/presets-sources/": "reference/configuration/presets-sources/index.html",
   "/reference/hooks-panel/": "reference/hooks-panel/index.html",
+  "/reference/runtime-modes/": "reference/runtime-modes/index.html",
   "/reference/events/": "reference/events/index.html",
   "/reference/shell-environment/": "reference/shell-environment/index.html",
   "/reference/execution-report/": "reference/execution-report/index.html",
@@ -102,6 +103,18 @@ describe("documentation site build", () => {
         `route ${route} should publish ${artifact}`,
       );
     }
+  });
+
+  it("links the TUI management contract to the runtime-mode reference", () => {
+    for (const page of ["reference/hooks-panel", "reference/execution-report", "getting-started/installation"]) {
+      const html = readFileSync(join(distDir, page, "index.html"), "utf8");
+      assert.ok(
+        html.includes(`href="${pagesPath("/reference/runtime-modes")}"`),
+        `${page} should link to the runtime-mode contract`,
+      );
+    }
+    const modes = readFileSync(join(distDir, "reference/runtime-modes/index.html"), "utf8");
+    assert.ok(modes.includes(`href="${pagesPath("/reference/hooks-panel")}"`));
   });
 
   it("preserves moved Reference URLs as redirects", () => {

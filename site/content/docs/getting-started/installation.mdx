@@ -52,14 +52,17 @@ does not sandbox the extension or Hook shells.
 
 ## Verify the extension
 
-Open a Pi session where the installation applies. For a project installation,
-trust the project when Pi asks. Then run:
+Open an interactive Pi TUI where the installation applies by running `pi` in
+a terminal without `--mode rpc`, `--mode json`, or `--print`. For a project
+installation, trust the project when Pi asks. Then run:
 
 ```text
 /hooks
 ```
 
-The Hook Catalog panel should open. If `/hooks` is unknown, check `pi list`,
+The Hook Catalog panel should open. `/hooks` management requires the TUI;
+Hook Evaluation also works in [headless runtime modes](/reference/runtime-modes).
+If `/hooks` is unknown, check `pi list`,
 confirm that the package is installed in the intended user or project scope,
 and restart Pi.
 

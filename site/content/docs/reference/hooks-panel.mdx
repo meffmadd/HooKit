@@ -3,9 +3,12 @@ title: /hooks panel
 description: Navigation, enablement, installation, defaults, Presets, and removal.
 ---
 
-`/hooks` opens the session Hook Catalog panel. It shows Catalog Entries grouped
-by Source, their direct or Preset-derived enablement, persisted default
-preference, and contextual actions for the focused row.
+`/hooks` opens the session Hook Catalog panel **only in Pi's interactive TUI**.
+It shows Catalog Entries grouped by Source, their direct or Preset-derived
+enablement, persisted default preference, and contextual actions for the
+focused row. RPC receives one notification that TUI mode is required; JSON
+and print modes return silently. No non-TUI invocation changes the Catalog or
+session enablement. See [Runtime modes](/reference/runtime-modes).
 
 Installation and new-Preset creation target project storage, so they require a
 trusted project and a valid Catalog. Other entry mutations write the authorized

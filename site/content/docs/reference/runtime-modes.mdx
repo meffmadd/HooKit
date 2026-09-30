@@ -1,0 +1,76 @@
+---
+title: Runtime modes
+description: HooKit policy, management, and presentation in TUI, RPC, JSON, and print modes.
+---
+
+HooKit loads in every Pi runtime mode. Hook Evaluation and Pi control behavior
+are mode-neutral; interactive Hook Catalog management is TUI-only. This
+contract applies to the supported Pi version floor, **0.84.2**, and later.
+
+## Mode matrix
+
+| Behavior | TUI (`tui`) | RPC (`rpc`) | JSON (`json`) | Print (`print`) |
+|---|---|---|---|---|
+| Hook Catalog loading and saved direct enablement restoration | Yes | Yes | Yes | Yes |
+| Enabled Hooks, Hook Evaluation, Event Outcomes, and ordered best-effort Effects | Yes | Yes | Yes | Yes |
+| `tool_call` blocks, `tool_result` patches, and cancellable session changes | Yes | Yes | Yes | Yes |
+| `/hooks` management | Complete panel | One error notification; returns | Returns silently | Returns silently |
+| `PI_MODE` in Hook shells | `tui` | `rpc` | `json` | `print` |
+| Notifications and status updates | Terminal UI | Pi extension UI protocol; client controls display | No UI | No UI |
+| Execution Report creation | Yes | Yes | Yes | Yes |
+| HooKit's collapsed/expanded Execution Report renderer | Yes | No | No | No |
+
+Event behavior applies when Pi emits the corresponding Event in that mode.
+Saved direct enablement, including an empty set, overrides Catalog defaults in
+all modes. Without saved enablement, HooKit derives the Enabled Hook Set from
+current defaults. See [Presets and sources](/reference/configuration/presets-sources).
+
+## `/hooks` management command
+
+The command remains registered in every mode. Only `ctx.mode === "tui"` opens
+the [Hook Catalog panel](/reference/hooks-panel), including its installation,
+Preset creation/editing, search, enablement, default, and removal workflows.
+
+In RPC mode, `/hooks` emits exactly one fire-and-forget Pi
+`extension_ui_request` with `method: "notify"`, `notifyType: "error"`, and the
+message:
+
+```text
+hookit: /hooks requires Pi TUI mode.
+```
+
+No `extension_ui_response` is required. There is no reduced RPC manager or
+HooKit-specific management transport. JSON and print modes return without
+notification or custom UI. In all three non-TUI modes, the command does not
+refresh or mutate the Hook Catalog, change enablement, or persist enablement.
+
+Pi reports `ctx.hasUI === true` in RPC because its standard dialogs and
+notifications use the extension UI protocol. That does not provide terminal
+components: `ctx.ui.custom()` returns `undefined`. The management policy uses
+`ctx.mode`, not `ctx.hasUI`.
+
+## Policy and presentation
+
+The management restriction does not gate Hook Evaluation, Native Event
+Outcome translation, or Action Request delivery. Hooks can distinguish modes
+through [`PI_MODE`](/reference/shell-environment).
+
+Notifications and status text have no terminal presentation in JSON or print
+mode. RPC clients may display or ignore Pi's notification and status requests.
+Presentation Effects remain best-effort: unavailable UI or a failed delivery
+cannot change an Event Outcome or prevent later ordered Effects from being
+attempted. Action Requests continue to use ordinary Pi APIs rather than a
+separate headless implementation.
+
+## Execution Reports
+
+[Execution Reports](/reference/execution-report) are appended as bounded,
+context-neutral custom session entries in every mode, subject to the same
+report and complete-tool-lifecycle rules. Session persistence is owned by Pi;
+`--no-session` keeps entries in memory rather than writing a session file.
+
+Only the TUI uses HooKit's renderer, expansion binding, and per-tool breakdown.
+RPC clients can inspect raw entries through Pi's `get_entries` command and
+`entry_appended` events. JSON runs can emit raw `entry_appended` events; print
+output does not display HooKit's report UI. Durable report creation does not
+imply terminal rendering or a HooKit-specific RPC view.

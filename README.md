@@ -6,7 +6,8 @@ HooKit applies user-configured **Hooks** to Pi **Events** — a policy that
 subscribes to a tool call, a finished turn, or a settled agent, runs a shell
 decision, and may own one outcome-selected Pi **Action**. Configuration lives
 in `.pi/hookit.json`; `/hooks` manages installation, enablement, defaults,
-Presets, and search.
+Presets, and search in Pi's interactive TUI. Hook Evaluation also works in
+[RPC, JSON, and print modes](site/content/docs/reference/runtime-modes.mdx).
 
 ## The documentation
 
@@ -51,7 +52,8 @@ JSON configuration example is validated against it.
 }
 ```
 
-Open `/hooks`, focus `protect-env`, and press `Enter` to enable it. The
+In an interactive Pi TUI, open `/hooks`, focus `protect-env`, and press `Enter`
+to toggle its enablement.
 Follow [Installation](site/content/docs/getting-started/installation.mdx), then
 [Write a hook](site/content/docs/getting-started/first-hook.mdx) for a complete
 Hook with an expected result at every step.

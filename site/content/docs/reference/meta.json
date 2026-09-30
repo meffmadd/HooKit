@@ -4,6 +4,7 @@
     "configuration",
     "events",
     "hooks-panel",
+    "runtime-modes",
     "shell-environment",
     "execution-report",
     "glossary"

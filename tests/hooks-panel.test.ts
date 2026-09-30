@@ -1220,6 +1220,7 @@ describe("HooksPanel fuzzy search", () => {
     const rows = 24;
     const ctx = {
       cwd: "/tmp",
+      mode: "tui",
       isProjectTrusted: () => false,
       ui: {
         theme: mockTheme(),
@@ -3071,6 +3072,7 @@ describe("HooksPanel M3: source-qualified catalog mutations", () => {
     let stepIndex = 0;
     const ctx = {
       cwd,
+      mode: "tui",
       isProjectTrusted: () => state.projectTrusted,
       ui: {
         theme: mockTheme(),

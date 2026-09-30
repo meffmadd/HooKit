@@ -8,6 +8,16 @@ description: Define Hooks with outcome-selected Pi Actions for tool calls, resul
 Use `.pi/hookit.json` for project policies and `~/.pi/agent/hookit.json` for
 global policies. Project storage is used only after Pi trusts the project.
 
+## Runtime modes
+
+Hook Evaluation, Event Outcome control, Effects, and saved enablement work in
+TUI, RPC, JSON, and print modes. `PI_MODE` reports the actual mode to Hook
+shells. `/hooks` management requires an interactive Pi TUI: RPC receives one
+error notification (`hookit: /hooks requires Pi TUI mode.`); JSON and print
+return silently. Non-TUI invocations do not refresh or mutate the Catalog or
+session enablement. Execution Reports are created in every mode, but HooKit's
+collapsed/expanded report rendering is TUI-only.
+
 ## Hook shape
 
 Every executable entry is one Hook. It requires `description`, `event`, and

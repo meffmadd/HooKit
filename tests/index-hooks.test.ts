@@ -8,6 +8,7 @@ import {
   type EntryRenderer,
   type ExtensionAPI,
   type ExtensionContext,
+  type RegisteredCommand,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
@@ -32,11 +33,13 @@ interface ExtensionHarness {
   entries: CapturedEntry[];
   messages: Array<{ content: string }>;
   handler: (event: string) => EventHandler;
+  command: (name: string) => RegisteredCommand["handler"];
   renderer: (customType: string) => EntryRenderer<unknown>;
 }
 
 function extensionHarness(): ExtensionHarness {
   const handlers = new Map<string, EventHandler[]>();
+  const commands = new Map<string, RegisteredCommand["handler"]>();
   const renderers = new Map<string, EntryRenderer<unknown>>();
   const entries: CapturedEntry[] = [];
   const messages: Array<{ content: string }> = [];
@@ -46,7 +49,9 @@ function extensionHarness(): ExtensionHarness {
       registered.push(handler);
       handlers.set(event, registered);
     },
-    registerCommand() {},
+    registerCommand(name: string, command: RegisteredCommand) {
+      commands.set(name, command.handler);
+    },
     registerEntryRenderer(
       customType: string,
       renderer: EntryRenderer<unknown>,
@@ -70,6 +75,11 @@ function extensionHarness(): ExtensionHarness {
       const registered = handlers.get(event);
       assert.ok(registered?.length, `missing ${event} handler`);
       return registered[0];
+    },
+    command(name: string): RegisteredCommand["handler"] {
+      const handler = commands.get(name);
+      assert.ok(handler, `missing /${name} command`);
+      return handler;
     },
     renderer(customType: string): EntryRenderer<unknown> {
       const renderer = renderers.get(customType);
@@ -207,6 +217,97 @@ async function withTemporaryHome(
 describe("config storage paths", () => {
   it("keeps the global hook config in Pi's agent directory", () => {
     assert.equal(globalFilePath(), join(getAgentDir(), "hookit.json"));
+  });
+});
+
+describe("/hooks runtime modes", () => {
+  for (const mode of ["rpc", "json", "print"] as const) {
+    it(`in ${mode} returns without custom UI, catalog refresh, or enablement changes`, async () => {
+      await withTemporaryHome(`HooKit-command-${mode}-`, async (root) => {
+        const notifications: Array<{ message: string; type?: string }> = [];
+        let customCalls = 0;
+        const ctx = {
+          ...catalogCtx(root),
+          mode,
+          hasUI: mode === "rpc",
+          sessionManager: {
+            getBranch: () => [{
+              type: "custom",
+              customType: "hookit-config",
+              data: { enabledEntries: ["local\x00saved"] },
+            }],
+          },
+          ui: {
+            theme: renderTheme,
+            setStatus() {},
+            notify(message: string, type?: string) {
+              notifications.push({ message, type });
+            },
+            async custom() {
+              customCalls++;
+              return undefined; // Pi's actual non-TUI degradation
+            },
+          },
+        } as unknown as Parameters<RegisteredCommand["handler"]>[1];
+        const harness = extensionHarness();
+        await startSession(harness, ctx, {
+          local: {
+            saved: {
+              description: "saved guard",
+              event: "tool_call",
+              shell: `test "$PI_MODE" != ${mode}`,
+            },
+            ignoredDefault: {
+              description: "default must not override saved enablement",
+              event: "tool_call",
+              shell: "false",
+              default: true,
+            },
+          },
+        }, "resume");
+        notifications.length = 0;
+        // An unsupported command must not re-read even invalid on-disk storage.
+        writeFileSync(projectFilePath(root), "invalid catalog");
+
+        await harness.command("hooks")("", ctx);
+
+        assert.equal(customCalls, 0);
+        assert.deepEqual(notifications, mode === "rpc" ? [{
+          message: "hookit: /hooks requires Pi TUI mode.",
+          type: "error",
+        }] : []);
+        assert.deepEqual(harness.entries, [], "no enablement persistence");
+        assert.equal(readFileSync(projectFilePath(root), "utf8"), "invalid catalog");
+        assert.deepEqual(
+          await harness.handler("tool_call")(toolCallEvent("bash", "after-command"), ctx),
+          { block: true, reason: `hookit: hook "saved" rejected bash — \`test "$PI_MODE" != ${mode}\`` },
+          "saved enablement and PI_MODE still enforce the known-good Catalog",
+        );
+      });
+    });
+  }
+
+  it("in TUI still opens the Hook Catalog panel", async () => {
+    await withTemporaryHome("HooKit-command-tui-", async (root) => {
+      let customCalls = 0;
+      const ctx = {
+        ...catalogCtx(root),
+        mode: "tui",
+        ui: {
+          ...catalogCtx(root).ui,
+          async custom() {
+            customCalls++;
+            return null; // user closes the panel
+          },
+        },
+      } as unknown as Parameters<RegisteredCommand["handler"]>[1];
+      const harness = extensionHarness();
+      await startSession(harness, ctx, {});
+
+      await harness.command("hooks")("", ctx);
+
+      assert.equal(customCalls, 1);
+    });
   });
 });
 
