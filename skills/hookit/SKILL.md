@@ -1,266 +1,47 @@
 ---
 name: hookit
-description: Define Hooks with outcome-selected Pi Actions for tool calls, results, turns, settled agents, and cancellable session changes.
+description: Help with HooKit installation, Hook and Preset authoring, configuration, Events, Actions, enablement, management, reports, security, and troubleshooting in Pi.
 ---
 
 # HooKit
 
-Use `.pi/hookit.json` for project policies and `~/.pi/agent/hookit.json` for
-global policies. Project storage is used only after Pi trusts the project.
+HooKit applies configured Hooks to Pi Events and requests outcome-selected Pi
+Actions. **Read the relevant references below before answering questions,
+authoring Hooks, or diagnosing behavior.** Do not guess the contract from an
+example alone.
 
-## Runtime modes
+Resolve every path relative to the directory containing this `SKILL.md`, not
+the user's working directory. The bundled Markdown and [JSON Schema](../../schema.json)
+belong to this installed release and work offline. Prefer them over the live
+website or default-branch documentation, which may describe another version.
+No documentation server, repository checkout, or MDX renderer is needed.
 
-Hook Evaluation, Event Outcome control, Effects, and saved enablement work in
-TUI, RPC, JSON, and print modes. `PI_MODE` reports the actual mode to Hook
-shells. `/hooks` management requires an interactive Pi TUI: RPC receives one
-error notification (`hookit: /hooks requires Pi TUI mode.`); JSON and print
-return silently. Non-TUI invocations do not refresh or mutate the Catalog or
-session enablement. Execution Reports are created in every mode, but HooKit's
-collapsed/expanded report rendering is TUI-only.
+## Task → references to read
 
-## Hook shape
+| Task | Local references |
+|---|---|
+| Install and verify HooKit in the intended session | [Installation](references/getting-started/installation.md), [runtime modes](references/reference/runtime-modes.md) |
+| Create, load, enable, and test a Hook; safely extend existing configuration | [Write a hook](references/getting-started/first-hook.md), [add a Hook](references/getting-started/authoring.md), [configuration](references/reference/configuration/index.md) |
+| Look up Hook/Preset fields and validate configuration | [Configuration](references/reference/configuration/index.md), [Preset fields](references/reference/configuration/preset.md), [schema guidance](references/reference/configuration/schema.md), [release schema](../../schema.json) |
+| Choose an Event, understand failure, or react to Hook Results | [Events](references/reference/events.md), [Hook Result Event](references/reference/events.md#hook-result-event), [evaluation ordering](references/reference/events.md#evaluation-order) |
+| Match Event data or gate a Hook | [Filters and all candidates](references/reference/configuration/filter.md), [Preconditions](references/reference/configuration/when.md), [shell semantics](references/reference/configuration/shell.md) |
+| Read Event/session data in a shell | [Shell environment and formats](references/reference/shell-environment.md) |
+| Select Actions or control message delivery and continuation | [Actions](references/reference/configuration/action.md), [message delivery](references/reference/configuration/action.md#message-delivery) |
+| Explain individual Hook Outcomes vs aggregate Event Outcomes | [Hook Evaluation](references/concepts/evaluation.md), [composition](references/concepts/composition.md) |
+| Diagnose defaults, saved enablement, Preset members, trust, Sources, or merging | [Presets and sources](references/reference/configuration/presets-sources.md), [defaults](references/reference/configuration/default.md), [security](references/concepts/security.md) |
+| Install, update, remove, search, or edit local Presets | [The /hooks panel](references/reference/hooks-panel.md) |
+| Discover opt-in Core and Extras policies | [Hook library](references/getting-started/library.md) |
+| Inspect execution in interactive or headless sessions | [Execution Reports](references/reference/execution-report.md), [runtime modes](references/reference/runtime-modes.md) |
+| Fix a missing, skipped, failing, or looping Hook | [Troubleshooting](references/getting-started/troubleshooting.md), then the relevant contract above |
+| Resolve domain vocabulary or browse all topics | [Glossary](references/reference/glossary.md), [documentation index](references/index.md) |
 
-Every executable entry is one Hook. It requires `description`, `event`, and
-at least one of `shell` or `action`. It may contain both. Optional fields are
-`filter`, `when`, and `default`.
+## Critical warnings
 
-When `shell` is omitted, HooKit normalizes it to the canonical command
-`"true"`. Boolean shell values and inert entries with neither shell nor Action
-are invalid. Exact `"true"` and `"false"` in `shell` or `when` avoid spawning a
-subprocess; only those exact strings are optimized. Other strings run through
-`/bin/sh`, so pipes, redirects, `&&`, and `||` work normally.
-
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json",
-  "local": {
-    "block-dangerous-rm": {
-      "description": "Block dangerous recursive removal",
-      "event": "tool_call",
-      "filter": {
-        "toolName": "^bash$",
-        "command": "(^|[;&|\\s])rm\\s+-rf(\\s|$)"
-      },
-      "shell": "false",
-      "action": {
-        "type": "message",
-        "outcome": "block",
-        "code": 1,
-        "message": "HooKit blocked a dangerous removal command.",
-        "delivery": "followUp",
-        "sendAs": "custom"
-      },
-      "default": true
-    },
-    "notify-on-settled": {
-      "description": "Emit an extension event whenever settling is allowed",
-      "event": "agent_settled",
-      "action": {
-        "type": "emit-custom-event",
-        "outcome": "pass",
-        "name": "example:agent-settled"
-      }
-    }
-  }
-}
-```
-
-## Enablement
-
-Hooks and Presets can both be enabled directly. Direct Source-plus-name choices
-are stored as `enabledEntries` in the current session branch. With no saved
-choice, current `default: true` entries are enabled; a saved set, including an
-empty set, overrides defaults on resume, reload, tree navigation, fork, and
-clone. An enabled Preset stays enabled when references dangle and enables every
-available member. The derived Enabled Hook Set is immutable, ordered by first
-occurrence, and never contains the same Hook twice across direct and Preset
-paths.
-
-## Hook Outcomes and Event Outcomes
-
-- `tool_call`: `pass` / `block`
-- `tool_result`: `pass` / `patch`
-- `turn_end`, `agent_end`, `agent_settled`: `pass` / `report`
-- `session_before_switch`, `session_before_fork`: `pass` / `cancel`
-- Hook Result Event `hook_result`: `pass` / `report`
-
-Tool Events run every matching Hook sequentially and aggregate all Hook
-Outcomes into one block or patch Event Outcome. Lifecycle and session Events
-aggregate too. An owned Action selects only its owner's Hook Outcome and code,
-not the Event Outcome. A pass Action can therefore run even when a sibling
-fails.
-
-Evaluation order is event/filter → `when` → effective shell → immutable Hook
-Result → owned Action → `hook_result` Hooks. A filter miss or ordinary
-non-zero `when` produces no result or Action. Timeout, abort, or spawn failure
-uses code `null` and fails closed. Already-aborted `turn_end` and `agent_end`
-Hooks are skipped before traversal.
-
-## Filters
-
-Filters are implicit AND. Strings are JavaScript regular-expression sources;
-use `^...$` for exact matching. Numbers, booleans, and `null` match strictly.
-Arrays are any-of. Dot-separated keys resolve nested tool input fields.
-
-Tool candidates contain `{ ...event.input, toolName }`. Lifecycle candidates
-contain `event` plus documented bounded scalar metadata. `hook_result` filters
-are limited to `event`, `hookRef`, `invocationId`, `outcome`, and `code`; identity
-fields use regex matching while outcome/code match exactly.
-
-`when` is a shell precondition. Ordinary non-zero means “not applicable” and
-skips the Hook. A passing precondition and main shell share one
-`PI_HOOK_INVOCATION_ID`.
-
-## Owned Actions
-
-An Action is optional and singular. It requires `outcome`, either one canonical
-outcome or a non-empty list. Optional `code` is one number, `null`, or a
-non-empty list. Outcome and code are ANDed; lists are any-of. Pass uses code `0`;
-failures use non-zero or `null`. Invalid event/outcome/code combinations are
-rejected.
-
-Supported payloads:
-
-- `interrupt`
-- `shutdown`, optional `interrupt`
-- `compact`, optional static `instructions`
-- `message`, with a static non-whitespace `message`, `delivery`, and optional
-  `sendAs`:
-  - omitted `sendAs` or `sendAs: "custom"`: `steer`, `followUp`, or `nextTurn`;
-    optional `triggerTurn` defaults to `false`, and `nextTurn` forbids `true`
-  - `sendAs: "user"`: only `steer` or `followUp`; `triggerTurn` is forbidden
-- `emit-custom-event`, with non-empty `name` and optional JSON `data`
-
-Selectors are removed from the Action Request Effect. Payload text/data is
-static: there is no environment, Event, shell-output, or HooKit template
-interpolation. Effect delivery is ordered and best-effort and cannot alter any
-already-frozen Event Outcome. Multiple message Actions remain distinct; Pi
-owns steering/follow-up batching.
-
-Custom `steer` and `followUp` request their queue positions while Pi is active
-regardless of `triggerTurn`; when Pi is idle, `triggerTurn` alone controls
-whether they start work. Custom `nextTurn` waits for a later external prompt.
-After a tool Event, `steer` means after the current assistant tool batch and
-before the next model call, not immediately after one parallel tool finishes.
-
-A user message is a genuine user-role message and always starts or continues
-execution. HooKit enables Pi's normal programmatic input processing, so the
-`input` middleware sees extension provenance and Pi can dispatch extension
-commands or expand Skill commands and prompt templates. Unknown input remains
-literal according to Pi. A recognized extension command may run immediately
-before Pi applies `steer`/`followUp`; interactive-only built-in commands that
-`sendUserMessage` does not expose remain unsupported. Do not add an attribution
-prefix before a leading slash command.
-
-Generated user work can produce later Events and select the same Action again.
-There is no HooKit loop guard, cooldown, or deduplication. Narrow with Filters,
-Preconditions, shells, or external state. In particular, an unconditional user
-message on `agent_settled` creates an endless continuation loop.
-
-To request an unconditional Action after a Native Event, omit shell and select `pass`.
-It remains one Hook, runs as optimized canonical `true`, counts as a normal
-command, and emits an ordinary `hook_result` event.
-
-## `hook_result`
-
-Use `hook_result` for cross-cutting or reusable reactions. Narrow by
-source-qualified ref whenever possible:
-
-```json
-{
-  "local": {
-    "audit-guard-results": {
-      "description": "Audit failures from the destructive-rm policy",
-      "event": "hook_result",
-      "filter": {
-        "hookRef": "^local/block-dangerous-rm$",
-        "outcome": "block",
-        "code": [1, null]
-      },
-      "shell": "./scripts/audit-guard-result.sh",
-      "action": {
-        "type": "emit-custom-event",
-        "outcome": ["pass", "report"],
-        "name": "example:audit-finished"
-      }
-    }
-  }
-}
-```
-
-For each originating Hook Result, the origin's Action is considered first, then matching
-`hook_result` Hooks in configured Enabled Hook Set order. Every origin projects
-one Hook Result Event and an explicit pass/report Event Outcome even when no
-reactive Hook matches. A matching Hook gets a local pass/report Hook Result that
-may select its own Action. That local result is never redispatched, so handling
-is bounded to one level. Hooks handling `hook_result` run detached from the
-originating abort signal and cannot mutate the frozen Native Event Outcome.
-
-`PI_EVENT_PAYLOAD` for `hook_result` is bounded to:
-
-```text
-{ event: "hook_result", hookRef, invocationId, outcome, code }
-```
-
-## Shell environment
-
-Reached preconditions and shells receive:
-
-- `PI_HOOK_REF`, `PI_HOOK_EVENT`, `PI_HOOK_INVOCATION_ID`
-- `PI_EVENT`, `PI_CWD`
-- tool events: `PI_TOOL_NAME`, `PI_TOOL_CALL_ID`, `PI_TOOL_INPUT`, and for
-  results `PI_TOOL_RESULT` / `PI_TOOL_IS_ERROR`
-- lifecycle events: bounded JSON `PI_EVENT_PAYLOAD`
-- captured Pi session/model/provider/reasoning/trust/context metadata when
-  available
-
-Managed keys are removed from inherited ambient environment before real shells.
-A 5-second timeout bounds shell and precondition execution.
-
-## Presets and repositories
-
-Presets contain unique qualified Hook References (`local/name` or
-`owner/repo/name`). Catalog Entry names are non-empty and contain neither `/`
-nor NUL. Unresolved references remain valid and dangling; a reference resolving
-to another installed Preset makes the Catalog invalid until nesting is
-supported.
-
-```json
-{
-  "repos": ["owner/hooks"],
-  "local": {
-    "safe-defaults": {
-      "description": "Enable local and installed guards",
-      "preset": [
-        "local/block-dangerous-rm",
-        "owner/hooks/protect-secrets"
-      ],
-      "default": true
-    }
-  }
-}
-```
-
-Repository install/update canonicalizes omitted shell to `"true"`. Outdated
-comparison includes canonical shell and the owned Action but excludes local
-`default`, which updates preserve.
-
-## Reporting
-
-A Hook Evaluation returns one deeply immutable Hook Evaluation Outcome: a
-non-empty ordered `eventOutcomes` sequence (Native Event first), ordered
-Effects, and an optional Evaluation Report. Every Event that records a main
-command or requests an Action is observed; Filter misses, false Preconditions,
-and presentation/control Effects alone create no Evaluation Report.
-Consecutive Hook Evaluations for `tool_call` or `tool_result` in one Execution
-Wave contribute only their Evaluation Reports to a single bounded Execution
-Report—Event Outcomes remain separate. The report flushes at the next Event's
-entry; ordinary Events append their report immediately. Optimized commands
-count and render
-normally; preconditions do not count separately. Rows stay flat in Hook
-Evaluation order; reactive work carries an inline `from` origin annotation.
-Durable rows retain bounded Hook refs, outcomes, Action types, pass/fail state,
-and durations—not invocation IDs, message bodies, instructions, event data,
-rich Pi objects, Event Outcomes, or storage paths. Execution Duration includes
-Hook Evaluation plus every ordered best-effort Effect delivery attempt;
-incomplete tool lifecycles receive no invented duration or report.
+- **Trusted executable code, not a sandbox:** Hook shells and Preconditions run
+  with Pi's permissions. Review them before installing or enabling them.
+- **Configuration is not activation:** creating an entry or changing its
+  `default` does not necessarily enable it. Saved session enablement, even an
+  empty set, overrides defaults; verify enablement in the intended session.
+- **Continuation can loop:** user messages and other continuation Actions can
+  trigger later Events and select themselves again. There is no general loop
+  guard for user-authored Actions; make continuation self-limiting.

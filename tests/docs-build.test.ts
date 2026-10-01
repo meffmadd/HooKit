@@ -59,6 +59,8 @@ const EXPECTED_ROUTES: Record<string, string> = {
   "/getting-started/": "getting-started/index.html",
   "/getting-started/installation/": "getting-started/installation/index.html",
   "/getting-started/first-hook/": "getting-started/first-hook/index.html",
+  "/getting-started/authoring/": "getting-started/authoring/index.html",
+  "/getting-started/troubleshooting/": "getting-started/troubleshooting/index.html",
   "/getting-started/library/": "getting-started/library/index.html",
   // Reference
   "/reference/configuration/": "reference/configuration/index.html",

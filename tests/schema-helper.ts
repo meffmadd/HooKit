@@ -13,11 +13,15 @@ import Ajv from "ajv";
 const schemaPath = join(import.meta.dirname!, "..", "schema.json");
 const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
 
-const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
+/** Use the same validation mechanism with a schema from an unpacked release. */
+export function createValidator(schema: object) {
+  const ajv = new Ajv({ allErrors: true, allowUnionTypes: true });
+  return ajv.compile(schema);
+}
 
 /**
  * Compiled validator over schema.json. `validate(config)` returns a
  * boolean; after a failed call, `validate.errors` carries the Ajv
  * diagnostics for assertion messages.
  */
-export const validate = ajv.compile(schema);
+export const validate = createValidator(schema);

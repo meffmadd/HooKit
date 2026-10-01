@@ -22,7 +22,30 @@ cannot leak into a decision.
 | `PI_TOOL_INPUT` | tool Events | The tool input as JSON text. |
 | `PI_TOOL_RESULT` | `tool_result` | The tool's text content joined with newlines. |
 | `PI_TOOL_IS_ERROR` | `tool_result` | `"true"` or `"false"`. |
-| `PI_EVENT_PAYLOAD` | lifecycle Events | Bounded JSON of the lifecycle candidate. |
+| `PI_EVENT_PAYLOAD` | lifecycle Events and `hook_result` | JSON object containing exactly the bounded Event candidate fields listed below. |
+
+All environment values are strings. `PI_TOOL_INPUT` is serialized JSON, not
+shell words; quote it and parse it with a JSON parser. `PI_TOOL_RESULT` contains
+only text blocks, joined with `\n`; images and other content blocks are omitted.
+`PI_TOOL_IS_ERROR` describes the original result before HooKit's replacement.
+Unavailable or inapplicable managed fields are absent, not inherited from the
+parent and not filled with placeholder `"undefined"` or `"null"` strings.
+
+### Event payload formats
+
+| Event | `PI_EVENT_PAYLOAD` fields |
+|---|---|
+| `turn_end` | `event: "turn_end"`, numeric `turnIndex` |
+| `agent_end` | `event: "agent_end"` |
+| `agent_settled` | `event: "agent_settled"` |
+| `session_before_switch` | `event`, `reason: "new"` or `"resume"`, optional string `targetSessionFile` |
+| `session_before_fork` | `event`, string `entryId`, `position: "before"` or `"at"` |
+| `hook_result` | `event: "hook_result"`, string `hookRef`, string `invocationId`, canonical `outcome`, numeric or JSON `null` `code` |
+
+Tool Events use their `PI_TOOL_*` variables instead of `PI_EVENT_PAYLOAD`.
+For `hook_result`, the payload identifies the **originating** Hook Result;
+`PI_HOOK_REF` and `PI_HOOK_INVOCATION_ID` identify the **handler's own** Hook
+Invocation. Do not confuse those two identities.
 
 ## Captured session metadata
 
@@ -40,13 +63,28 @@ trust, and context values before evaluation:
 | `PI_REASONING_LEVEL` | Reasoning level, when the runtime exposes it. |
 | `PI_MODE` | Actual Pi mode: `tui`, `rpc`, `json`, or `print`. See [Runtime modes](/reference/runtime-modes). |
 | `PI_PROJECT_TRUSTED` | `"true"`/`"false"` when the runtime can report project trust. |
-| `PI_CONTEXT_TOKENS` | Current context token count, when reported. |
-| `PI_CONTEXT_WINDOW` | Configured context window, when reported. |
-| `PI_CONTEXT_PERCENT` | Context usage percentage, when reported. |
+| `PI_CONTEXT_TOKENS` | Current context token count as a numeric string, when reported. |
+| `PI_CONTEXT_WINDOW` | Configured context window as a numeric string, when reported. |
+| `PI_CONTEXT_PERCENT` | Context usage percentage as a numeric string (no `%` suffix), when reported. |
 
 Metadata is captured once per Evaluation from Pi's rich callback context and
 projected onto these bounded scalar names—rich callback objects are not
-exposed to shells.
+exposed to shells. Session/model/provider/reasoning values are plain strings;
+context metrics use JavaScript's `String(number)` representation of finite
+numbers. Missing session names, model data, or context usage remain absent.
+
+## Optional environment diagnostics
+
+Set `PIHOOKIT_LOG_ENV=true` in Pi's ambient environment before launch to append
+projected Event environments as JSON Lines under
+`~/.pi/agent/.hook-env-log/YYYY-MM-DD.jsonl` (the configured Pi agent directory
+is used when customized). Each record contains `ts`, `event`, and `env`.
+This is an opt-in diagnostic switch, not a managed Hook metadata key. Logging
+failures cannot change an Outcome.
+
+**Sensitive data warning:** tool inputs and results may contain credentials or
+private source text. Environment logs can disclose them; review, protect, and
+remove logs appropriately. Prefer dummy data for debugging.
 
 Example—a `tool_call` Hook that rejects a suspicious piped command:
 

@@ -43,6 +43,8 @@ jobs:
             process.exit(1);
           }
           NODE
+      # Inspection skips lifecycle scripts, so prepare explicitly from the tag.
+      - run: npm run package:prepare
       - run: npm pack --dry-run --ignore-scripts
       - name: Publish to npm
         run: npm publish --access public

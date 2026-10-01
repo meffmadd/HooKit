@@ -21,8 +21,27 @@ Optional. Points schema-aware editors at the authoritative JSON Schema for
 ```
 
 - **Type** `string` · optional · storage root
-- The Schema accepts any string; only the canonical URL shown in the example links to this
-  project's validation authority. Editors that understand JSON Schema use it
-  for autocompletion and validation.
+- The Schema accepts any string. Editors that understand JSON Schema use its
+  target for autocompletion and validation; the URL above follows the default
+  branch and may differ from an installed release.
 - Without a `$schema`, the rest of the file is still handled identically—HooKit
   validates internally regardless.
+
+## Installed-release and offline validation
+
+Every npm release includes the canonical `schema.json` unchanged beside its
+`package.json`. The bundled HooKit skill links to that local file. Use this
+schema to validate configuration against the installed runtime, without
+fetching the website or default branch.
+
+With a schema-aware editor or JSON Schema validator already available, point
+it at the installed file. An editor's `$schema` can be a relative file path,
+resolved **from your `hookit.json`**, or a local file URI supported by that
+editor. Compute the path for your user/project installation rather than copying
+someone else's absolute path. Using a local schema does not change how HooKit
+loads the file. A release-tag URL is an online alternative; the bundled copy
+is the offline authority.
+
+HooKit ships the schema, not a separate validation CLI. Schema validation
+checks record shapes; the Hook Catalog additionally checks merged Preset
+relationships and Source eligibility. See [Presets and sources](/reference/configuration/presets-sources).

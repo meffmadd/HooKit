@@ -18,6 +18,7 @@
   "files": [
     "hookit/",
     "skills/",
+    "schema.json",
     "AGENTS.md"
   ],
   "keywords": [
@@ -39,6 +40,8 @@
     ]
   },
   "scripts": {
+    "package:prepare": "node --import tsx scripts/prepare-package.ts",
+    "prepack": "npm run package:prepare",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "pretest": "npm run typecheck && npm run lint",
@@ -63,6 +66,7 @@
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/mdast": "^4.0.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "ajv": "^8.20.0",
@@ -71,13 +75,22 @@
     "eslint": "^9.39.4",
     "fumadocs-core": "^16.14.4",
     "fumadocs-ui": "^16.14.4",
+    "github-slugger": "^2.0.0",
+    "gray-matter": "^4.0.3",
+    "mdast-util-to-string": "^4.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx": "^3.1.1",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
     "sharp": "^0.35.3",
     "tailwindcss": "^4.3.3",
     "takumi-js": "^2.9.0",
     "tsx": "^4.0.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.61.0"
+    "typescript-eslint": "^8.61.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
   }
 }

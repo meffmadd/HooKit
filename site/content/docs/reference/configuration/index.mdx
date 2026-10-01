@@ -9,7 +9,10 @@ after Pi trusts the project. The **JSON Schema at
 [`meffmadd/HooKit/schema.json`](https://raw.githubusercontent.com/meffmadd/HooKit/main/schema.json)
 is the validation authority**: every designated JSON configuration example is
 validated against it, and editors that understand JSON Schema use it for
-autocompletion.
+autocompletion. Each npm release also includes that release's unchanged
+`schema.json`; use the bundled copy for installed-release and offline
+validation. The default-branch URL can describe newer behavior. See
+[schema guidance](/reference/configuration/schema).
 
 The persisted format has a top-level object with an optional `$schema`, an
 optional `repos` array, and one Section per Hook Source (`local` plus one
@@ -113,5 +116,8 @@ illustrates a boolean `shell`, which is invalid:
 
 So are an entry with neither `shell` nor `action` (inert), and an entry that
 mixes a Hook's fields with a Preset's `preset` array. If a file fails
-validation, `/hooks` reports the Catalog as broken and refuses mutations until
-the file is fixed, so your previously working session state is unaffected.
+validation during loading or refresh, `/hooks` reports the Catalog as broken,
+makes it unavailable, and clears in-memory entries and enablement. No guards
+from that Catalog run until it is repaired and loaded successfully; verify
+enablement afterward. By contrast, a rejected mutation leaves the caller's
+previously accepted Catalog and enablement unchanged.

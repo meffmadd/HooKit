@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { validate } from "./schema-helper.js";
+import { extractExamples } from "./docs-example-helper.js";
 
 // ── Discover documentation files ──────────────────────────────────
 
@@ -42,79 +43,9 @@ const docFiles: { file: string; rel: string }[] = collectMdx(docsDir).map(
 );
 docFiles.push({ file: join(repoRoot, "README.md"), rel: "README.md" });
 
-// Marker forms in MDX source and plain Markdown:
-//   {/* docs-example:valid */},            {/* docs-example:invalid */}
-//   <!-- docs-example:valid -->,           <!-- docs-example:invalid -->
-const MARKER =
-  /\{\/\*\s*docs-example:(valid|invalid)\s*\*\/\}|<!--\s*docs-example:(valid|invalid)\s*-->/;
-const JSON_FENCE = "```json";
-const CLOSE_FENCE = "```";
-
-type Example = {
-  rel: string;
-  label: string;
-  raw: string;
-  expected: boolean;
-};
-
-function extractExamples(): Example[] {
-  const examples: Example[] = [];
-  for (const { file, rel } of docFiles) {
-    const lines = readFileSync(file, "utf-8").split("\n");
-    let i = 0;
-    while (i < lines.length) {
-      const match = MARKER.exec(lines[i].trim());
-      if (match && match.index === 0) {
-        const expected = (match[1] ?? match[2]) === "valid";
-        // Find the first fenced ```json block after the marker.
-        let fence = -1;
-        for (let j = i + 1; j < lines.length; j++) {
-          const trimmed = lines[j].trim();
-          if (trimmed === JSON_FENCE) {
-            fence = j;
-            break;
-          }
-          // Stop at the next heading / marker / fence so the marker
-          // never silently swallows an unrelated far-away block.
-          if (
-            trimmed.startsWith("#") ||
-            trimmed.startsWith("```") ||
-            MARKER.test(trimmed)
-          ) break;
-        }
-        assert.notEqual(
-          fence,
-          -1,
-          `${file}: docs-example marker at line ${i + 1} has no following fenced JSON block`,
-        );
-        let end = -1;
-        for (let j = fence + 1; j < lines.length; j++) {
-          if (lines[j].trim() === CLOSE_FENCE) {
-            end = j;
-            break;
-          }
-        }
-        assert.notEqual(
-          end,
-          -1,
-          `${file}: fenced JSON block at line ${fence + 1} is unterminated`,
-        );
-        examples.push({
-          rel,
-          label: lines[i].trim(),
-          raw: lines.slice(fence + 1, end).join("\n"),
-          expected,
-        });
-        i = end + 1;
-        continue;
-      }
-      i += 1;
-    }
-  }
-  return examples;
-}
-
-const examples = extractExamples();
+const examples = docFiles.flatMap(({ file, rel }) =>
+  extractExamples(rel, readFileSync(file, "utf8")),
+);
 
 describe("documentation configuration examples validate against the JSON Schema", () => {
   it("covers the first-Hook and representative Hook/Preset/Filter/Action examples", () => {

@@ -17,8 +17,10 @@ effective identity is its source-qualified **Hook Reference**
 
 ## Canonical source eligibility
 
-A Section is valid only as `local` or one `owner/repo`. A storage whose
-`repos` array is missing may contain only `local`. Ineligible sections are
+A Section is valid only as `local` or one `owner/repo`. **Project storage**
+whose `repos` array is missing may contain only `local`; each project remote
+Section must be declared in that same file. Global canonical Sections do not
+require a `repos` declaration and are not gated by project `repos`. Ineligible sections are
 never silently filtered—they produce a Catalog failure diagnostic, and a
 failed mutation leaves your known-good Catalog and enablement unchanged.
 

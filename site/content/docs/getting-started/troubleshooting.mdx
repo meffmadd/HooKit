@@ -1,0 +1,104 @@
+---
+title: Troubleshoot a Hook
+description: Diagnose loading, enablement, applicability, failures, and continuation loops.
+---
+
+Use this guide when a configured Hook does not run, behaves unexpectedly, or
+keeps Pi working. Start at the first failing check; do not disable unrelated
+policies or replace the complete configuration with a sample.
+
+## 1. Verify HooKit and the intended scope
+
+Run `pi list`, then start Pi in the intended project. In the interactive TUI,
+`/hooks` should open the Catalog panel. If the command is unknown, confirm the
+user/project installation and restart Pi; see [Installation](/getting-started/installation).
+RPC cannot open the panel, and JSON/print ignore the command silently; use
+[runtime-mode guidance](/reference/runtime-modes) instead.
+
+If a project entry is missing, confirm the current working directory and that
+Pi trusts the project. Untrusted `.pi/hookit.json` is not read. Do not grant
+trust before reviewing its shells and Preconditions.
+
+## 2. Repair Catalog errors without losing policies
+
+Read the diagnostic and fix the named JSON or Catalog problem. Validate the
+complete file against the installed release's [schema](/reference/configuration/schema).
+Typical causes include malformed JSON, boolean `shell`, neither shell nor
+Action, unsupported fields, impossible Action selectors, invalid entry names,
+noncanonical Sources, undeclared project repository Sections, duplicate Preset
+references, or a reference resolving to another Preset.
+
+Inspect both global and trusted project configuration. Project records replace
+global records only for the same Source and name, and replace the whole record;
+fields are not combined. A failed **mutation** keeps the known-good Catalog
+and enablement rather than partly applying its candidate. A failed **load or
+refresh**, including opening `/hooks` after an invalid external edit, makes
+the Catalog unavailable and clears in-memory entries and enablement. Do not
+assume earlier guards remain active: repair the file, reload, and verify
+effective enablement before continuing. See
+[Presets and sources](/reference/configuration/presets-sources).
+
+## 3. Confirm effective enablement
+
+In `/hooks`, inspect whether the Hook is enabled directly or `via` a Preset.
+Enter toggles direct enablement; `t` changes a persisted default, not the
+current session choice. A saved set, even an empty one, overrides defaults on
+resume and reload. Turning off direct enablement does not remove a Preset's
+path; disable that Preset if you intend to remove the path too.
+
+A `§` on a Preset means a referenced Hook is unavailable. Install or correct
+the missing member; the other available members still enable. Use the
+[panel reference](/reference/hooks-panel) to inspect and manage these states.
+
+## 4. Check the actual Event, Filter, and Precondition
+
+If no Execution Report row appears, check these in order:
+
+1. Cause the configured [Event](/reference/events). Ask the model to use the
+   named tool; a terminal command or Pi `!cmd` bypasses model tool Events.
+2. Compare actual input to the Event's [Filter candidates](/reference/configuration/filter).
+   Tool Filters expose input plus `toolName`, not result text or arbitrary Pi
+   context. Every field must exist and match. Strings are JavaScript regex
+   sources; anchor exact names with `^` and `$`. Fields AND; arrays are any-of.
+3. Check `when` in the same working directory and environment as Pi. Ordinary
+   non-zero means not applicable, so there is no Hook Result, Action, or report
+   row. Do not mistake a false Precondition for a passing main shell.
+4. If a `turn_end` or `agent_end` callback was already aborted, its Hooks are
+   skipped. An incomplete tool lifecycle can also discard a pending wave's
+   report; a missing report alone is not proof that control was not applied.
+
+## 5. Diagnose a failed shell or missing Action
+
+Inspect the [Execution Report](/reference/execution-report) and Event feedback.
+Run a suspect command manually only after reviewing side effects, with dummy
+data and the documented [shell environment](/reference/shell-environment).
+The shell inherits Pi's environment, uses Pi's working directory, and runs
+through `/bin/sh`; dependencies available in another terminal may not be in
+Pi's `PATH`. Check executable/script paths, permissions, quoting, and JSON
+parsing. A missing command normally returns a non-zero shell code (often 127),
+not an infrastructure `null` code.
+
+Commands and Preconditions have a 5-second timeout. Timeout, abort, or spawn
+failure produces code `null` and fails closed; it is not an ordinary false
+Precondition. Prefer fast local checks or move expensive work out of the Hook.
+A failed tool-result guard **suppresses the original output with HooKit's fixed
+error replacement**; shell stdout is not a custom tool-result replacement.
+
+If the shell ran but an Action is missing, compare the selector to its
+**owner's individual** Hook Outcome and code, not the aggregate Event Outcome.
+Payloads are static, not interpolated from shell output or environment values.
+Delivery is ordered and best-effort; an unsupported or failed Pi operation
+does not change the Event Outcome. Consult [Actions](/reference/configuration/action).
+
+## 6. Stop unintended continuation
+
+Review enabled message Actions, especially user messages or custom messages
+that request continuation. Use narrow Filters, Preconditions, or external
+state to make them self-limiting. In the TUI, interrupt ongoing work and disable
+the responsible Hook or its enabling Preset; change the policy before re-enabling.
+
+Ordinary `agent_end` failure feedback requests a corrective turn and suppresses
+an identical repeated failure within the session. That deduplication is **not**
+a general guard for user-authored Actions. An unconditional user message on
+`agent_settled` can continue forever. See [message delivery](/reference/configuration/action#message-delivery)
+and [Event feedback](/reference/events).

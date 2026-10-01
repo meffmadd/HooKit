@@ -6,7 +6,9 @@ description: Owned Action variants, selectors, and delivery.
 A Hook may **own** one declarative Pi **Action**. Every Action requires
 `outcome`; optional `code` narrows it further. The owned Action is selected
 against its owner's immutable **Hook Outcome and code**, never the aggregate
-Event Outcome, and is considered as soon as that Hook Result exists.
+Event Outcome. Selection waits until all matching native shells finish and
+the aggregate Native Event Outcome freezes; then each originating result's
+Action is considered before its Hook Result Event is evaluated.
 
 ## Common fields and selectors
 

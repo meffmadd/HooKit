@@ -1,5 +1,7 @@
 .idea
 node_modules/
+# Release docs are regenerated from the canonical site pages.
+/skills/hookit/references/
 .pi/
 sandbox/
 *.md

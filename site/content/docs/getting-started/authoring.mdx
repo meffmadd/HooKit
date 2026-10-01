@@ -1,0 +1,80 @@
+---
+title: Add a Hook to an existing project
+description: Preserve configuration, validate, load, enable, and test a policy.
+---
+
+Use this guide when adding a policy to a project that may already have a Hook
+Catalog. For a guided disposable exercise, start with [Write a hook](/getting-started/first-hook).
+
+## 1. Choose the scope and inspect existing configuration
+
+Use `.pi/hookit.json` for project policies or `~/.pi/agent/hookit.json` for
+user-wide policies. Confirm the intended Pi working directory and project
+trust before editing; HooKit neither reads nor writes untrusted project storage.
+
+Read the existing file first and keep a backup or a reviewable diff. If it
+exists, **merge the new Catalog Entry into its existing `local` Section**;
+do not replace the entire file with an example. Preserve unrelated entries,
+`repos`, repository Sections, `$schema`, and local default preferences. If
+`local` is absent, add it without deleting other root fields. Do not silently
+overwrite an existing name: Source and name identify one entry.
+
+## 2. Author the smallest applicable policy
+
+Choose the [Event](/reference/events), then inspect its complete
+[Filter candidates](/reference/configuration/filter). Narrow the Filter to the
+intended tool or lifecycle data. Use a [Precondition](/reference/configuration/when)
+for applicability checks; an ordinary false Precondition skips the Hook rather
+than failing the Event.
+
+A Hook requires `description`, `event`, and at least one of `shell` or `action`.
+For an Action-only Hook, omitted shell acts as `"true"`. Consult the
+[configuration reference](/reference/configuration) and [Actions](/reference/configuration/action)
+before adding fields. Shells use the [documented environment](/reference/shell-environment)
+and execute with Pi's permissions, not in a sandbox. Review commands for side
+effects and ensure required executables and scripts exist.
+
+## 3. Validate before loading
+
+Parse the complete file as JSON, then validate it with the JSON Schema from the
+**installed HooKit release**, using a schema-aware editor or an available JSON
+Schema validator. The npm package includes `schema.json` next to `package.json`;
+the bundled skill links to it. No schema download is needed. See
+[schema guidance](/reference/configuration/schema) for local editor references.
+
+Check the [Source eligibility and merge rules](/reference/configuration/presets-sources)
+as well: a project repository Section requires its own `repos` declaration.
+Presets must contain unique qualified Hook References. A reference to another
+installed Preset invalidates the merged Catalog; an unresolved reference is
+valid but dangling. Schema validation alone cannot check those cross-entry
+relationships.
+
+## 4. Load and explicitly enable
+
+Start or restart Pi in the intended project after editing the file. Trust the
+project only after reviewing its executable configuration. In the interactive
+TUI, open `/hooks` and confirm the new entry appears without a Catalog error.
+Focus it and press Enter if it is not already effectively enabled.
+
+**Creating configuration or setting `default: true` is not proof of activation.**
+A saved session enablement set, including an empty set, overrides defaults.
+A Hook can also be enabled through a Preset; inspect the panel's direct or
+`via` status. Use a fresh session with defaults for headless testing, or
+resume a session whose direct enablement was explicitly set in the TUI. See
+[runtime modes](/reference/runtime-modes) and [enablement](/reference/configuration/presets-sources).
+
+## 5. Exercise a harmless matching Event
+
+Use dummy data or a disposable directory. Ask the model to use the exact tool
+and input your Filter matches. A terminal command outside Pi, or Pi's `!cmd`
+user-shell shortcut, is not a model tool call and does not exercise tool Hooks.
+For lifecycle policies, cause the actual Event rather than running the shell
+alone.
+
+Check the Event's expected control behavior and the [Execution Report](/reference/execution-report).
+Test both a matching case and a harmless non-matching case. A Filter miss or
+false Precondition creates no report row. For Actions, verify delivery
+separately from the Hook Outcome; failed delivery cannot weaken an Event Outcome.
+
+If results differ, follow [Troubleshooting](/getting-started/troubleshooting).
+Review the final configuration diff to confirm unrelated policies were preserved.

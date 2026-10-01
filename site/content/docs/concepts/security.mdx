@@ -51,9 +51,10 @@ This has two direct consequences:
 - Project configuration is read only after Pi trusts the project. A trusted
   project's entries replace global entries per Catalog merge rules; an
   untrusted project leaves your global Catalog and enablement unchanged.
-- Catalog eligibility is canonical: a Section is valid only as `local` or a
-  declared `owner/repo`, and unusable Sections fail loudly instead of being
-  silently filtered.
+- Catalog eligibility is canonical: a Section is valid only as `local` or
+  `owner/repo`; a project remote Section requires a declaration in that file's
+  `repos`. Global canonical Sections do not require that declaration. Unusable
+  Sections fail loudly instead of being silently filtered.
 - Nothing in this boundary is weakened by Action delivery: a decision
   (block, patch, cancellation, report) stands whether or not its Effect was
   delivered, so a failed delivery cannot let a blocked action through.

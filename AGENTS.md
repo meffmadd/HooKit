@@ -123,8 +123,17 @@ Hooks with outcome-selected owned Actions for Pi events. Reads
   `renderSection` (`✓`/space membership badge), empty-state message, and the
   one panel-specific key (`Esc` = commit + back). Search, navigation, and
   toggle are inherited — no parallel path.
-- **`skills/hookit/SKILL.md`** — bundled skill describing the format, events,
-  filters, Hooks, owned Actions, env vars, and common patterns.
+- **`skills/hookit/SKILL.md`** — minimal bundled navigator with a task-to-topic
+  index, release-local schema pointer, and essential safety/activation warnings.
+  **`scripts/prepare-package.ts`** generates portable Markdown in the ignored
+  `skills/hookit/references/` tree from canonical `site/content/docs/` sources,
+  translating Callouts, example markers, custom anchors, and site-root links.
+  `package:prepare` replaces the complete output; `prepack` invokes only that
+  preparation (never the test gate). The canonical root `schema.json` ships
+  unchanged. `tests/package-contents.test.ts` prepares and unpacks real release
+  tarballs, checking offline local navigation/anchors, code/table/example
+  preservation, shared schema validation, stale-page removal, and exclusions.
+  No site runtime dependencies or remote Core catalog ship to consumers.
 - **`sandbox/` + `.agents/skills/hookit-sandbox/`** — the gitignored
   manual-test scratch project and its dev-only skill (`skills/` alone is
   packaged). A Pi session started in `sandbox/` runs the working checkout

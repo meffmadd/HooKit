@@ -5,27 +5,51 @@ description: Supported Events, Hook Outcomes, and Event Outcome behavior.
 
 A Hook subscribes to exactly one **Event** named by its `event` field. Events
 are either **Native Events** originating from Pi, or the **Hook Result Event**
-(`hook_result`) projected from a Hook Result. Every Hook Evaluation produces
-one **Hook Outcome** per Hook and one aggregated, event-specific **Event
+(`hook_result`) projected from a Hook Result. Each completed Hook Invocation
+produces one **Hook Outcome**; Filter misses and ordinary false Preconditions
+produce none. Each evaluated Event has one aggregated, event-specific **Event
 Outcome**.
 
 ## Supported events
 
-| Event | Hook Outcome | Event Outcome behavior |
-|---|---|---|
-| `tool_call` | `pass` or `block` | Runs all matching Hooks; aggregates failures into one `block` |
-| `tool_result` | `pass` or `patch` | Runs all matching Hooks; aggregates failures into one replacement `patch` |
-| `turn_end` | `pass` or `report` | Aggregates and presents failures |
-| `agent_end` | `pass` or `report` | Aggregates; requests one deduplicated corrective turn |
-| `agent_settled` | `pass` or `report` | Aggregates and presents failures |
-| `session_before_switch` | `pass` or `cancel` | Aggregates and cancels on failure |
-| `session_before_fork` | `pass` or `cancel` | Aggregates and cancels on failure |
-| `hook_result` | `pass` or `report` | Handles one originating result; cannot alter it |
+| Event | When it occurs | Hook Outcome | Event Outcome behavior |
+|---|---|---|---|
+| `tool_call` | Before a model-requested tool executes | `pass` or `block` | Runs all matching Hooks; aggregates failures into one `block`; the tool does not run |
+| `tool_result` | After tool execution, before Pi consumes its result | `pass` or `patch` | Runs all matching Hooks; aggregates failures into one fixed error replacement `patch` |
+| `turn_end` | After one assistant turn and its tool results | `pass` or `report` | Aggregates and presents failures |
+| `agent_end` | When an agent loop ends, before potential automatic continuation | `pass` or `report` | Aggregates; requests deduplicated corrective feedback |
+| `agent_settled` | After the run fully settles, with no automatic retry, compaction, or queued continuation pending | `pass` or `report` | Aggregates and presents failures |
+| `session_before_switch` | Before creating a new session or resuming another | `pass` or `cancel` | Aggregates and cancels the switch on failure |
+| `session_before_fork` | Before forking at a selected session entry | `pass` or `cancel` | Aggregates and cancels the fork on failure |
+| `hook_result` | After the Native Event Outcome freezes, for each originating Hook Result | `pass` or `report` | Handles one originating result; cannot alter it |
 
 Every Event Outcome identifies its Event. Native Event Outcomes carry only the
 required reason or replacement patch for their event-specific failure kind.
 Hook Result Event Outcomes additionally carry the originating Hook Reference
-and Invocation ID and permit only `pass` or `report`.
+and Invocation ID and permit only `pass` or `report`. `session_shutdown` is
+not a supported Hook Event because Pi provides no cancellation result for it.
+
+### Tool-result suppression
+
+A failing `tool_result` Hook suppresses the original content. HooKit supplies
+one text result beginning `[BLOCKED by HooKit]`, with its combined reason and
+`The original tool result was suppressed.`, marks the result `isError: true`,
+and retains the tool's details. This is a **fixed error replacement**, not a
+custom replacement supplied by shell stdout. An owned message Action adds
+context separately; it cannot restore the suppressed output.
+
+### Agent-end corrective feedback
+
+Ordinary `agent_end` failures request a corrective turn with the combined
+feedback. HooKit remembers that failure fingerprint for the session: an
+identical repeated failure reports `automatic retry stopped` instead of
+requesting another corrective turn. A changed failure can request another
+turn; a passing evaluation clears the fingerprint. Infrastructure-level
+Evaluation errors are presented without an automatic corrective turn.
+
+This deduplication applies to HooKit's ordinary corrective feedback, **not**
+to user-authored continuation Actions. Those have no general loop guard; see
+[continuation caution](/reference/configuration/action#continuation-caution).
 
 ## Evaluation order
 
@@ -33,17 +57,19 @@ Matching Hooks run sequentially in the deterministic order of the immutable
 **Enabled Hook Set**, derived once per Event from the Catalog entry order and
 Preset reference order:
 
-1. Match the Hook's `event` and `filter`.
-2. Run the optional `when` precondition.
-3. Run the effective `shell` and create one immutable individual **Hook
-   Result**.
-4. Match the owned Action against that Hook Result's Hook Outcome and code.
-5. Expose the result to configured `hook_result` Hooks.
+1. Traverse **all matching native Hooks**: match `event` and `filter`, run
+   optional `when`, then effective `shell`, retaining immutable individual
+   **Hook Results**. A filter miss or ordinary false Precondition creates no result.
+2. Aggregate the native Hook Outcomes and **freeze the Native Event Outcome**.
+3. Traverse originating Hook Results in order. For each result, first select
+   its owned Action against that owner's Hook Outcome and code, then evaluate
+   its Hook Result Event through the matching `hook_result` Hooks and their
+   owned Actions.
+4. Deliver the ordered Effects best-effort through Pi.
 
-A filter miss runs nothing. The **Native Event Outcome is frozen** before any
-Action or `hook_result` Hook runs, so reactive Hooks and Actions cannot change
-the aggregate decision. All tool Hooks run even after one fails; aggregating
-Hooks combine every failure into the single block or patch Event Outcome.
+No owned Action or reactive Hook runs between native shells. All matching
+native Hooks run even after a sibling fails; failures aggregate into one Event
+Outcome. Actions and reactive Hooks cannot change that frozen decision.
 
 ## Hook outcome vs event outcome
 

@@ -16,6 +16,34 @@ Before the first release:
 The publish workflow runs only when a draft GitHub Release is published. Merely
 creating or editing a draft does not publish to npm.
 
+## Inspect the release artifact
+
+The normal `npm run check` gate prepares and extracts real npm tarballs in
+isolated temporary directories. It checks local skill/README/document links
+and anchors, unchanged schema contents, exported examples and formatting,
+clean-output preparation, stale-page removal, and repository-only exclusions.
+It also builds the documentation site and checks the glossary vocabulary.
+
+For a manual inspection from a clean checkout:
+
+```bash
+npm ci
+npm run package:prepare
+npm pack --dry-run --ignore-scripts
+```
+
+`package:prepare` generates portable Markdown under
+`skills/hookit/references/` from the checked-out `site/content/docs/` pages.
+Edit the canonical pages, not the generated files. Each preparation replaces
+the whole generated tree so renamed or removed pages cannot survive. The
+canonical root `schema.json` is included unchanged. Generation does not fetch
+from the website or default branch and adds no site dependencies for users.
+
+`npm pack` and `npm publish` also run preparation via `prepack`. That hook only
+generates release artifacts; it never invokes the test gate or packs again,
+so package tests cannot recurse. Any inspection using `--ignore-scripts` must
+prepare explicitly first, as the publish workflow does for its release tag.
+
 ## Publish version 0.1.0
 
 The manifests already contain version `0.1.0`, so create the initial tag without
